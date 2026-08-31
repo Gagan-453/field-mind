@@ -135,6 +135,14 @@ result DERIVED would launder a guess:
 | `LEVEL_SPAN_M` | 0.45 m | `LEVEL_SPAN_RANGE_M = (0.30, 0.60)` | **ASSUMED**, level-transmitter calibrated span, NWL +/- span/2; K prop 1/span |
 | `CIRCULATION_RATIO` | 8 | 6-12 | **ASSUMED**, natural circulation; used only to sanity-bound circuit water mass, not for K |
 
+**The FieldMind boiler's drum dimensions are a declared benchmark parameter,
+not a measured property.** The plan PDF (`docs/FieldMind_Boiler_Agent_Plan.pdf`
+section 1) fixes the operating point - 67 t/h, 67 kg/cm2(g), 495 degC - but
+specifies nothing about drum internal diameter, tangent-to-tangent length or
+level-transmitter span. The three values above were chosen to be plausible for
+the class; they are **inputs to the benchmark, not findings from it**, and every
+number that depends on them inherits that status.
+
 ### 3.3 Derivation of K(p)
 
 Horizontal-cylinder drum; NWL (50 %) on the centreline; free-surface area at the
@@ -153,15 +161,40 @@ K(p) = (1e5 / 60) / (rho_f(p) * A_s * LEVEL_SPAN_M)
 exact expression (a rounded literal `1666.6667` fails the module's
 volume-bookkeeping check at the 8th digit).
 
+### 3.3a Provenance of K - DERIVED-from-ASSUMED, not DERIVED
+
+The algebra in 3.3 is derived. The **value** it produces is not: it rests
+entirely on the three ASSUMED inputs of 3.2 - `DRUM_ID_M`, `DRUM_LENGTH_M`,
+`LEVEL_SPAN_M` - none of which is a measured property of any real drum. Labelling
+K plain **DERIVED** oversells it. Its honest provenance is **DERIVED-from-ASSUMED**:
+derived algebra, assumed inputs.
+
+Propagating the full declared ranges (ID 1.1-1.5 m, L 5.5-8.0 m, span
+0.30-0.60 m) through `K = (1e5/60) / (rho_f * ID * L * span)` at
+`rho_f(66 kg/cm2(g)) = 747.40 kg/m3`:
+
+```
+K_min  (ID 1.5,  L 8.0, span 0.60) = 1666.667 / (747.40 * 12.00 * 0.60) = 0.310
+K_nom  (ID 1.30, L 6.50, span 0.45)                                     = 0.586
+K_max  (ID 1.1,  L 5.5, span 0.30) = 1666.667 / (747.40 *  6.05 * 0.30) = 1.229
+```
+
+**Uncertainty on K across the declared dimension ranges: 0.31 - 1.23 %/min per
+t/h - a 4x band.** The nominal 0.586 is one point inside that band, not a
+determined quantity. (`geometry._self_test` asserts only the narrower span-only
+sub-range 0.44-0.88; the 0.31-1.23 figure is the honest full band and is
+recorded here.)
+
 ### 3.4 Result
 
 | quantity | value | note |
 |---|---|---|
 | A_s at NWL | 8.450 m2 | = ID*L |
 | rho_f at 66 kg/cm2(g) | 747.40 kg/m3 | IF97 |
-| **K (nominal)** | **0.5864 %/min per t/h** | **2.67x the old 0.22** |
+| **K (nominal)** | **0.5864 %/min per t/h** | **DERIVED-from-ASSUMED** (3.3a); 2.67x the old 0.22 |
 | K at 55 / 72 kg/cm2(g) | 0.5710 / 0.5948 | K is pressure-dependent through rho_f |
-| K band for this drum + span range | 0.440 - 0.880 | computed in `_self_test` from ID, L, `LEVEL_SPAN_RANGE_M` |
+| K band, full declared ranges (ID, L, span) | **0.31 - 1.23** | **4x band**; nominal is one point in it (3.3a) |
+| K band, span only (`LEVEL_SPAN_RANGE_M`) | 0.440 - 0.880 | computed in `_self_test` |
 
 **Independent cross-check** (through physical volumes, not the K expression):
 at 66 kg/cm2(g), 1 t/h = 16.667 kg/min = 0.022299 m3/min; 1 % of span =
@@ -238,6 +271,29 @@ time_to_trip = 40 %span / (K * net_deficit_t/h)          [50 % -> 10 % trip]
 
 Family A visibly trips at about 13 min in this stage's report. Driver
 severities are **not** changed in this stage.
+
+### 3.7a Advisor question - two measured numbers settle both the band and the discrepancy
+
+The 4x uncertainty band on K (3.3a) and the 2.2-2.6x disagreement with RCA Case 1
+(3.7) are **the same question asked from two directions**, and one answer
+probably settles both:
+
+> **Obtain, from the case-study plant, (a) the drum-level transmitter's
+> calibrated span and (b) the steam-drum general-arrangement (GA) drawing
+> giving internal diameter and tangent-to-tangent length.**
+
+- The **calibrated span** is the single largest lever on K (`K prop 1/span`),
+  currently ASSUMED 0.45 m over a 0.30-0.60 m range. RCA Case 1 can only be
+  reconciled with our geometry at a ~1.2 m span (3.7), which is off the top of
+  that range - so either the assumed span is wrong or the RCA rate/deficit pair
+  is not a matched observation. A measured span decides it.
+- The **GA drawing** fixes `DRUM_ID_M` and `DRUM_LENGTH_M` (ASSUMED 1.30 m x
+  6.50 m), which set the other two factors in `K prop 1/(ID*L*span)`.
+
+With all three measured, the 0.31-1.23 band in 3.3a collapses to a point, K's
+provenance moves from **DERIVED-from-ASSUMED** to **DERIVED**, and the RCA
+discrepancy either resolves or is confirmed as a rounding artefact in the
+composite. Until then both are carried, unresolved.
 
 ### 3.8 Feed valve / pump maximum flow
 
@@ -429,6 +485,60 @@ regeneration (before/after report, verification step 5).
 ---
 
 ## 7. Noise and driver-drift model  *(FITTED values filled during regen)*
+
+### 7.0 Shrink-and-swell gain `G_sw`  --  DERIVED-from-ASSUMED (sub-model 1)
+
+`sim.py` adds a fast pressure-driven term to the indicated drum level on top of
+the collapsed-liquid level from the mass balance:
+
+```
+level_swell = -G_sw * (p - p_nom)          [p in kgf/cm2(g)],  G_sw > 0
+G_sw = (ALPHA_SW * V_SW_M3) / (rho_g(p_nom) * VOL_PER_PCT_M3)
+       * d(rho_g)/dp|p_nom * (Pa per kgf/cm2)
+```
+
+**Structure - DERIVED.** A void volume `V_void = ALPHA_SW * V_SW_M3` seen by the
+level tap holds steam whose density tracks drum pressure. On the seconds
+timescale the void *steam mass* is ~constant, so
+`V_void = m_void / rho_g(p)` gives `dV_void/dp = -(V_void/rho_g) * d(rho_g)/dp`,
+and `dL[%] = dV_void / VOL_PER_PCT_M3`. `d(rho_g)/dp > 0` -> pressure UP
+compresses the voids -> level DOWN (shrink); pressure DOWN (load increase) ->
+voids expand -> level UP (swell). Sign cross-checked against RCA Case 5
+("shrink then swell" on a load rejection) and Case 4 (load increase ->
+"level rises on swell").
+
+**Inputs - ASSUMED, cannot be fitted.** `fingerprint.json` has no `drum_level`
+column (`FINGERPRINT.md` line 26), so neither factor of `V_void` can be fitted.
+
+| symbol | value | range | provenance |
+|---|---|---|---|
+| `V_SW_M3` | 9.0 m3 | 4 - 14 m3 | **ASSUMED**: drum-span water (4.31 m3) + the void-bearing part of the ~9.4 m3 evaporator-circuit water |
+| `ALPHA_SW` | 0.20 | 0.08 - 0.35 | **ASSUMED**: span-averaged void fraction (drum region ~0.03, upper risers ~0.4) |
+
+**Result** (`python3 -m data.generator.sim`, IF97 `rho_g(66 kg/cm2(g)) = 34.06`,
+`d(rho_g)/dp = 5.723e-6 kg/m3/Pa`):
+
+| quantity | value |
+|---|---|
+| **`G_sw` nominal** | **0.780 %/(kgf/cm2)** |
+| `G_sw` band over the ASSUMED ranges | **0.139 - 2.123** (~15x) |
+
+Independent re-derivation: `d(rho_g)/dp` recomputed from `rho_g` at exactly
+`p_nom +/- 1 kgf/cm2` (bracket ~98x wider than the code's 1 kPa central
+difference) gives `G_sw = 0.780`, **0.00 % difference** - a genuine curvature
+check on `rho_g(p)`.
+
+**SCOPE - stated limitation.** `G_sw` captures **only the density effect**:
+voids compressing / expanding as `rho_g` tracks `p`. It **omits the
+void-fraction change driven by steaming rate** - more firing makes more bubbles
+and swells the level *at constant pressure*. Verified magnitude: a 5 kg/cm2
+pressure excursion gives **~3.9 % of span** from the density term modelled here,
+against **10 - 20 %** typical for real swell on a large load step. So the
+modelled term is plausibly the **minority contribution**. It affects **families
+A and B**, where the indicated level then reads something other than true water
+mass; the L1 water-balance residual absorbs the difference and must be tuned
+with that in mind. A steaming-rate void term is a candidate for a later stage;
+not added now because its coefficient would itself be unfittable ASSUMED.
 
 ### 7.1 Driver drift - cross-correlated Ornstein-Uhlenbeck
 

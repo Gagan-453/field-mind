@@ -16,8 +16,27 @@ afterwards. It knows exactly which driver it changed and when, so labels
 cannot drift from the data.
 
 Two balances must close, and the check layer relies on both:
-    WATER   d(level)/dt = (feed - steam - blowdown - leak) * K
+    WATER   d(m_liquid)/dt = feed - steam - blowdown - leak         [kg/s]
+            indicated level = liquid level (mass / geometry) + shrink-swell(p)
     ENERGY  pressure and bed temperature respond to heat in vs heat absorbed
+
+INTERNAL UNITS ARE SI (kg, s, Pa, K, m3). The six emitted columns keep their
+engineering units (t/h, %, kg/cm2(g), degC); conversion happens at emit.
+Every constant is DERIVED / CITED / FITTED / STANDARD / ASSUMED per
+data/physics/DERIVATIONS.md -- the section reference is on each line.
+
+REWRITE STATUS (staged, per CLAUDE.md "one stage at a time"):
+    [x] sub-model 1  water balance + shrink-and-swell (drho_g/dp)   -- THIS FILE
+    [ ] sub-model 2  energy balance: coal-GCV stoichiometry + steam-table
+                     pressure integrator replacing PRESS_GAIN
+    [ ] sub-model 3  dissolved-solids balance
+    [ ] sub-model 4  cross-correlated OU drivers + fingerprint measurement noise
+The energy / bed / ms block below is the PRE-REWRITE code, fed by the new
+water side via `steam` (t/h). It is replaced wholesale in sub-model 2; its
+constants (PRESS_GAIN, the bed_target literals) are NOT yet sourced.
+
+Run  `python3 -m data.generator.sim`  for self-tests, direction checks and an
+independent re-derivation of the shrink-and-swell gain.
 
 Everything here runs OFFLINE on the host. numpy is fine.
 =============================================================================
@@ -27,18 +46,103 @@ from __future__ import annotations
 
 import math
 import random
+import warnings
 from dataclasses import dataclass, field
 
+from data.physics.geometry import (
+    LEVEL_SPAN_M,
+    NOMINAL_DRUM_KGFCM2G,
+    drum_water_volume_m3,
+    feed_valve_max_tph,
+    water_surface_area_m2,
+)
+from data.physics.steam_tables import (
+    drho_g_dp_kg_m3_per_Pa,
+    kgfcm2g_to_Pa,
+    rho_f_kg_m3,
+    rho_g_kg_m3,
+)
+
 # Nominal operating point: 67 TPH, 67 kg/cm2(g), 495 degC.
+# CITED: Plan §1 / RCA Case 1 §1 (67 t/h, 495 degC). Drum pressure runs at
+# NOMINAL_DRUM_KGFCM2G = 66 (1 kg/cm2 margin below MCR) so it matches the
+# geometry module's nominal state -- DERIVATIONS.md §1.
 NOMINAL = {
     "drum_level": 50.0, "feed_water_flow": 67.0, "steam_flow": 67.0,
     "drum_pressure": 66.0, "bed_temp_avg": 850.0, "ms_temperature": 495.0,
 }
 
-K_LEVEL = 0.22        # %/min per TPH of net water inflow
-FEED_VALVE_MAX_TPH = 82.0   # flow at 100% valve travel; a seized actuator caps this
-PRESS_GAIN = 4.0      # kg/cm2 per minute per unit of relative energy imbalance
-DT_S = 5.0            # raw sample period
+DT_S = 5.0                       # raw sample period. CITED: Plan §3.2; FITTED
+                                 # fingerprint.json.sampling.dt_seconds_median.
+KGPS_PER_TPH = 1000.0 / 3600.0   # exact
+TPH_PER_KGPS = 3600.0 / 1000.0   # exact
+
+# --- ENERGY-SIDE constant NOT YET SOURCED (replaced in sub-model 2) ----------
+PRESS_GAIN = 4.0     # kg/cm2 per minute per unit relative energy imbalance. ASSUMED,
+                     # pre-rewrite. Sub-model 2 replaces this with a pressure
+                     # integrator derived from V_steam and (du/dp)_sat.
+
+# =======================================================================
+#  WATER-SIDE constants  (DERIVATIONS.md §3, §7)
+# =======================================================================
+P_NOM_KGFCM2G = NOMINAL_DRUM_KGFCM2G                        # 66.0 ; CITED geometry
+_P_NOM_PA = kgfcm2g_to_Pa(P_NOM_KGFCM2G)
+_PA_PER_KGFCM2 = kgfcm2g_to_Pa(1.0) - kgfcm2g_to_Pa(0.0)   # 98066.5 Pa, exact (STANDARD)
+
+# DERIVED (geometry): drum water volume at NWL and the m3 that one indicated
+# percent of transmitter span corresponds to.  K_level(p) is exactly
+# (net kg/s / rho_f) / VOL_PER_PCT_M3, so tracking mass and mapping through
+# VOL_PER_PCT_M3 reproduces K without a second literal -- DERIVATIONS.md §3.4.
+V_DRUM_50_M3 = drum_water_volume_m3(50.0)                  # 4.314 m3  (DERIVATIONS §3, §5.2)
+VOL_PER_PCT_M3 = water_surface_area_m2(50.0) * LEVEL_SPAN_M / 100.0   # 0.038025 m3/%
+
+# Physical clamp on the collapsed-liquid inventory: the level transmitter
+# cannot read outside [0, 100] % of span, and the water balance must not
+# integrate an unphysical negative / runaway mass (sub-model 3 divides by
+# boiler-water inventory). Floor / ceiling = rho_f(p_nom) * drum water volume
+# at the bottom / top of the transmitter span.
+M_LIQ_FLOOR_KG = rho_f_kg_m3(_P_NOM_PA) * drum_water_volume_m3(0.0)     # ~1832 kg
+M_LIQ_CEIL_KG = rho_f_kg_m3(_P_NOM_PA) * drum_water_volume_m3(100.0)    # ~4617 kg
+
+# --- Shrink-and-swell gain  G_sw  [%/(kgf/cm2)]  --  DERIVED-from-ASSUMED -----
+# STRUCTURE is DERIVED from d(rho_g)/dp: a void volume  V_void = ALPHA_SW * V_SW_M3
+# seen by the level tap holds steam whose density tracks drum pressure. On the
+# fast (seconds) timescale the void STEAM MASS is ~constant, so
+#     V_void = m_void / rho_g(p)   =>   dV_void/dp = -(V_void / rho_g) * d(rho_g)/dp
+# and an indicated-level increment  dL[%] = dV_void / VOL_PER_PCT_M3. Hence
+#     level_swell = -G_sw * (p - p_nom)          [p in kgf/cm2(g)],  G_sw > 0
+#     G_sw = (ALPHA_SW * V_SW_M3) / (rho_g(p_nom) * VOL_PER_PCT_M3)
+#            * d(rho_g)/dp|p_nom * (Pa per kgf/cm2)
+# Sign: d(rho_g)/dp > 0, so pressure UP -> voids compress -> level DOWN (shrink);
+#       pressure DOWN (load increase) -> voids expand -> level UP (swell).
+#       Cross-checked: RCA Case 5 "shrink then swell" on a load rejection (p up
+#       -> shrink first); RCA Case 4 load increase -> "level rises on swell".
+#
+# SCOPE (stated limitation, DERIVATIONS.md §7): this captures ONLY the density
+# effect -- voids compressing / expanding as rho_g tracks p. It OMITS the
+# void-fraction change driven by steaming rate (more firing -> more bubbles ->
+# swell at constant pressure). A 5 kg/cm2 excursion gives ~3.9 % of span from
+# the density term here, against 10-20 % typical for real swell on a large load
+# step -- so this is plausibly the MINORITY contribution. It affects families A
+# and B, where the transmitter then reads something other than true water mass.
+#
+# V_SW_M3, ALPHA_SW are ASSUMED with ranges: the fingerprint has no drum_level
+# column (FINGERPRINT.md line 26) so neither can be fitted. See DERIVATIONS.md §7.
+V_SW_M3 = 9.0       # ASSUMED (range 4-14 m3): drum-span water (4.31 m3) plus the
+                    # void-bearing part of the ~9.4 m3 evaporator-circuit water.
+ALPHA_SW = 0.20     # ASSUMED (range 0.08-0.35): span-averaged void fraction in V_SW_M3
+                    # (drum region ~0.03, upper risers ~0.4).
+
+
+def _shrink_swell_gain(v_sw: float = V_SW_M3, alpha: float = ALPHA_SW) -> float:
+    """G_sw [%/(kgf/cm2)] -- DERIVED-from-ASSUMED, see the block comment above."""
+    rho_g0 = rho_g_kg_m3(_P_NOM_PA)
+    drhog_dp = drho_g_dp_kg_m3_per_Pa(_P_NOM_PA)         # kg/m3 per Pa (>0)
+    return ((alpha * v_sw) / (rho_g0 * VOL_PER_PCT_M3)
+            * drhog_dp * _PA_PER_KGFCM2)
+
+
+G_SW_PCT_PER_KGFCM2 = _shrink_swell_gain()   # ~0.78 ; band 0.14-2.12 (DERIVATIONS §7)
 
 
 @dataclass
@@ -101,9 +205,15 @@ class BoilerSim:
         self.state = dict(NOMINAL)
         # Feed controller integral term. A real 3-element controller; this is a
         # single-element PI on level, which is enough to make feed RESPOND to
-        # level rather than being an independent trace.
+        # level. Kept in t/h (a controller, not physics); its output converts
+        # to kg/s for the mass balance.
         self._integral = 0.0
         self._fire = 1.0          # firing rate, relative to nominal
+        # Collapsed-liquid water mass in the drum-span region [kg]. At the
+        # nominal state this is rho_f(p_nom) * V_DRUM_50_M3 -> indicated 50 %.
+        self._m_liq = rho_f_kg_m3(_P_NOM_PA) * V_DRUM_50_M3
+        # None until the inventory clamp is hit; then "floor" / "ceiling".
+        self.m_liq_saturated: str | None = None
 
     # -------------------------------------------------------------------
     def _apply_schedules(self, t_s: float) -> None:
@@ -116,46 +226,84 @@ class BoilerSim:
             setattr(self.d, s.driver, base + (s.target - base) * frac)
 
     # -------------------------------------------------------------------
+    def _clamp_inventory(self, t_s: float) -> None:
+        """Hold the collapsed-liquid mass to the transmitter span and warn once."""
+        which = None
+        if self._m_liq < M_LIQ_FLOOR_KG:
+            self._m_liq, which = M_LIQ_FLOOR_KG, "floor"
+        elif self._m_liq > M_LIQ_CEIL_KG:
+            self._m_liq, which = M_LIQ_CEIL_KG, "ceiling"
+        if which and self.m_liq_saturated is None:
+            self.m_liq_saturated = which
+            warnings.warn(
+                f"{self.spec.episode_id}: drum water inventory hit its {which} "
+                f"({self._m_liq:.0f} kg) at t={t_s:.0f}s; indicated level pinned. "
+                f"The water balance is saturated from here -- check driver "
+                f"severity, do not read the flat trace as physics.",
+                RuntimeWarning, stacklevel=3)
+
+    # -------------------------------------------------------------------
     def step(self, t_s: float) -> dict:
         d, st = self.d, self.state
         dt_min = DT_S / 60.0
         self._apply_schedules(t_s)
 
+        p_kgfcm2g = st["drum_pressure"]
+        p_Pa = kgfcm2g_to_Pa(p_kgfcm2g)
+
         # ---- steam demand: the turbine pulls, with slow load swings ----
+        # (swing is the placeholder load wander; sub-model 4 replaces it with a
+        # cross-correlated OU process fitted to the fingerprint.)
         swing = 2.0 * math.sin(t_s / 1800.0)          # +/- 2 TPH over 30 min
         # The turbine cannot pass rated flow on sagging pressure. Without this
         # coupling a fuel-side fault drives pressure to zero unchecked, which
         # no real plant does.
-        throttle = max(0.3, min(1.0, st["drum_pressure"] / 60.0))
-        steam = (d.load_demand + swing) * throttle
+        throttle = max(0.3, min(1.0, p_kgfcm2g / 60.0))
+        steam = (d.load_demand + swing) * throttle     # t/h
 
-        # ================= WATER SIDE =================================
-        # Feed controller: PI on drum level. This is a closed loop, so feed
-        # RESPONDS to level rather than being an independent trace -- which is
-        # what makes family B (leak) look different from family A (feed short).
-        err = NOMINAL["drum_level"] - st["drum_level"]
-        self._integral = max(-25, min(25, self._integral + err * dt_min * 2.0))
-        demand = steam + 3.0 * err + self._integral + d.blowdown_tph
-        demand = max(0.0, min(FEED_VALVE_MAX_TPH, demand))
+        # ================= WATER SIDE  (SI internally) ===================
+        # Single-element PI on INDICATED drum level (the transmitter sees the
+        # swell too). Closed loop, so feed RESPONDS to level -- which is what
+        # makes family B (leak) look different from family A (feed short).
+        err = NOMINAL["drum_level"] - st["drum_level"]                    # %
+        self._integral = max(-25.0, min(25.0, self._integral + err * dt_min * 2.0))
+        demand_tph = steam + 3.0 * err + self._integral + d.blowdown_tph
+        demand_tph = max(0.0, min(feed_valve_max_tph(), demand_tph))
 
         # THE FAULT ENTERS HERE for family A. A seized actuator limits valve
-        # TRAVEL, which caps deliverable FLOW. It does not scale demand -- that
-        # distinction matters: a scaled demand would let the controller wind up
-        # and recover, whereas a hard cap means feed simply cannot meet steam,
-        # and the level falls at a rate the water balance can compute exactly.
-        feed = min(demand, d.feed_valve_effectiveness * FEED_VALVE_MAX_TPH)
+        # TRAVEL, which caps deliverable FLOW. It does not scale demand -- a
+        # scaled demand would let the controller wind up and recover, whereas a
+        # hard cap means feed simply cannot meet steam and the level falls at a
+        # rate the water balance computes exactly.
+        feed_tph = min(demand_tph, d.feed_valve_effectiveness * feed_valve_max_tph())
 
-        # Water (mass) balance -> drum level. This is a genuine integration and
-        # the L1 balance check inverts exactly this relation.
-        net = feed - steam - d.blowdown_tph - d.leak_tph
-        st["drum_level"] = max(0.0, min(100.0,
-                                        st["drum_level"] + net * K_LEVEL * dt_min))
+        # Mass balance [kg/s -> kg]. This is geometry.K_level(p) re-expressed as
+        # mass; the L1 water-balance check inverts exactly this relation.
+        w_feed = feed_tph * KGPS_PER_TPH
+        w_steam = steam * KGPS_PER_TPH
+        w_bd = d.blowdown_tph * KGPS_PER_TPH
+        w_leak = d.leak_tph * KGPS_PER_TPH
+        self._m_liq += (w_feed - w_steam - w_bd - w_leak) * DT_S
+        self._clamp_inventory(t_s)
 
-        # ================= ENERGY SIDE ================================
+        # Collapsed-liquid indicated level from mass + geometry (rho_f is
+        # pressure-dependent; the L1 check uses the single nominal K).
+        rho_f_now = rho_f_kg_m3(p_Pa)
+        level_liquid = 50.0 + (self._m_liq / rho_f_now - V_DRUM_50_M3) / VOL_PER_PCT_M3
+
+        # Shrink-and-swell: fast void response to pressure, from d(rho_g)/dp.
+        #   p UP  -> voids compress -> level DOWN (shrink)
+        #   p DOWN (load increase) -> voids expand -> level UP (swell)
+        level_swell = -G_SW_PCT_PER_KGFCM2 * (p_kgfcm2g - P_NOM_KGFCM2G)
+
+        st["drum_level"] = max(0.0, min(100.0, level_liquid + level_swell))
+        st["feed_water_flow"] = feed_tph
+        st["steam_flow"] = steam
+
+        # ================= ENERGY SIDE  (PRE-REWRITE -- sub-model 2) ======
         # Combustion control: feeder speed tracks load with a pressure trim.
         # WITHOUT this loop a load reduction leaves fuel unchanged and the bed
-        # runs away -- which is not a fault, it is a missing controller, and it
-        # would make every normal episode trip.
+        # runs away -- which is not a fault, it is a missing controller.
         p_err = NOMINAL["drum_pressure"] - st["drum_pressure"]
         fire_target = (steam / NOMINAL["steam_flow"]) + 0.06 * p_err
         fire_target = max(0.3, min(1.25, fire_target))
@@ -201,10 +349,7 @@ class BoilerSim:
             - (steam - NOMINAL["steam_flow"]) * 0.6
         st["ms_temperature"] += (target_ms - st["ms_temperature"]) * 0.02
 
-        st["steam_flow"] = steam
-        st["feed_water_flow"] = feed
-
-        # ---- measurement noise, per-tag, realistic magnitudes ----
+        # ---- measurement noise, per-tag (PRE-REWRITE -- sub-model 4) ----
         out = {"t": t_s}
         noise = {"drum_level": 0.15, "feed_water_flow": 0.35, "steam_flow": 0.35,
                  "drum_pressure": 0.05, "bed_temp_avg": 1.2, "ms_temperature": 0.8}
@@ -233,3 +378,178 @@ class BoilerSim:
         for r in rows[start:]:
             r[tag] = frozen
         return rows
+
+
+# =========================================================================
+#  SELF-TESTS  --  run via `python3 -m data.generator.sim`
+# =========================================================================
+def _spec(name="t", dur_min=60.0, schedules=None, **kw) -> EpisodeSpec:
+    return EpisodeSpec(episode_id=name, family=kw.pop("family", "N"),
+                       tier="A", duration_min=dur_min,
+                       schedules=schedules or [], **kw)
+
+
+def _series(rows, key):
+    return [r[key] for r in rows]
+
+
+def _self_test() -> None:
+    """Invariants that must hold regardless of tuning."""
+    errs = []
+
+    # 1. clean start: no-fault episode stays in band and never saturates.
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)   # a saturation warning fails here
+        sim = BoilerSim(_spec("selftest_normal", 60.0))
+        rows = sim.run()
+    lvl = _series(rows, "drum_level")
+    if abs(lvl[0] - 50.0) > 0.6:
+        errs.append(f"start level {lvl[0]:.2f} not ~50 (noise sd 0.15)")
+    if max(abs(x - 50.0) for x in lvl) > 4.0:
+        errs.append(f"no-fault level left +/-4 band: range "
+                    f"{min(lvl):.2f}..{max(lvl):.2f}")
+    if sim.m_liq_saturated is not None:
+        errs.append("no-fault episode saturated the inventory clamp")
+
+    # 2. inventory clamp floor is the physical value the instruction specified.
+    floor = rho_f_kg_m3(_P_NOM_PA) * drum_water_volume_m3(0.0)
+    if abs(M_LIQ_FLOOR_KG - floor) > 1e-6:
+        errs.append(f"M_LIQ_FLOOR_KG {M_LIQ_FLOOR_KG} != rho_f*V(0%) {floor}")
+
+    # 3. severe sustained feed shortage: level pins at 0, mass pins at floor,
+    #    warning fires (does NOT integrate to a negative / runaway mass).
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        sim = BoilerSim(_spec("selftest_starve", 90.0, family="A",
+                              schedules=[Schedule(300.0, "feed_valve_effectiveness",
+                                                  0.55, 3.0)]))
+        rows = sim.run()
+        fired = any(issubclass(x.category, RuntimeWarning) for x in w)
+    if sim._m_liq < M_LIQ_FLOOR_KG - 1e-6:
+        errs.append(f"inventory ran below floor: {sim._m_liq:.1f} kg")
+    if sim.m_liq_saturated != "floor" or not fired:
+        errs.append("feed-shortage saturation not flagged (clamp/warn missing)")
+    if min(_series(rows, "drum_level")) > 1.0:
+        errs.append("severe feed shortage never drove indicated level to ~0")
+
+    if errs:
+        raise AssertionError("sim self-test FAILED:\n  " + "\n  ".join(errs))
+    print("sim self-test passed "
+          f"(clamp floor {M_LIQ_FLOOR_KG:.0f} kg / ceil {M_LIQ_CEIL_KG:.0f} kg).")
+
+
+def _window_mean(rows, key, t0, t1):
+    xs = [r[key] for r in rows if t0 <= r["t"] <= t1]
+    return sum(xs) / len(xs)
+
+
+def _direction_checks() -> None:
+    """The four sign claims the instruction asked to be verified numerically.
+    Uses a common seed and averages 90 s windows so measurement noise cancels.
+    """
+    print("\ndirection checks (state expected sign -> measured):")
+
+    # -- 1. load INCREASE -> pressure falls -> voids expand -> level rises (swell)
+    inc = BoilerSim(_spec("dir_load_up", 40.0, family="N",
+                          schedules=[Schedule(600.0, "load_demand", 82.0, 2.0)])).run()
+    p_before = _window_mean(inc, "drum_pressure", 300, 570)
+    p_after = _window_mean(inc, "drum_pressure", 660, 900)
+    # isolate the swell term from the (noiseless) pressure means:
+    swell_before = -G_SW_PCT_PER_KGFCM2 * (p_before - P_NOM_KGFCM2G)
+    swell_after = -G_SW_PCT_PER_KGFCM2 * (p_after - P_NOM_KGFCM2G)
+    ok1 = (p_after < p_before) and (swell_after > swell_before)
+    print(f"  load +15 t/h: p {p_before:.2f}->{p_after:.2f} kg/cm2 (expect fall), "
+          f"swell {swell_before:+.2f}->{swell_after:+.2f} % (expect rise)  "
+          f"[{'OK' if ok1 else 'FAIL'}]")
+
+    # -- 2. load DECREASE -> pressure rises -> voids collapse -> level falls (shrink)
+    dec = BoilerSim(_spec("dir_load_dn", 40.0, family="N",
+                          schedules=[Schedule(600.0, "load_demand", 52.0, 2.0)])).run()
+    p_before = _window_mean(dec, "drum_pressure", 300, 570)
+    p_after = _window_mean(dec, "drum_pressure", 660, 900)
+    swell_before = -G_SW_PCT_PER_KGFCM2 * (p_before - P_NOM_KGFCM2G)
+    swell_after = -G_SW_PCT_PER_KGFCM2 * (p_after - P_NOM_KGFCM2G)
+    ok2 = (p_after > p_before) and (swell_after < swell_before)
+    print(f"  load -15 t/h: p {p_before:.2f}->{p_after:.2f} kg/cm2 (expect rise), "
+          f"swell {swell_before:+.2f}->{swell_after:+.2f} % (expect fall/shrink)  "
+          f"[{'OK' if ok2 else 'FAIL'}]")
+
+    # -- 3. family A (feed valve capped) -> feed < steam, level falls
+    fa = BoilerSim(_spec("dir_family_A", 60.0, family="A",
+                         schedules=[Schedule(600.0, "feed_valve_effectiveness",
+                                             0.70, 3.0)])).run()
+    feed = _window_mean(fa, "feed_water_flow", 2400, 3000)
+    steam = _window_mean(fa, "steam_flow", 2400, 3000)
+    lvl0 = _window_mean(fa, "drum_level", 300, 570)
+    lvl1 = _window_mean(fa, "drum_level", 2400, 3000)
+    ok3 = (feed < steam) and (lvl1 < lvl0 - 5.0)
+    print(f"  family A: feed {feed:.1f} < steam {steam:.1f} t/h, "
+          f"level {lvl0:.1f}->{lvl1:.1f} %  [{'OK' if ok3 else 'FAIL'}]")
+
+    # -- 4a. family B (leak) -> controller raises feed above steam, level only droops
+    fb = BoilerSim(_spec("dir_family_B", 90.0, family="B",
+                         schedules=[Schedule(900.0, "leak_tph", 4.0, 8.0)])).run()
+    feed = _window_mean(fb, "feed_water_flow", 3600, 4800)
+    steam = _window_mean(fb, "steam_flow", 3600, 4800)
+    lvl1 = _window_mean(fb, "drum_level", 3600, 4800)
+    ok4 = (feed - steam > 2.0) and (lvl1 > 40.0)
+    print(f"  family B: feed {feed:.1f} > steam {steam:.1f} t/h "
+          f"(gap {feed - steam:+.1f}), level holds at {lvl1:.1f} %  "
+          f"[{'OK' if ok4 else 'FAIL'}]")
+
+    # -- 4b. fuel availability capped -> pressure sags -> throttle -> steam falls
+    fc = BoilerSim(_spec("dir_fuel_cap", 60.0, family="C",
+                         schedules=[Schedule(600.0, "fuel_availability",
+                                             0.75, 10.0)])).run()
+    p0 = _window_mean(fc, "drum_pressure", 300, 570)
+    p1 = _window_mean(fc, "drum_pressure", 2400, 3000)
+    s0 = _window_mean(fc, "steam_flow", 300, 570)
+    s1 = _window_mean(fc, "steam_flow", 2400, 3000)
+    ok5 = (p1 < p0 - 1.0) and (s1 < s0 - 1.0)
+    print(f"  fuel cap 0.75: pressure {p0:.1f}->{p1:.1f} kg/cm2 (sag), "
+          f"steam {s0:.1f}->{s1:.1f} t/h (turbine throttles)  "
+          f"[{'OK' if ok5 else 'FAIL'}]")
+
+    if not all([ok1, ok2, ok3, ok4, ok5]):
+        raise AssertionError("direction check FAILED -- a sub-model sign is wrong")
+    print("  all five direction checks OK")
+
+
+def _headline_recheck() -> None:
+    """Re-derive the shrink-and-swell gain G_sw by a method different from the
+    code's. The code calls steam_tables.drho_g_dp_kg_m3_per_Pa (central
+    difference, dp = 1000 Pa). Here: evaluate rho_g at exactly p_nom +/- 1
+    kgf/cm2 (a bracket ~100x wider, different endpoints) and rebuild G_sw by
+    hand from the block-comment formula.
+    """
+    p_lo = kgfcm2g_to_Pa(P_NOM_KGFCM2G - 1.0)
+    p_hi = kgfcm2g_to_Pa(P_NOM_KGFCM2G + 1.0)
+    rho_g_lo, rho_g_hi = rho_g_kg_m3(p_lo), rho_g_kg_m3(p_hi)
+    rho_g0 = rho_g_kg_m3(_P_NOM_PA)
+    slope_indep = (rho_g_hi - rho_g_lo) / (p_hi - p_lo)          # kg/m3 per Pa
+    g_indep = ((ALPHA_SW * V_SW_M3) / (rho_g0 * VOL_PER_PCT_M3)
+               * slope_indep * _PA_PER_KGFCM2)
+
+    slope_code = drho_g_dp_kg_m3_per_Pa(_P_NOM_PA)
+    rel = abs(g_indep - G_SW_PCT_PER_KGFCM2) / G_SW_PCT_PER_KGFCM2
+
+    print("\nindependent re-derivation of G_sw (headline number for sub-model 1):")
+    print(f"  rho_g(p_nom)                 = {rho_g0:.4f} kg/m3")
+    print(f"  d(rho_g)/dp  code (dp=1kPa)  = {slope_code:.4e} kg/m3/Pa")
+    print(f"  d(rho_g)/dp  indep (+/-1 kgf)= {slope_indep:.4e} kg/m3/Pa")
+    print(f"  G_sw  code                   = {G_SW_PCT_PER_KGFCM2:.4f} %/(kgf/cm2)")
+    print(f"  G_sw  independent            = {g_indep:.4f} %/(kgf/cm2)")
+    print(f"  relative difference          = {rel * 100:.2f} %")
+    # band across the ASSUMED ranges of V_SW_M3, ALPHA_SW
+    g_min = _shrink_swell_gain(4.0, 0.08)
+    g_max = _shrink_swell_gain(14.0, 0.35)
+    print(f"  band over ASSUMED V_SW 4-14 m3, ALPHA_SW 0.08-0.35 : "
+          f"{g_min:.3f} - {g_max:.3f}")
+    if rel > 0.03:
+        raise AssertionError(f"G_sw re-derivation disagrees by {rel*100:.1f}% (>3%)")
+
+
+if __name__ == "__main__":
+    _self_test()
+    _direction_checks()
+    _headline_recheck()
