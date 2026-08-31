@@ -1,0 +1,497 @@
+{
+  "_comment": "SEEDED CASE LIBRARY -- 10 of the 18 curated RCA cases described in the plan. These 10 cover all five fault families so the pipeline is exercisable end to end. The remaining 8 must be written from the real RCA case studies before any generalisation claim is made; holding 4 of the eventual 18 out as a test set is open question 4 for the advisor. Do not report retrieval coverage numbers off this seed set.",
+  "cases": [
+    {
+      "case_id": "RCA-01",
+      "title": "Drum level low - feed path restriction",
+      "signature": {
+        "drum_level": [
+          "DOWN",
+          "FAST"
+        ],
+        "feed_water_flow": [
+          "DOWN",
+          "MED"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "bed_temp_avg": [
+          "FLAT",
+          "-"
+        ],
+        "drum_pressure": [
+          "FLAT",
+          "-"
+        ]
+      },
+      "contradicting_signature": {
+        "bed_temp_avg": [
+          "DOWN",
+          "MED"
+        ],
+        "water_balance|SURPLUS|MED": 1.0
+      },
+      "hypotheses": [
+        "BFP hydraulic deficiency",
+        "Feed path restriction / control failure",
+        "Uncontrolled water loss",
+        "Tube leak",
+        "False level indication"
+      ],
+      "discriminating_evidence": "Valve demand saturated while flow does not respond.",
+      "root_cause": "FCV actuator stem seizure",
+      "equipment": "FEED_VALVE",
+      "actions": [
+        "ACT-014",
+        "ACT-002",
+        "ACT-031"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-01b",
+      "title": "Drum level low - uncontrolled water loss",
+      "signature": {
+        "drum_level": [
+          "DOWN",
+          "MED"
+        ],
+        "feed_water_flow": [
+          "UP",
+          "MED"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "bed_temp_avg": [
+          "FLAT",
+          "-"
+        ],
+        "water_balance|SURPLUS|MED": 1.0
+      },
+      "contradicting_signature": {
+        "feed_water_flow": [
+          "DOWN",
+          "MED"
+        ]
+      },
+      "hypotheses": [
+        "CBD or IBD valve passing",
+        "Sample line left open",
+        "Tube leak"
+      ],
+      "discriminating_evidence": "Boiler water conductivity falls while feed rises; no bed temperature response.",
+      "root_cause": "CBD valve left open at handover",
+      "equipment": "CBD_VALVE_B",
+      "actions": [
+        "ACT-021",
+        "ACT-002"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-02",
+      "title": "BFP loses suction",
+      "signature": {
+        "drum_level": [
+          "DOWN",
+          "FAST"
+        ],
+        "feed_water_flow": [
+          "DOWN",
+          "FAST"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "drum_pressure": [
+          "FLAT",
+          "-"
+        ]
+      },
+      "contradicting_signature": {
+        "feed_water_flow": [
+          "UP",
+          "MED"
+        ],
+        "water_balance|SURPLUS|MED": 1.0
+      },
+      "hypotheses": [
+        "Deaerator level low",
+        "BFP cavitation",
+        "Suction strainer choked"
+      ],
+      "discriminating_evidence": "Pump discharge pressure falls with motor current; deaerator level at or below minimum.",
+      "root_cause": "BFP suction loss from low deaerator level",
+      "equipment": "BFP_A",
+      "actions": [
+        "ACT-005",
+        "ACT-002",
+        "ACT-031"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-03",
+      "title": "Feed strainer choking",
+      "signature": {
+        "drum_level": [
+          "DOWN",
+          "MED"
+        ],
+        "feed_water_flow": [
+          "DOWN",
+          "SLOW"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "bed_temp_avg": [
+          "FLAT",
+          "-"
+        ]
+      },
+      "contradicting_signature": {
+        "bed_temp_avg": [
+          "UP",
+          "FAST"
+        ],
+        "water_balance|SURPLUS|MED": 1.0
+      },
+      "hypotheses": [
+        "Strainer choked",
+        "Feed path restriction / control failure"
+      ],
+      "discriminating_evidence": "Differential pressure across the strainer rising over hours while valve demand rises to compensate.",
+      "root_cause": "Feed strainer progressively choked",
+      "equipment": "FEED_STRAINER",
+      "actions": [
+        "ACT-007",
+        "ACT-014"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-04",
+      "title": "Water wall tube leak",
+      "signature": {
+        "drum_level": [
+          "FLAT",
+          "-"
+        ],
+        "feed_water_flow": [
+          "UP",
+          "MED"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "bed_temp_avg": [
+          "DOWN",
+          "SLOW"
+        ],
+        "drum_pressure": [
+          "DOWN",
+          "SLOW"
+        ],
+        "water_balance|SURPLUS|MED": 1.0
+      },
+      "contradicting_signature": {
+        "feed_water_flow": [
+          "DOWN",
+          "MED"
+        ]
+      },
+      "hypotheses": [
+        "Water wall tube erosion/split",
+        "Economiser leak",
+        "Uncontrolled water loss"
+      ],
+      "discriminating_evidence": "Feed exceeds steam while level only holds; bed temperature sags as water quenches the furnace; make-up rate climbs.",
+      "root_cause": "Water wall tube erosion and split",
+      "equipment": "WATER_WALL",
+      "actions": [
+        "ACT-009",
+        "ACT-031",
+        "ACT-002"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-05",
+      "title": "Wet coal hang-up in hopper",
+      "signature": {
+        "drum_pressure": [
+          "DOWN",
+          "MED"
+        ],
+        "bed_temp_avg": [
+          "DOWN",
+          "MED"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "drum_level": [
+          "FLAT",
+          "-"
+        ],
+        "energy_balance|HEAT_SHORT|-": 1.0
+      },
+      "contradicting_signature": {
+        "bed_temp_avg": [
+          "UP",
+          "MED"
+        ]
+      },
+      "hypotheses": [
+        "Wet coal hang-up",
+        "Feeder trip",
+        "Low calorific value coal"
+      ],
+      "discriminating_evidence": "Feeder speed rising to hold load while bed temperature still falls; both feeders affected points to fuel, one points to the feeder.",
+      "root_cause": "Wet coal bridging in the hopper",
+      "equipment": "COAL_HOPPER",
+      "actions": [
+        "ACT-011",
+        "ACT-012"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-06",
+      "title": "Coal feeder trip",
+      "signature": {
+        "drum_pressure": [
+          "DOWN",
+          "FAST"
+        ],
+        "bed_temp_avg": [
+          "DOWN",
+          "FAST"
+        ],
+        "steam_flow": [
+          "DOWN",
+          "MED"
+        ],
+        "drum_level": [
+          "FLAT",
+          "-"
+        ],
+        "energy_balance|HEAT_SHORT|-": 1.0
+      },
+      "contradicting_signature": {
+        "drum_level": [
+          "DOWN",
+          "FAST"
+        ]
+      },
+      "hypotheses": [
+        "Feeder trip",
+        "Wet coal hang-up",
+        "PA fan trip"
+      ],
+      "discriminating_evidence": "Step change rather than a ramp, and one feeder's current goes to zero while the other holds.",
+      "root_cause": "Coal feeder 2 tripped on overload",
+      "equipment": "COAL_FEEDER_2",
+      "actions": [
+        "ACT-012",
+        "ACT-002"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-07",
+      "title": "Bed over-temperature from high-CV coal",
+      "signature": {
+        "bed_temp_avg": [
+          "UP",
+          "MED"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "drum_pressure": [
+          "FLAT",
+          "-"
+        ],
+        "drum_level": [
+          "FLAT",
+          "-"
+        ],
+        "energy_balance|HEAT_ACCUMULATING|-": 1.0
+      },
+      "contradicting_signature": {
+        "bed_temp_avg": [
+          "DOWN",
+          "MED"
+        ]
+      },
+      "hypotheses": [
+        "High calorific value coal fired without recalibration",
+        "Primary air low",
+        "Bed material level low"
+      ],
+      "discriminating_evidence": "Coal lab report shows CV rise; if instead PA damper position fell, the cause is air not fuel.",
+      "root_cause": "High-CV coal fired without feeder recalibration",
+      "equipment": "COAL_FEEDER_1",
+      "actions": [
+        "ACT-018",
+        "ACT-019",
+        "ACT-002"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-08",
+      "title": "Bed over-temperature from low primary air",
+      "signature": {
+        "bed_temp_avg": [
+          "UP",
+          "FAST"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "drum_pressure": [
+          "FLAT",
+          "-"
+        ],
+        "energy_balance|HEAT_ACCUMULATING|-": 1.0
+      },
+      "contradicting_signature": {
+        "drum_pressure": [
+          "UP",
+          "MED"
+        ]
+      },
+      "hypotheses": [
+        "Primary air low",
+        "High calorific value coal",
+        "Air damper stuck"
+      ],
+      "discriminating_evidence": "PA damper position or PA fan current below normal for the firing rate; coal report unchanged.",
+      "root_cause": "Primary air damper left low after maintenance",
+      "equipment": "AIR_DAMPER",
+      "actions": [
+        "ACT-019",
+        "ACT-018"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-09",
+      "title": "Heat transfer fouling - slow drift",
+      "signature": {
+        "bed_temp_avg": [
+          "UP",
+          "SLOW"
+        ],
+        "drum_pressure": [
+          "DOWN",
+          "SLOW"
+        ],
+        "ms_temperature": [
+          "UP",
+          "SLOW"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "energy_balance|HEAT_ACCUMULATING|-": 1.0
+      },
+      "contradicting_signature": {
+        "bed_temp_avg": [
+          "DOWN",
+          "MED"
+        ]
+      },
+      "hypotheses": [
+        "Heat transfer surface fouling",
+        "Bed material degradation",
+        "Gradual air/fuel drift"
+      ],
+      "discriminating_evidence": "Nothing crosses a limit. Only the RELATIONSHIP between bed temperature and steam output at constant load changes, over days.",
+      "root_cause": "Progressive heat transfer surface fouling",
+      "equipment": "WATER_WALL",
+      "actions": [
+        "ACT-024",
+        "ACT-025"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    },
+    {
+      "case_id": "RCA-10",
+      "title": "False level indication",
+      "signature": {
+        "drum_level": [
+          "DOWN",
+          "FAST"
+        ],
+        "feed_water_flow": [
+          "UP",
+          "MED"
+        ],
+        "steam_flow": [
+          "FLAT",
+          "-"
+        ],
+        "drum_pressure": [
+          "FLAT",
+          "-"
+        ],
+        "bed_temp_avg": [
+          "FLAT",
+          "-"
+        ],
+        "water_balance|SURPLUS|MED": 1.0
+      },
+      "contradicting_signature": {},
+      "hypotheses": [
+        "Level transmitter fault",
+        "Reference leg loss",
+        "Genuine level fall"
+      ],
+      "discriminating_evidence": "Water balance residual is near zero despite the indicated level moving. Physics says the water is still there.",
+      "root_cause": "Level transmitter reference leg lost",
+      "equipment": "LEVEL_TX",
+      "actions": [
+        "ACT-028",
+        "ACT-002"
+      ],
+      "provenance": "curated_case",
+      "weight": 1.0,
+      "occurrences": 1
+    }
+  ]
+}

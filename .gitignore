@@ -1,0 +1,24 @@
+# --- generated data: regenerate with `python -m data.generator.episode_build`
+data/episodes/
+data/experience/
+results/
+
+# --- reference data: large, and not ours to redistribute
+data/reference/*.csv
+
+# --- device artefacts: multi-GB model files
+device/models/*.litertlm
+device/models/*.bin
+
+# --- secrets
+.env
+*.key
+
+# --- python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# --- macOS
+.DS_Store

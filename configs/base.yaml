@@ -1,0 +1,138 @@
+# ===========================================================================
+#  FieldMind Boiler Agent -- base configuration
+# ===========================================================================
+#  Every decision variable from Plan §11.2 is here and nowhere else. The
+#  sweep (bench/sweep.py) works by overriding keys in this file, so anything
+#  hard-coded elsewhere is a bug that will silently limit the search space.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+#  THE MODEL SWITCH.  This is the only line you change to move between
+#  cloud development and on-device measurement.
+#
+#     mock    no network, no key, deterministic. Plumbing tests only --
+#             never report a mock run as an agent result.
+#     gemini  Google AI Studio. Valid for QUALITY metrics (Q1-Q7) while the
+#             device path is being built. Meaningless for SYSTEM metrics.
+#     litert  LiteRT-LM on the QIDK. The numbers that go in the writeup.
+# ---------------------------------------------------------------------------
+llm:
+  backend: mock
+
+  gemini:
+    model: gemini-2.0-flash
+    api_key_env: GOOGLE_API_KEY     # export it; never put the key in this file
+    temperature: 0.1
+    timeout_s: 30
+    json_mode: true                 # cloud stand-in for grammar-constrained decoding
+
+  litert:
+    mode: adb                       # adb (host drives board) | local (agent on board)
+    device_dir: /data/local/tmp/llm
+    binary: litert_lm_main
+    model_file: Gemma3-1B-IT_q4_ekv1280_sm8650.litertlm
+    accelerator: npu                # cpu | gpu | npu   <- decision variable b_s
+    timeout_s: 60
+    adb_serial: ""                  # set if more than one device is attached
+
+# ---------------------------------------------------------------------------
+#  Agent behaviour
+# ---------------------------------------------------------------------------
+agent:
+  tick_period_s: 30                 # decision variable T: {15, 30, 60}
+  policy: sequential                # decision variable pi: sequential|pipelined|conditional
+  verifier: conditional             # decision variable v: always|conditional|never
+  verifier_band: [0.35, 0.75]       # conditional mode fires inside this band
+  max_tokens: 384
+  max_actions: 3
+  min_faithfulness: 0.5             # below this the model's ranking is discarded
+  hard_stage_deadline_ms: 200       # constraint C1 -- miss rate must be zero
+  llm_budget_ms: 8000
+
+  triage:
+    trip_horizon_min: 5.0
+
+  retrieval:                        # decision variable k
+    k_cases: 4
+    k_notes: 5
+    k_experience: 2
+    k_records: 5
+    topology_depth: 3
+    context_cap_tokens:             # decision variable L, per triage level
+      WATCH: 2048
+      INVESTIGATE: 3072
+      URGENT: 1024
+
+# ---------------------------------------------------------------------------
+#  Deterministic check thresholds  (Plan Appendix A.5)
+#  STARTING VALUES, NOT FINAL ONES. Tuning these against the normal episodes
+#  to hit the false-positive target Q5 is explicitly part of phase 2.
+# ---------------------------------------------------------------------------
+checks:
+  sample_period_s: 5.0
+  # Plant characterisation constant: how much bed temperature moves per TPH of
+  # load. Fitted by least squares on the NORMAL episodes only (2.75 degC/TPH).
+  # A real site fits this from historical steady operation. It is NOT a tuning
+  # knob -- refit it if the plant or the fuel changes.
+  load_coef_degc_per_tph: 2.75
+
+  limits:
+    bed_temp_avg:
+      alarm_hi:    {op: ">", value: 880.0, severity: ALARM}
+      critical_hi: {op: ">", value: 940.0, severity: CRITICAL}
+    drum_level:
+      alarm_lo:    {op: "<", value: 20.0, severity: ALARM}
+      critical_lo: {op: "<", value: 10.0, severity: CRITICAL}
+    ms_temperature:
+      alarm_hi:    {op: ">", value: 550.0, severity: ALARM}
+    drum_pressure:
+      alarm_hi:    {op: ">", value: 70.0, severity: ALARM}
+      alarm_lo:    {op: "<", value: 55.0, severity: ALARM}
+
+  rates:
+    drum_level:    {threshold: 0.5,  sustained_min: 3.0,  direction: abs, unit: "%/min",       severity: WATCH}
+    bed_temp_avg:  {threshold: 0.4,  sustained_min: 10.0, direction: up,  unit: "degC/min",    severity: WATCH}
+    drum_pressure: {threshold: -0.05, sustained_min: 5.0, direction: down, unit: "kg/cm2/min", severity: WATCH}
+
+  # Long-horizon drift. Catches family E, which crosses no limit and triggers
+  # none of the short-window rate checks above. Thresholds here trade directly
+  # against the false-positive target Q5 -- expect to tune them in phase 2.
+  rates_long:
+    bed_temp_avg:   {threshold: 0.08,  sustained_min: 40.0, direction: up,   unit: "degC/min", severity: WATCH}
+    ms_temperature: {threshold: 0.05,  sustained_min: 40.0, direction: up,   unit: "degC/min", severity: INFO}
+    drum_pressure:  {threshold: -0.01, sustained_min: 40.0, direction: down, unit: "kg/cm2/min", severity: INFO}
+
+  balance:
+    level_gain_pct_per_min_per_tph: 0.22   # the K in the water balance
+    residual_tph: 2.0
+    window_min: 5.0
+    p_falling: 0.05
+    bed_rising: 0.3
+    steam_flat_tph_per_min: 0.3
+
+  validity:
+    stuck_minutes: 10.0
+    stuck_mad_eps: 0.001
+    physical_range:
+      drum_level:      [0.0, 100.0]
+      feed_water_flow: [0.0, 120.0]
+      steam_flow:      [0.0, 120.0]
+      drum_pressure:   [0.0, 90.0]
+      bed_temp_avg:    [0.0, 1200.0]
+      ms_temperature:  [0.0, 700.0]
+    max_step:
+      drum_level: 5.0
+      feed_water_flow: 15.0
+      steam_flow: 15.0
+      drum_pressure: 3.0
+      bed_temp_avg: 25.0
+      ms_temperature: 25.0
+
+# ---------------------------------------------------------------------------
+paths:
+  asset_model: data/kb/asset_model.json
+  case_library: data/kb/case_library.json
+  action_catalogue: data/kb/action_catalogue.json
+  episodes: data/episodes
+  experience: data/experience/store.json
+  results: results
