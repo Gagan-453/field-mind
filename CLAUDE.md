@@ -122,6 +122,13 @@ RATE check, MAD and slope estimate is currently calibrated against the wrong
 noise model, and family E's ~40 °C drift is a 15-sigma signal against our
 variability where it would be about 4 sigma against real variability.
 
+Correction to fingerprint gap 3: the 255 min / 707 min figures are the
+autocorrelation of the level, which is inherited from slow load variation
+(steam flow's own tau is 27 min). Increment cross-correlation shows the
+steam->bed response peaks at lag 0, so the plant responds in minutes.
+Do NOT slow bed or ms relaxation by 30-170x; that would break families
+C and D. Reproduce the long autocorrelation with slow stochastic drift in
+the DRIVERS instead (gap 4).
 ---
 
 ## Case study PDFs
