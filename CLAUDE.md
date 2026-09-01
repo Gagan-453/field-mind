@@ -208,3 +208,138 @@ before trusting any device number.
   to report around them — keep that habit.
 - Prefer editing existing files over creating new ones. Do not add documentation
   files unless asked.
+---
+
+## Verification protocol — applies to every file, every time
+
+Before showing me any file or claiming any result:
+
+1. **Run it.** Execute the module or a driver that exercises it. Paste the full
+   output, not a summary.
+2. **Run its self-tests.** Paste the full output.
+3. **Re-derive one headline number by a method the code does not use.** Not a
+   rearrangement of the same expression — a different route to the same
+   quantity. Report both values and the relative difference.
+4. **Mutation-check the tests.** Corrupt one constant the tests should catch,
+   confirm a test actually fails, restore it, and report which test caught it.
+
+If any step fails, fix it and repeat before asking. Do not present a file that
+has not been run.
+
+**A test that still passes when you break what it tests is not a test.** Two
+have already shipped in this project: a "K by an independent route" check that
+was the same algebra rearranged, and a shrink-and-swell direction check that
+recomputed swell from the same pressure means it was testing. Delete or replace
+any test that cannot fail.
+
+**Test outcomes, not expressions.** Assert against the emitted trace or the
+returned state, never against the formula that produced it.
+
+---
+
+## Sign discipline
+
+State the expected **direction** of every physical response *before* writing the
+code, then verify it against the emitted trace.
+
+Three of the four bugs in the original simulator were sign errors, and each one
+silently broke an entire fault family:
+
+- a tube leak modelled as *heating* the bed instead of cooling it
+- a water-balance residual whose text said "feed is short" when it meant
+  "water is being lost"
+- a drift check that was not load-normalised
+
+Known-correct directions, for reference:
+
+- load increase → pressure falls → voids expand → level **rises** (swell);
+  load decrease → **shrink**
+- tube leak → water into the furnace → bed **cools**
+- leak or stuck-open blowdown → conductivity **falls**;
+  feed shortage at normal blowdown → conductivity **rises**
+- fuel availability capped → pressure sags → turbine throttles → steam **falls**
+
+---
+
+## The tuning prohibition
+
+**Never choose an input to reproduce a target number.**
+
+If a derived value disagrees with a prior value, a case study, or an
+expectation, **record the disagreement**. Do not adjust assumed inputs to close
+it. This project has already caught one instance: reconciling drum dimensions
+to reproduce `K_LEVEL = 0.22` would have laundered an invented constant into a
+"derived" one, and the real finding — that no plausible drum geometry produces
+0.22 — would have been lost.
+
+Every ASSUMED constant must carry a range and a statement of what it affects.
+A value with no range is not ASSUMED, it is invented.
+
+---
+
+## Stop rules — halt and ask rather than proceed
+
+Stop and write the question into the report when any of these occur. Do not
+pick a plausible value and continue.
+
+1. A constant cannot be derived, cited, fitted, or bounded to a defensible
+   ASSUMED range.
+2. A derived value disagrees with a case study, a prior value, or a physical
+   expectation by more than 2×.
+3. A direction check fails, or a self-test fails and the fix is not obviously
+   a transcription error.
+4. A design decision would change what the benchmark measures — tag set,
+   episode structure, metric definitions, ground-truth format.
+5. A change would touch `configs/base.yaml` thresholds, episode severities, or
+   anything else tuned against the old physics, outside a stage explicitly
+   scoped to re-tune it.
+6. Two requirements conflict and satisfying both is impossible.
+
+When stopped, keep going on anything independent of the blocked item, and list
+the blockage in the report.
+
+---
+
+## Report — write after every sub-model or stage
+
+Write to `reports/<stage>_<submodel>.md` and commit it. Format:
+
+```markdown
+# <stage / sub-model> — report
+
+## Status
+DONE | BLOCKED | PARTIAL — one line on what was built.
+
+## Verification
+| step | result |
+|---|---|
+| ran the module | pass/fail + key output |
+| self-tests | n passed / n failed |
+| independent re-derivation | quantity, both values, relative difference, method used |
+| mutation check | constant corrupted, which test caught it |
+
+## Direction checks
+One row per sign claim: expected direction, measured value, OK/FAIL.
+Mark any check that depends on not-yet-rewritten code as PROVISIONAL.
+
+## Constants introduced
+| symbol | value | provenance | range | affects |
+Every ASSUMED entry needs a range and an "affects" column.
+
+## Numbers that changed
+Old value, new value, ratio, and what downstream depends on it.
+
+## Disagreements recorded, not resolved
+Anything that conflicts with a case study, a prior value, or an expectation.
+State both sides and which was chosen, and why. Do NOT resolve by tuning.
+
+## Blocked / needs a decision
+Stop-rule hits. State the question and the options, not a recommendation
+already acted on.
+
+## What I could not verify
+Anything taken on trust, and what would be needed to check it.
+```
+
+The last two sections are the point of the report. A report with both empty is
+a signal to look harder, not a clean bill of health.
