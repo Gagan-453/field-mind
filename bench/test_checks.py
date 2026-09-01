@@ -43,8 +43,11 @@ def check(name, cond, extra=""):
 # "stuck instrument" check and suspends every downstream check over that tag.
 # That ordering is the behaviour we want; a noiseless fixture just cannot
 # exercise anything past it.
-NOISE = {"drum_level": 0.15, "feed_water_flow": 0.35, "steam_flow": 0.35,
-         "drum_pressure": 0.05, "bed_temp_avg": 1.2, "ms_temperature": 0.8}
+# Matches sim.EMIT_NOISE after the stage-4 regeneration (bed/ms ~20x smaller
+# than the old ad-hoc values). Only needs to exceed stuck_mad_eps so the
+# VALIDITY stuck check does not suspend everything downstream.
+NOISE = {"drum_level": 0.15, "feed_water_flow": 0.109, "steam_flow": 0.109,
+         "drum_pressure": 0.019, "bed_temp_avg": 0.057, "ms_temperature": 0.026}
 
 
 def make_window(minutes=50.0, seed=7, **ramps):

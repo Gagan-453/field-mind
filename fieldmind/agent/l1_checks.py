@@ -405,15 +405,23 @@ class CheckLayer:
         level = _slope_per_min(w.series("drum_level")[-need:], self.dt_s)
 
         flat = self.balance["steam_flat_tph_per_min"]
+        # Bed-slope gates re-scaled for the stage-4 noise model: over a 5-min
+        # window the load-normalised bed slope has a no-fault p99.7 of ~1.2
+        # degC/min (OU load + per-subsystem process disturbances), so the old
+        # 0.4 / 0.2 / 0.1 literals fired the "energy accumulating" pattern ~15
+        # times an hour on a healthy plant. `bed_rising` (config) is 1.3 and
+        # these track it. (These belong in the config; left as literals for the
+        # L1/agent stage to move.)
+        bed_rising = self.balance["bed_rising"]
 
-        if bed > 0.4 and abs(steam) < flat and abs(press) < 0.05:
+        if bed > bed_rising and abs(steam) < flat and abs(press) < 0.05:
             out.append(Fact(ids.next(), "PATTERN",
                             ["bed_temp_avg", "steam_flow", "drum_pressure"],
                             w.window_ticks(tick), bed,
                             "signature 'energy accumulating in bed': bed rising, "
                             "steam flat, pressure flat", "WATCH", 0.8))
 
-        if level < -0.3 and abs(bed) < 0.2:
+        if level < -0.3 and abs(bed) < 0.5:
             out.append(Fact(ids.next(), "PATTERN",
                             ["drum_level", "bed_temp_avg"],
                             w.window_ticks(tick), level,
@@ -423,7 +431,7 @@ class CheckLayer:
         # Absence of expected evidence is information too (Plan §5.1 rule 2),
         # so a deliberately-INFO fact records a quiet heat side. It costs a few
         # prompt tokens and it lets the model rule things OUT.
-        if abs(bed) < 0.1 and abs(press) < 0.02:
+        if abs(bed) < 0.3 and abs(press) < 0.02:
             out.append(Fact(ids.next(), "PATTERN",
                             ["bed_temp_avg", "drum_pressure"],
                             w.window_ticks(tick), 0.0,

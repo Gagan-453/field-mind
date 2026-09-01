@@ -147,12 +147,11 @@ def build_records(spec, rng: random.Random, water_chemistry_log=None) -> dict:
     # coal_cv_factor in the simulator.
     cv_factor = next((s.target for s in spec.schedules
                       if s.driver == "coal_cv_factor"), 1.0)
-    # NOTE: 3400 is the feeder CALIBRATION BASIS. sub-model 2 derives the design
-    # coal GCV as ~4040 kcal/kg (Dulong, one ultimate analysis); this literal
-    # and the "3400" string move to ~4040 at the next episode regeneration
-    # (recorded in reports/stage3_submodel2.md). Episodes are not regenerated in
-    # stage 3, so it stays 3400 here for now.
-    base_cv = 3400
+    # The feeder CALIBRATION BASIS. sub-model 2 derives the design coal GCV as
+    # ~4040 kcal/kg (Dulong on the one ASSUMED ultimate analysis,
+    # sim.GCV_KCAL_PER_KG); stage 4 regenerates the episodes, so the literal and
+    # the note string move from the old 3400 to 4040 here (DERIVATIONS 4.1).
+    base_cv = 4040
     rec = {
         "coal_lab_report": {
             "sample_date_offset_days": -1,
@@ -160,7 +159,7 @@ def build_records(spec, rng: random.Random, water_chemistry_log=None) -> dict:
             "moisture_pct": round(rng.uniform(8, 12) +
                                   (6.0 if "wet_coal" in spec.episode_id else 0), 1),
             "ash_pct": round(rng.uniform(28, 36), 1),
-            "note": ("CV notably above the calibration basis of 3400"
+            "note": ("CV notably above the calibration basis of 4040"
                      if cv_factor > 1.05 else "within normal range"),
         },
         "maintenance_history": [

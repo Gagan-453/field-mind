@@ -736,6 +736,38 @@ Cross-correlation `pearson_level` steam<->bed **+0.95** (fingerprint +0.87). See
 `reports/stage3_submodel4.md` for the bed/ms/pressure sd gaps and the
 steam<->pressure sign gap (recorded, not forced - CLAUDE.md).
 
+> **Stage 4 update.** The single shared load OU alone came out at steam<->bed
+> **+0.98** (bed 96 % explained by steam vs 76 % in the real trace). Corrected by
+> adding independent per-subsystem process disturbances - see 7.3. After that:
+> steam<->bed **+0.88**, bed R^2 on steam **0.76**, bed 30-min acf **0.57** (fp
+> 0.571), steam_flow sd **2.06**. `_ou_recheck` now asserts steam<->bed in
+> [0.60, 0.95] (both bounds); mutation M11 kills the process OU and is caught.
+
+### 7.3 Independent per-subsystem process disturbances  (stage 4, 2026-09-01)
+
+One shared `load_demand` OU couples every tag through one input, over-correlating
+them. A real plant carries disturbances local to each subsystem (fuel-size and
+mixing variation in the bed, calorific scatter between coal parcels, flue-gas /
+air-side turbulence) that load does not explain. Modelled as three **independent**
+single-timescale OU processes on the *effective* driver values inside `step()` -
+`heat_absorption`, `coal_cv_factor`, `primary_air` - never mutating `self.d.*`
+(the fault schedule and emitted ground truth stay exact). They enter the SAME
+energy balance as the scheduled drivers, so both balances still close; they
+decorrelate bed from steam because none of them touches `load_demand`. The
+`primary_air` term is applied as a signed `- K_PA * ou_pa` so the `min(1, .)`
+rectifier does not bias the bed upward in normal operation.
+
+| symbol | value | provenance | range |
+|---|---|---|---|
+| `TAU_PROC_S` | 25 min | **ASSUMED** - combustion / air-side disturbance timescale | 15 - 45 min |
+| `SIGMA_PROC_HA` | 0.0022 | **ASSUMED**, calibrated so 4 x 20-h no-fault -> steam<->bed +0.87 | 0.001 - 0.004 |
+| `SIGMA_PROC_CV` | 0.0022 | **ASSUMED**, same calibration | 0.001 - 0.004 |
+| `SIGMA_PROC_PA` | 0.0035 | **ASSUMED**, same calibration | 0.0015 - 0.006 |
+
+The (tau, sigma) pair is a ridge, not a point (tau 20 or 35 min gives the same
++0.87 with a rescaled sigma). The fingerprint has no per-subsystem disturbance
+spectrum to pin it further. Achieved value is **reported, not tuned to hit**.
+
 ### 7.2 Measurement noise - white, added at emit only  (sub-model 4, built 2026-09-01)
 
 `EMIT_NOISE` in `sim.py`. Dropped from the old ad-hoc dict (bed 1.2, ms 0.8 -
@@ -786,16 +818,23 @@ section 5.3; a no-fault episode stays flat at about 816.)
 
 ---
 
-## 9. Load coefficient re-fit
+## 9. Load coefficient re-fit  *(done - stage 4, 2026-09-01)*
 
-`configs/base.yaml checks.load_coef_degc_per_tph` is currently 2.75.
+`configs/base.yaml checks.load_coef_degc_per_tph` = **2.75, unchanged**.
 
-- It is **re-fitted** to the regenerated normal episodes (least-squares
-  `slope(bed) vs slope(steam_flow)` over N01-N06), **FITTED** with the fit R2
-  recorded.
-- It is **NOT** set to the fingerprint's measured 3.90 degC/(t/h): that was a
-  different boiler at 774 degC bed / 99.6 kg/cm2
-  (`load_following.coefficients.bed_temp_avg.level_regression`), and CLAUDE.md's
-  correction is explicit that our variability model differs.
+- Re-fit over the regenerated N01-N06: least-squares `slope(bed) vs
+  slope(steam_flow)` over 10-min windows gives **2.21 degC/(t/h), R^2 0.61**.
+- **Not adopted.** OLS slope with estimation noise on the regressor (emit noise
+  on `steam_flow`) is attenuated toward 0. The value that MINIMISES the no-fault
+  load-normalised bed-slope residual (swept over 2.0 - 3.2) is **2.75 - 2.85**,
+  which equals the simulator generator gain `K_BED_LOAD = 2.75`. The
+  normalisation `_load_normalised_bed_slope` must cancel exactly what the
+  generator adds; 2.21 leaves a `0.54 * slope(steam)` residual that lifts the
+  family-E detector floor above the family-E signal (see
+  `reports/stage4_regeneration.md` disagreement 1).
+- Still **NOT** the fingerprint's 3.90 (different boiler / operating point).
+- This is the `LOAD_COEF` stamped into every `ground_truth.json`
+  (`state_timeline_load_coef`), so the DEVIATION band and this value move
+  together and a future re-fit is a visible change.
 
 The new value and R2 go in the before/after report and here on completion.
