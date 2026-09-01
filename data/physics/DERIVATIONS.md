@@ -492,6 +492,17 @@ NaCl-equivalent relation is `TDS[ppm] ~= 0.55 * EC[uS/cm]`, i.e.
 All three sections (5.1, 5.3, 8) now use `kappa_fw = 12` -> nominal
 `kappa_bw = 816 uS/cm`.
 
+**Built in `sim.py` (sub-model 3, 2026-09-01).** `M_bw` uses the sub-model-1
+collapsed-liquid mass `_m_liq + CIRCUIT_WATER_MASS_KG` directly (the true water
+in contact with the pool -- NOT the swelled indicated level). `_m_solids` starts
+at the equilibrium `C_BW_NOMINAL_PPM * 1e-6 * M_bw(0)`, so a no-fault run holds
+`kappa_bw` flat (self-test: +0.3 % over 180 min). Verified trajectories
+(sim.py `_self_test` 8-10, `_ds_recheck`) reproduce §5.3 to ~1 uS/cm:
+no-fault 0 %, leak 3.5 t/h -30 % @ 90 min, CBD-open -23 %, feed-short +14 %.
+Independent closed-form re-derivation (`c_bw_ss = c_fw*W_feed/(W_bd+W_leak)`,
+first-order approach with `tau = M_bw/(W_bd+W_leak) = 136 min`) matches the
+Euler ODE to **0.1-0.2 %**.
+
 ### 5.2 Why one ODE gives both Case 1 and Case 11
 
 At steady state `c_bw / c_fw = W_feed / (W_bd + W_leak)` - the cycles of

@@ -231,7 +231,8 @@ def build_episode(spec: EpisodeSpec, out_dir: Path) -> dict:
     rng = random.Random(spec.seed)
 
     # ---- 1. time series ----
-    rows = BoilerSim(spec).run()
+    sim = BoilerSim(spec)
+    rows = sim.run()
     with open(d / "timeseries.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader()
@@ -242,7 +243,11 @@ def build_episode(spec: EpisodeSpec, out_dir: Path) -> dict:
     with open(d / "notes.jsonl", "w") as fh:
         for n in notes:
             fh.write(json.dumps(n) + "\n")
-    (d / "records.json").write_text(json.dumps(build_records(spec, rng), indent=2))
+    # sub-model 3: the sampled boiler-water conductivity log goes in records.json
+    # (not one of the six frozen tags). L3 does not read it yet -- known bug 3.
+    wchem = sim.water_chemistry_log(rng)
+    (d / "records.json").write_text(
+        json.dumps(build_records(spec, rng, wchem), indent=2))
     (d / "query.txt").write_text("\n".join(build_queries(spec)))
 
     # ---- 3. ground truth, emitted BY the generator ----

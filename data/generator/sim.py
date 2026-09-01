@@ -52,8 +52,10 @@ import warnings
 from dataclasses import dataclass, field
 
 from data.physics.geometry import (
+    CIRCUIT_WATER_MASS_KG,
     LEVEL_SPAN_M,
     NOMINAL_DRUM_KGFCM2G,
+    NOMINAL_BLOWDOWN_TPH,
     boiler_water_inventory_kg,
     drum_water_volume_m3,
     feed_valve_max_tph,
@@ -359,6 +361,33 @@ _E_P_PHYS_BAND = (0.8e3, 1.2e3)
 _E_P_AR1_FIT = 1.3e4         # what fitting the 44.53-min ar1 wants; NOT used.
 
 
+# =======================================================================
+#  DISSOLVED-SOLIDS / boiler-water conductivity  (sub-model 3) -- DERIVATIONS §5
+# =======================================================================
+#   dm_solids/dt = c_fw * W_feed  -  c_bw * (W_blowdown + W_leak)      [kg/s]
+#   c_bw         = 1e6 * m_solids / M_bw                               [ppm]
+#   kappa_bw     = c_bw * K_US_PER_PPM                                 [uS/cm]
+# M_bw is the true boiler-water mass in contact with the solids pool: the
+# drum-span collapsed liquid (`_m_liq`, from the sub-model-1 mass balance -- NOT
+# the swelled indicated level) plus the ~fixed circuit water.
+#
+# Directions (CLAUDE.md sign discipline):
+#   leak / stuck-open blowdown  -> more dilute water leaves -> kappa_bw FALLS
+#   feed shortage at normal blowdown -> drum boils down, M_bw drops, a near-
+#       fixed m_solids concentrates -> kappa_bw RISES (weakly; M_bw falls only
+#       ~8 % over 50->20 % level, and a passing CBD inverts it -- DERIVATIONS §5.3)
+K_US_PER_PPM = 1.8      # ASSUMED (range 1.4 - 2.0): NaCl-equivalent
+                        # conductivity/TDS ratio. kappa = c_bw * 1.8. Sets the
+                        # absolute kappa scale, not the trend direction.
+KAPPA_FW_US = 12.0      # ASSUMED (range 6 - 18): feedwater conductivity. Small
+                        # captive plant, imperfect condensate polishing. Sets the
+                        # absolute kappa level, not the trend direction.
+C_FW_PPM = KAPPA_FW_US / K_US_PER_PPM                       # 6.667 ppm  DERIVED
+_NOMINAL_CYCLES = ((NOMINAL["steam_flow"] + NOMINAL_BLOWDOWN_TPH)
+                   / NOMINAL_BLOWDOWN_TPH)                   # 68  DERIVED (W_feed/W_bd)
+KAPPA_BW_NOMINAL = KAPPA_FW_US * _NOMINAL_CYCLES            # 816 uS/cm  DERIVED
+C_BW_NOMINAL_PPM = C_FW_PPM * _NOMINAL_CYCLES              # 453.3 ppm  DERIVED
+
 
 @dataclass
 class Drivers:
@@ -429,6 +458,11 @@ class BoilerSim:
         self._m_liq = rho_f_kg_m3(_P_NOM_PA) * V_DRUM_50_M3
         # None until the inventory clamp is hit; then "floor" / "ceiling".
         self.m_liq_saturated: str | None = None
+        # Dissolved-solids pool [kg] (sub-model 3). Initialised at the steady-
+        # state equilibrium c_bw = c_fw * cycles, so a no-fault episode holds
+        # kappa_bw flat (DERIVATIONS §5.4): m_solids = c_bw * 1e-6 * M_bw(t=0).
+        self._m_bw0 = self._m_liq + CIRCUIT_WATER_MASS_KG
+        self._m_solids = C_BW_NOMINAL_PPM * 1.0e-6 * self._m_bw0
         # Per-step diagnostics (NOT emitted / NOT in the CSV). One dict per
         # step with the clean internals the tests need to check the code path:
         #   t, level_liquid (mass path), level_swell (void term), p_clean.
@@ -505,6 +539,16 @@ class BoilerSim:
         self._m_liq += (w_feed - w_steam - w_bd - w_leak) * DT_S
         self._clamp_inventory(t_s)
 
+        # ---- dissolved-solids balance (sub-model 3, DERIVATIONS §5) ----
+        # M_bw = drum-span collapsed liquid + circuit water (the TRUE water in
+        # contact with the pool -- not the swelled indicated level).
+        m_bw = self._m_liq + CIRCUIT_WATER_MASS_KG
+        c_bw_ppm = 1.0e6 * self._m_solids / m_bw
+        self._m_solids += 1.0e-6 * (C_FW_PPM * w_feed
+                                    - c_bw_ppm * (w_bd + w_leak)) * DT_S
+        self._m_solids = max(0.0, self._m_solids)
+        kappa_bw_uS = c_bw_ppm * K_US_PER_PPM
+
         # Collapsed-liquid indicated level from mass + geometry (rho_f is
         # pressure-dependent; the L1 check uses the single nominal K).
         rho_f_now = rho_f_kg_m3(p_Pa)
@@ -525,7 +569,9 @@ class BoilerSim:
         self._diag_pending = {"t": t_s, "level_liquid": level_liquid,
                               "level_swell": level_swell,
                               "level_indicated_clean": st["drum_level"],
-                              "p_clean": p_kgfcm2g}
+                              "p_clean": p_kgfcm2g,
+                              "c_bw_ppm": c_bw_ppm, "kappa_bw_uS": kappa_bw_uS,
+                              "m_bw": m_bw}
 
         # ================= ENERGY SIDE  (sub-model 2) ====================
         # Combustion control: feeder speed tracks load with a pressure trim.
@@ -653,6 +699,46 @@ class BoilerSim:
             r[tag] = frozen
         return rows
 
+    # -------------------------------------------------------------------
+    def water_chemistry_log(self, rng: random.Random) -> list[dict]:
+        """Sampled boiler-water conductivity for `records.json` (sub-model 3).
+
+        NOT one of the six emitted tags (those are frozen). Per DERIVATIONS §5.5
+        / §8: a pre-episode baseline at -24 h / -16 h / -8 h / 0 (flat at the
+        816 uS/cm nominal), then one sample every 30 min of episode time from the
+        integrated balance, then one operator grab sample 10-20 min (seeded
+        jitter) after the first ALARM-severity condition. `run()` must have been
+        called first (this reads `self.diag`).
+
+        Wiring into `records.json` is a later stage (known bug 3); the format is
+        frozen here so that is a plumbing change only.
+        """
+        if not self.diag:
+            raise RuntimeError("call run() before water_chemistry_log()")
+        base = round(KAPPA_BW_NOMINAL)
+        log = [{"t": t, "sample": "boiler_water",
+                "conductivity_uS_cm": base + rng.randint(-4, 4),
+                "source": "analyser"}
+               for t in (-86400, -57600, -28800, 0)]
+        dur = self.diag[-1]["t"]
+        for t_s in range(1800, int(dur) + 1, 1800):
+            d = min(self.diag, key=lambda x: abs(x["t"] - t_s))
+            log.append({"t": t_s, "sample": "boiler_water",
+                        "conductivity_uS_cm": round(d["kappa_bw_uS"]
+                                                    * (1.0 + rng.uniform(-0.02, 0.02))),
+                        "source": "analyser"})
+        alarm_t = next((d["t"] for d in self.diag
+                        if d["bed_clean"] > 880.0 or d["level_indicated_clean"] < 20.0
+                        or d["p_clean"] < 55.0), None)
+        if alarm_t is not None:
+            grab_t = min(alarm_t + rng.uniform(600, 1200), dur)
+            d = min(self.diag, key=lambda x: abs(x["t"] - grab_t))
+            log.append({"t": round(grab_t), "sample": "boiler_water",
+                        "conductivity_uS_cm": round(d["kappa_bw_uS"]
+                                                    * (1.0 + rng.uniform(-0.02, 0.02))),
+                        "source": "operator_requested"})
+        return sorted(log, key=lambda x: x["t"])
+
 
 # =========================================================================
 #  SELF-TESTS  --  run via `python3 -m data.generator.sim`
@@ -749,12 +835,55 @@ def _self_test() -> None:
     if max(bedE) - NOMINAL["bed_temp_avg"] < 8.0:
         errs.append(f"family E bed rose only {max(bedE) - 850:.1f} degC -- too weak to trend")
 
+    # ================= sub-model 3: dissolved-solids invariants ===========
+    # 8. no-fault drift is ~0 % -- m_solids starts at equilibrium, so kappa_bw
+    #    holds flat over a long run (DERIVATIONS §5.4). Also pins the absolute
+    #    nominal: c_fw * cycles * K_US_PER_PPM = 816 uS/cm.
+    sim = BoilerSim(_spec("selftest_ds_normal", 180.0))
+    sim.run()
+    k = [d["kappa_bw_uS"] for d in sim.diag]
+    if abs(k[0] - KAPPA_BW_NOMINAL) > 3.0:
+        errs.append(f"kappa_bw start {k[0]:.0f} != nominal {KAPPA_BW_NOMINAL:.0f}")
+    if abs(k[-1] / k[0] - 1.0) > 0.03:
+        errs.append(f"no-fault kappa_bw drifted {(k[-1] / k[0] - 1) * 100:+.1f} % (> 3 %)")
+
+    # 9. family B (tube leak) -> kappa_bw FALLS, monotone, <= -10 % by ~50 min
+    #    (DERIVATIONS §5.4 trigger). This is the leak-exclusion signal.
+    sim = BoilerSim(_spec("selftest_ds_leak", 90.0, family="B",
+                          schedules=[Schedule(900.0, "leak_tph", 3.5, 12.0)]))
+    sim.run()
+    k0 = sim.diag[0]["kappa_bw_uS"]
+    k50 = min(d["kappa_bw_uS"] for d in sim.diag if 2700 <= d["t"] <= 3300)
+    kend = sim.diag[-1]["kappa_bw_uS"]
+    _kser = [d["kappa_bw_uS"] for d in sim.diag if d["t"] >= 1500]
+    kmono = all(b <= a + 1.0 for a, b in zip(_kser, _kser[1:]))
+    if kend >= 0.95 * k0:
+        errs.append(f"family B kappa_bw did not fall: {k0:.0f} -> {kend:.0f}")
+    if k50 > 0.90 * k0:
+        errs.append(f"family B kappa_bw only {(k50 / k0 - 1) * 100:+.1f} % by ~50 min "
+                    f"(want <= -10 %)")
+    if not kmono:
+        errs.append("family B kappa_bw not monotone-falling after leak onset")
+
+    # 10. family A (feed short, blowdown normal) -> kappa_bw FLAT or RISES; it
+    #     must NOT fall hard, or it would false-positive as the family-B signal.
+    sim = BoilerSim(_spec("selftest_ds_feedshort", 55.0, family="A",
+                          schedules=[Schedule(600.0, "feed_valve_effectiveness",
+                                              0.77, 8.0)]))
+    sim.run()
+    k0 = sim.diag[0]["kappa_bw_uS"]
+    kend = sim.diag[-1]["kappa_bw_uS"]
+    if kend < 0.95 * k0:
+        errs.append(f"family A kappa_bw fell {(kend / k0 - 1) * 100:+.1f} % -- would "
+                    f"false-positive as family B")
+
     if errs:
         raise AssertionError("sim self-test FAILED:\n  " + "\n  ".join(errs))
     print("sim self-test passed "
           f"(clamp floor {M_LIQ_FLOOR_KG:.0f} kg / ceil {M_LIQ_CEIL_KG:.0f} kg; "
           f"GCV {GCV_KCAL_PER_KG:.0f} kcal/kg, air_st {AIR_ST:.2f} kg/kg -> "
-          f"{GCV_KCAL_PER_KG / AIR_ST:.0f} kcal/kg-air; E_P {E_P:.0f} J/Pa).")
+          f"{GCV_KCAL_PER_KG / AIR_ST:.0f} kcal/kg-air; E_P {E_P:.0f} J/Pa; "
+          f"kappa_bw nominal {KAPPA_BW_NOMINAL:.0f} uS/cm).")
 
 
 def _window_mean(rows, key, t0, t1):
@@ -1047,6 +1176,51 @@ def _headline_recheck() -> None:
         raise AssertionError(f"GCV re-derivation disagrees by {rel_gcv*100:.1f}% (>5%)")
 
 
+def _ds_recheck() -> None:
+    """Re-derive the boiler-water conductivity trajectory by a route the ODE
+    does not use: the closed-form first-order approach to the cycles-of-
+    concentration steady state.
+
+        c_bw_ss = c_fw * W_feed / (W_bd + W_leak)       [cycles of concentration]
+        tau     = M_bw / (W_bd + W_leak)
+        c_bw(t) = c_bw_ss + (c_bw_0 - c_bw_ss) * exp(-t / tau)
+
+    compared against the Euler-integrated `_m_solids` trajectory for a 3.5 t/h
+    leak. The DERIVATIONS §5.3 numbers themselves came from a THIRD, fully
+    independent code path (scratchpad/ds_preview.py, its own water balance);
+    sim.py reproduces them to ~1 uS/cm (see the report).
+    """
+    import math as _m
+    lk = BoilerSim(_spec("ds_leak_recheck", 150.0, family="B",
+                         schedules=[Schedule(900.0, "leak_tph", 3.5, 12.0)]))
+    lk.run()
+    d = lk.diag
+    t_full = 900.0 + 12.0 * 60.0                         # leak fully ramped
+    dfull = min(d, key=lambda x: abs(x["t"] - t_full))
+    c0 = dfull["c_bw_ppm"]
+    w_rem = (NOMINAL_BLOWDOWN_TPH + 3.5) * KGPS_PER_TPH
+    w_feed_ss = (NOMINAL["steam_flow"] + NOMINAL_BLOWDOWN_TPH + 3.5) * KGPS_PER_TPH
+    c_ss = C_FW_PPM * w_feed_ss / w_rem
+    tau = dfull["m_bw"] / w_rem
+    print("\nsub-model-3: conductivity trajectory by an independent route "
+          "(closed-form vs the ODE):")
+    print(f"  c_bw_ss (cycles of concentration) = {c_ss:.1f} ppm "
+          f"({c_ss * K_US_PER_PPM:.0f} uS/cm) ; tau = {tau / 60:.0f} min ; "
+          f"nominal {C_BW_NOMINAL_PPM:.0f} ppm / {KAPPA_BW_NOMINAL:.0f} uS/cm")
+    worst = 0.0
+    for dt_min in (30, 60, 90):
+        pred = c_ss + (c0 - c_ss) * _m.exp(-(dt_min * 60.0) / tau)
+        got = min(d, key=lambda x: abs(x["t"] - (t_full + dt_min * 60.0)))["c_bw_ppm"]
+        rel = abs(got - pred) / pred
+        worst = max(worst, rel)
+        print(f"  +{dt_min:2d} min after full leak: closed-form "
+              f"{pred * K_US_PER_PPM:6.0f}  ODE {got * K_US_PER_PPM:6.0f} uS/cm  "
+              f"(rel {rel * 100:.1f} %)")
+    if worst > 0.10:
+        raise AssertionError(
+            f"conductivity trajectory re-derivation off by {worst * 100:.1f}% (>10%)")
+
+
 def _mutation_check() -> None:
     """Break what the swell tests test; confirm a test actually fails.
 
@@ -1151,6 +1325,14 @@ def _mutation_check() -> None:
          "                     - K_MS_FLOW * (steam - NOMINAL[\"steam_flow\"]))",
          "                     + K_MS_FLOW * (steam - NOMINAL[\"steam_flow\"]))",
          "ms_dir"),
+        ("M7 flip the sub-model-3 leak/blowdown solids-removal sign",
+         "- c_bw_ppm * (w_bd + w_leak)) * DT_S",
+         "- c_bw_ppm * (w_bd - w_leak)) * DT_S",
+         "ds_leak"),
+        ("M8 start the solids pool off equilibrium (x0.7)",
+         "C_BW_NOMINAL_PPM = C_FW_PPM * _NOMINAL_CYCLES",
+         "C_BW_NOMINAL_PPM = C_FW_PPM * _NOMINAL_CYCLES * 0.7",
+         "ds_drift"),
     ]
     for label, old, new, kind in e_muts:
         if old not in src:
@@ -1182,6 +1364,25 @@ def _mutation_check() -> None:
                    - _window_mean(rr, "ms_temperature", 300, 570))
             if dip >= 0.0:
                 caught = f"ms change after load step -> {dip:+.2f} degC (no longer a dip)"
+        elif kind == "ds_leak":              # family-B kappa_bw no longer falls
+            ns: dict = {}
+            exec(compile(mutated, "<mut>", "exec"), ns)
+            sim = ns["BoilerSim"](ns["EpisodeSpec"](
+                episode_id="mut_ds", family="B", tier="A", duration_min=90.0,
+                schedules=[ns["Schedule"](900.0, "leak_tph", 3.5, 12.0)]))
+            sim.run()
+            k0, ke = sim.diag[0]["kappa_bw_uS"], sim.diag[-1]["kappa_bw_uS"]
+            if ke >= 0.95 * k0:
+                caught = f"family-B kappa_bw {k0:.0f} -> {ke:.0f} uS/cm (no longer falls)"
+        elif kind == "ds_drift":             # no-fault kappa_bw no longer flat
+            ns: dict = {}
+            exec(compile(mutated, "<mut>", "exec"), ns)
+            sim = ns["BoilerSim"](ns["EpisodeSpec"](
+                episode_id="mut_ds2", family="N", tier="A", duration_min=180.0))
+            sim.run()
+            k0, ke = sim.diag[0]["kappa_bw_uS"], sim.diag[-1]["kappa_bw_uS"]
+            if abs(ke / k0 - 1.0) > 0.03:
+                caught = f"no-fault kappa_bw drifted {(ke / k0 - 1) * 100:+.1f} % (init off equilibrium)"
         if not caught:
             raise AssertionError(f"{label}: NOTHING caught it -- an energy check is inert")
         print(f"  {label}: caught -- {caught}")
@@ -1191,4 +1392,5 @@ if __name__ == "__main__":
     _self_test()
     _direction_checks()
     _headline_recheck()
+    _ds_recheck()
     _mutation_check()

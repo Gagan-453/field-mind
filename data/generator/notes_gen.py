@@ -131,19 +131,29 @@ def _tags_for(spec) -> list[str]:
             "N": ["steam_flow"]}.get(spec.family, ["drum_level"])
 
 
-def build_records(spec, rng: random.Random) -> dict:
+def build_records(spec, rng: random.Random, water_chemistry_log=None) -> dict:
     """Coal lab reports, alarm/event log, work permits, maintenance history.
 
     Values are drawn from the EPISODE'S OWN DRIVERS so the coal report actually
     matches the fired coal -- otherwise a tier-C episode that needs the report
     to separate fuel cause from air cause would be unsolvable by construction.
+
+    `water_chemistry_log` (sub-model 3): the sampled boiler-water conductivity
+    series from `BoilerSim.water_chemistry_log()`. Included verbatim when given.
+    The agent's L3 does not read `records.json` yet (known bug 3); the format is
+    frozen (DERIVATIONS §8) so the later wiring is a plumbing change only.
     """
     # The consistency assertion the plan asks for: CV in the report must track
     # coal_cv_factor in the simulator.
     cv_factor = next((s.target for s in spec.schedules
                       if s.driver == "coal_cv_factor"), 1.0)
+    # NOTE: 3400 is the feeder CALIBRATION BASIS. sub-model 2 derives the design
+    # coal GCV as ~4040 kcal/kg (Dulong, one ultimate analysis); this literal
+    # and the "3400" string move to ~4040 at the next episode regeneration
+    # (recorded in reports/stage3_submodel2.md). Episodes are not regenerated in
+    # stage 3, so it stays 3400 here for now.
     base_cv = 3400
-    return {
+    rec = {
         "coal_lab_report": {
             "sample_date_offset_days": -1,
             "gcv_kcal_kg": int(base_cv * cv_factor),
@@ -166,6 +176,9 @@ def build_records(spec, rng: random.Random) -> dict:
         "work_permits": [],
         "_provenance": "SYNTHETIC",
     }
+    if water_chemistry_log is not None:
+        rec["water_chemistry_log"] = water_chemistry_log
+    return rec
 
 
 def build_queries(spec) -> list[str]:
