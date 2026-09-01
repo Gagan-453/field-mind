@@ -309,29 +309,155 @@ FEED_SIZING_MARGIN` = `(67 + 1) * 1.20` = **81.60 t/h**.
 
 ---
 
-## 4. Energy balance and combustion  *(coefficients filled during the `sim.py` rewrite)*
+## 4. Energy balance and combustion  *(sub-model 2 -- built 2026-09-01)*
 
-Structure (SI internally):
+Structure (SI internally). `sim.py` "ENERGY-SIDE constants (sub-model 2)".
 
 ```
-Q_fuel     = m_coal * GCV * eta_boiler                     [W]
-Q_steam    = W_steam * (h_ms(p,T_ms) - h_feed(p,T_feed))   [W]   h from steam_tables
-Q_evap     = W_steam * h_fg(p)                             [W]
-dp/dt      = (Q_absorbed - Q_evap - Q_leak) / (V_steam * (du/dp)_sat)
+air_st    = (2.667 C + 7.937 H + 0.998 S - O) / 0.2315      [kg air / kg fuel]  DERIVED
+GCV       = 8080 C + 34500 (H - O/8) + 2240 S               [kcal/kg]  DERIVED (Dulong)
+Q_steam   = W_steam * (h_ms(p,T_ms) - h_fw(p,T_fw))         [W]   DERIVED (IF97)  ~51.5 MW
+Q_fuel    = m_coal * GCV                                    [W]   gross
+m_coal    = (Q_steam / eta) / GCV                           [kg/s]  DERIVED  ~3.58 kg/s
+Q_quench  = W_leak * (1 - flash_x) * h_fg(1 atm)            [W]   flue-gas latent, flash_x~0.366
+dp/dt     = (Q_evap_supply - W_steam * h_fg(p)) / E_P       [Pa/s]
+  Q_evap_supply = Q_absorbed - W_feed*(h_f(p)-h_fw) - W_steam*(h_ms(p,T_ms)-h_g(p))
+  -- identically W_steam*h_fg at the nominal point, so dp/dt = 0 with no fitted gain.
+T_bed_target = 850 + K_BED_LOAD*(steam-67) + K_COMB*(hr-ha)
+               + K_FUEL*min(0, fuel_avail - fire_for_load) + K_CV*(cv-1)
+               + K_PA*(1 - min(1, PA)) - Q_quench / G_BED_EFF
 ```
 
-| constant | intended provenance |
-|---|---|
-| steam duty at MCR about **51.5 MW** | **DERIVED**: `67 t/h * (3404.22 - 636.30) kJ/kg` = `18.61 kg/s * 2767.92 kJ/kg` = 51.5 MW. Independent of any fitted gain. |
-| coal GCV base 3400 kcal/kg | **ASSUMED** (range 3000-4200, Indian washery-reject + imported blend). Tied to `coal_cv_factor`; matches `notes_gen.py` `base_cv`. Sets coal mass flow magnitude only. |
-| boiler efficiency `eta` = 0.85 | **ASSUMED** (range 0.80-0.87, AFBC on washery-reject). Sets `m_coal` and the energy-balance gain magnitude. |
-| ultimate analysis (C/H/O/S/ash/moisture) | **ASSUMED** (Indian washery-reject blend; each fraction with a range). Stoichiometric air is then **DERIVED**. |
-| pressure integrator gain | **DERIVED** from `V_steam` (drum steam-space volume, from `geometry`) and `(du/dp)_sat` (from `steam_tables`). Replaces the old `PRESS_GAIN = 4.0`. |
-| bed / ms first-order lag tau | see section 6 |
+### 4.1 Coal: ONE ultimate analysis, air_st AND GCV derived from it
 
-`fuel_availability` stays a `min()` cap on firing (family C mechanism);
-`coal_cv_factor` scales GCV (family D); `primary_air` shifts the excess-air /
-bed-temperature relation (family D low-PA).
+CLAUDE.md: *"ASSUMED inputs describing the same object must be mutually
+consistent."* The old plan took `GCV = 3400 kcal/kg` **ASSUMED directly** while a
+separately-assumed analysis gave `air_st ~ 5.46`. Dulong ties them: an analysis
+giving `air_st ~ 5.46` implies `GCV ~ 4000-4100`, **not 3400**. So one analysis
+is fixed and both are derived.
+
+| element (as-fired mass frac) | value | range |
+|---|---|---|
+| C | 0.415 | 0.38 - 0.45 |
+| H | 0.029 | 0.025 - 0.033 |
+| O | 0.075 | 0.060 - 0.090 |
+| N | 0.009 | 0.006 - 0.012 |
+| S | 0.0045 | 0.003 - 0.006 |
+| ash | 0.335 | 0.30 - 0.38 |
+| moisture | 0.1325 | 0.10 - 0.16 |
+
+- **`air_st` = 5.471 kg/kg** -- DERIVED. Independent kmol-balance route
+  (`O2 = C + H/4 + S - O/2`, `/0.20948` mol frac, `x 28.965`) gives 5.467,
+  **0.06 %** difference.
+- **`GCV` = 4040 kcal/kg** (1.691e7 J/kg) -- DERIVED (Dulong). Independent Boie
+  correlation (`35160 C + 116225 H - 11090 O + 6280 N + 10465 S` kJ/kg) gives
+  4116 kcal/kg, **1.9 %** difference.
+- **Consistency self-test** (`_self_test` check 4): heat release per kg
+  stoichiometric air is ~fuel-independent (~3 MJ ~ 725-760 kcal). `GCV/air_st`
+  must land in **700-780 kcal/kg-air**. Ours = **739**. The inconsistent
+  `(3400, 5.46)` pair gives **623** and FAILS the band. Mutation M5 (Dulong
+  coefficient `8080 -> 5080`) drops it to 511 -- caught.
+
+`notes_gen.py base_cv` and `data/kb` coal reports still say 3400 (the feeder
+*calibration basis*). See "Disagreements" in `reports/stage3_submodel2.md`:
+they should move to ~4040 at the next episode regeneration; episodes are NOT
+regenerated in this stage.
+
+### 4.2 Other constants
+
+| constant | value | provenance |
+|---|---|---|
+| steam duty at MCR | **51.5 MW** | **DERIVED**: `18.61 kg/s * (h_ms(66 bar,495 C) - h_fw(66 bar,150 C))` = `18.61 * (3404.2 - 635.7) kJ/kg`. IF97. |
+| `eta_boiler` | 0.85 | **ASSUMED** (0.80 - 0.87). Sets `m_coal` and every energy gain. |
+| `LAMBDA_EXCESS` | 1.25 | **ASSUMED** (1.15 - 1.35). Total excess-air ratio; sets flue-gas mass flow and `PRIMARY_AIR_MIN`. |
+| `PA_AIR_FRACTION` | 0.55 | **ASSUMED** (0.45 - 0.65). Primary/total air split. Sets `K_PA` and `PRIMARY_AIR_MIN`. |
+| `C_PG` | 1150 J/kg/K | **ASSUMED** (1100 - 1250). Flue-gas cp; sets `G_FG`. |
+| `BETA_FURNACE` | 0.45 | **ASSUMED** (0.35 - 0.55). Water-wall heat pickup in the bed zone; sets `G_WW`. |
+| `T_FW_C` | 150 degC | **ASSUMED** (140 - 160). Economiser-outlet feedwater temp; duty magnitude only. |
+| `T_FLUE_REF_C` | 200 degC | **ASSUMED** (150 - 260). APH-heated PA inlet; the `(T_bed - T_ref)` span in `K_PA`. |
+| `M_BED_KG`, `C_BED` | 11000 kg, 1000 J/kg/K | **ASSUMED** (8000-16000, 900-1100). `tau_bed` only. |
+| `M_SH_METAL_KG`, `C_STEEL`, `_CP_STEAM` | 6000 kg, 490, 2900 J/kg/K | **ASSUMED** (3500-10000, 470-510, 2800-3500). `tau_ms` only (~55 s). |
+| `K_MS_BED` | 0.35 | **ASSUMED** (0.28 - 0.40). Superheater outlet sensitivity to bed temp. |
+| `K_MS_FLOW` | 0.45 degC/(t/h) | **ASSUMED** (0.2 - 0.8). ms fall per t/h of extra steam (RCA Case 4 direction). See §9. |
+| `K_BED_LOAD` | 2.75 degC/(t/h) | **ASSUMED** (2.0 - 4.0). Anchored to `configs/base.yaml load_coef_degc_per_tph` (unchanged); fingerprint bed~load slope 3.9 is the upper bound (different boiler -- §9). |
+
+### 4.3 Bed conductance `G_BED_EFF` -- why the flue-gas-only denominator was wrong
+
+The bed-temperature deviation gains divide a heat perturbation by a conductance.
+Using `G_FG` alone (`m_fluegas * cp_g`, ~3.1e4 W/K) made the bed ~2.5x too
+sensitive: a 3.5 t/h leak quenched the *average* bed 45 degC, family E crossed
+the 880 alarm. An AFBC bed is strongly clamped by the boiling evaporator surface
+immersed in it, so a second parallel sink is added:
+
+```
+G_WW  = BETA_FURNACE * Q_fuel_nom / (T_bed_nom - Tsat(p_nom))
+      = 0.45 * 6.06e7 / (850 - 281.6)  =  4.80e4 W/K
+G_BED_EFF = G_FG + G_WW  =  3.09e4 + 4.80e4  =  7.89e4 W/K
+```
+
+`K_COMB = K_FUEL = K_CV = Q_fuel_nom / G_BED_EFF = 768 K` per unit relative
+heat imbalance. `K_PA` keeps the `G_FG` normalisation (implicit via `lambda`)
+because reducing excess air raises the *gas* temperature directly and the
+water walls buffer it less -- `K_PA = PA_AIR_FRACTION * LAMBDA_EXCESS *
+(T_bed - T_ref) = 447 K`.
+
+### 4.4 `e_p` -- PHYSICAL, not fitted to the ar1 timescale (correction 1)
+
+```
+E_P = M_bw*cp_bw*dTsat/dp  +  M_metal*cp_steel*dTsat/dp  +  V_steam*(drho_g/dp)*h_fg
+    =  550  +  90  +  38   =  679 J/Pa
+```
+
+- `M_bw` = 10224 kg (`geometry.boiler_water_inventory_kg(50)`), `cp_bw` = 5316
+  J/kg/K (IF97 `sat_liquid(p_nom).cp`), `dTsat/dp` = 1.01e-5 K/Pa (IF97 central
+  difference).
+- `M_metal` = 18000 kg **ASSUMED** (12000 - 26000): drum shell + evaporator /
+  downcomer / riser steel at saturation temperature.
+- `V_steam` = 4.31 m3 = drum steam half-volume at NWL (`= V_DRUM_50_M3` by
+  centreline symmetry).
+
+**NOT fitted** to `fingerprint.json drum_pressure.ar1.timescale_minutes =
+44.53`. That timescale is inherited input slowness (CLAUDE.md "do not fit plant
+time constants to fingerprint autocorrelation"); fitting it wants
+`e_p ~ 1.3e4 J/Pa`, **19x** the physical value. The derived 679 J/Pa is ~1.2x
+below correction 1's independent physical band (0.8 - 1.2e3 J/Pa) -- recorded
+as a disagreement, inside 2x, no stop rule. Open-loop thermodynamic
+`tau_p ~ E_P / (d(W_steam*h_fg)/dp) ~ 5 min`, consistent with the correction's
+2.7 - 4.1 min; the firing p-trim makes the closed loop faster (~1 min).
+Achieved `drum_pressure` autocorrelation is reported after sub-model 4.
+
+### 4.5 E8 -- `primary_air` valid range
+
+`K_PA * (1 - min(1, PA))` rises monotonically as PA falls; the model has **no
+air-limited turnover**. Below
+`PRIMARY_AIR_MIN = 1 - (LAMBDA_EXCESS - 1)/(PA_AIR_FRACTION*LAMBDA_EXCESS) =
+0.636` the primary + secondary air can no longer meet stoichiometric demand and
+a real bed would go sub-stoichiometric (CO up, bed temp rolls over). **The
+`primary_air` driver is only physical on [0.64, ~1.15].** Family D uses 0.80 and
+0.84, both inside it. Direction check 7 asserts monotonicity and the bound.
+
+### 4.6 E10 -- leak sign and no double-count
+
+- **Direction**: leak -> drum inventory lost + extra cold make-up feed -> drum
+  pressure **falls**; the droplets take latent heat from the flue gas to
+  vaporise -> bed **cools** (RCA Case 11: "bed temperature dropped sharply").
+- The leaking water is **saturated** at drum pressure, so it flashes
+  `flash_x = (h_f(p_drum) - h_f(1 atm)) / h_fg(1 atm) = 0.366` -- **~37 %** --
+  on its own sensible heat; only `(1 - flash_x)` draws furnace latent heat.
+- **Not double-counted**: the bed term is `(1 - x)*h_fg(1 atm)` (~1431 kJ/kg)
+  latent heat from the flue gas -> `T_bed`; the pressure term is
+  `W_feed*(h_f(p) - h_fw)` (~609 kJ/kg) sensible heat the raised make-up feed
+  carries in and the leak carries out -> `dp/dt`. Different enthalpies,
+  different state variables. **Proven by mutations M3 / M4**: killing the bed
+  quench removes the bed drop and leaves the pressure drop (even grows it via
+  ms coupling); killing the feedwater term removes the pressure drop (reverses
+  it to +0.24) and leaves the 36 degC bed drop untouched.
+
+### 4.7 Driver roles (unchanged)
+
+`fuel_availability` is a `min()` **cap** on firing (family C: feeder saturates,
+coal still short); `coal_cv_factor` scales released heat via `K_CV` (family D);
+`primary_air` via `K_PA` (family D low-PA).
 
 ---
 
@@ -473,14 +599,14 @@ increment cross-correlation peaks at lag 0). The long autocorrelation in the
 real record comes from slow **driver** drift (section 7), not slow tag
 relaxation.
 
-| tau | intended provenance |
+| tau | provenance (sub-model 2) |
 |---|---|
-| drum pressure | **FITTED**: `fingerprint.json.tags.drum_pressure.ar1.timescale_minutes = 44.53` |
-| bed temperature | kept fast (minutes). The fingerprint's `bed_temp_avg.ar1.timescale_minutes = 254.9` is inherited from slow load variation, not the bed's own response - CLAUDE.md stage-1 correction. |
-| main steam temperature | kept fast (minutes); `ms.ar1 = 706.7 min` likewise inherited. |
+| drum pressure | **DERIVED** (physical). `tau_p ~ E_P / (dQ/dp)`. `E_P = 679 J/Pa` from water + metal thermal mass * `dTsat/dp` (§4.4). **NOT** fitted to `drum_pressure.ar1.timescale_minutes = 44.53` -- that is inherited input slowness (correction 1); an ar1 fit wants `E_P ~ 1.3e4`, 19x higher. |
+| bed temperature | **DERIVED**: `tau_bed = M_bed*c_bed / G_FG = 356 s` (~6 min). Fast, per the CLAUDE.md stage-1 correction. `bed_temp_avg.ar1 = 254.9 min` is inherited from load variation. |
+| main steam temperature | **DERIVED**: `tau_ms = M_sh_metal*c_steel / (W_steam*cp_steam) = 55 s`. Fast. `ms.ar1 = 706.7 min` likewise inherited. |
 
-Achieved autocorrelation vs the fingerprint targets is reported after
-regeneration (before/after report, verification step 5).
+Achieved autocorrelation vs the fingerprint (esp. `drum_pressure` -> 44.53 min)
+is reported after **sub-model 4**, once the OU drivers supply the slow wander.
 
 ---
 
