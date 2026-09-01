@@ -389,6 +389,49 @@ KAPPA_BW_NOMINAL = KAPPA_FW_US * _NOMINAL_CYCLES            # 816 uS/cm  DERIVED
 C_BW_NOMINAL_PPM = C_FW_PPM * _NOMINAL_CYCLES              # 453.3 ppm  DERIVED
 
 
+# =======================================================================
+#  DRIVER DRIFT + measurement noise  (sub-model 4) -- DERIVATIONS §6, §7
+# =======================================================================
+# The multi-hour wander in the real record is produced by slow DRIVER drift,
+# NOT by slow tag relaxation (CLAUDE.md: "do not fit plant time constants to
+# fingerprint autocorrelation"; the steam->bed increment cross-correlation
+# peaks at lag 0). So `load_demand` gets a TWO-timescale Ornstein-Uhlenbeck
+# perturbation and every tag inherits the wander through the physics:
+#
+#   load = d.load_demand + ou_fast + ou_slow           [t/h]
+#   ou_x(t+dt) = ou_x(t)*exp(-dt/tau_x)
+#                + sigma_x*sqrt(1 - exp(-2 dt/tau_x)) * N(0,1)   (stationary sd sigma_x)
+#
+# The single shared OU is what makes the tags cross-correlated (fingerprint
+# cross_tag_correlation.pearson_level steam<->bed ~ +0.87) -- no per-tag noise
+# injection, so the balances still close.
+TAU_LOAD_FAST_S = 26.62 * 60.0   # FITTED: fingerprint steam_flow.ar1.timescale_minutes
+TAU_LOAD_SLOW_S = 3.0 * 3600.0   # ASSUMED (range 2 - 6 h): the slow component the
+                                 # single-AR1 fit misses (steam_flow autocorr is
+                                 # still 0.50 at 1 h, ~0 at 6 h -- not one AR1).
+SIGMA_LOAD_FAST_TPH = 1.4        # ASSUMED-fitted: split of the total so that
+SIGMA_LOAD_SLOW_TPH = 2.1        # emitted steam_flow sd ~ 2.5 t/h (fingerprint
+                                 # cov 3.98 % of mean -> 2.4 - 2.7 t/h) and the
+                                 # 1 h autocorrelation ~ 0.50 (fingerprint 0.502).
+                                 # sqrt(1.4^2 + 2.1^2) = 2.52 t/h.
+
+# Measurement noise -- white, added to the EMITTED copy only (never fed to a
+# controller). From the fingerprint's white-noise estimate
+# tags.<tag>.measurement_noise.hf_noise_est_2nd_diff (DERIVATIONS §7.2). The old
+# ad-hoc dict (bed 1.2, ms 0.8, ...) was ~20x too large on bed/ms -- the real
+# tags barely move sample-to-sample; their multi-hour wander is signal, now
+# supplied by the OU drivers.
+EMIT_NOISE = {
+    "bed_temp_avg":    0.057,   # FITTED  hf_noise_est_2nd_diff
+    "ms_temperature":  0.026,   # FITTED
+    "steam_flow":      0.109,   # FITTED
+    "drum_pressure":   0.019,   # DERIVED from the FITTED 0.028 by span scaling
+                                #   (transmitter noise prop span; 67 / 99.6)
+    "drum_level":      0.15,    # ASSUMED -- fingerprint has no drum_level column
+    "feed_water_flow": 0.109,   # ASSUMED -- no reference column; mirrors steam_flow
+}
+
+
 @dataclass
 class Drivers:
     """The physical knobs. A fault is a schedule of changes to these.
@@ -453,6 +496,11 @@ class BoilerSim:
         # to kg/s for the mass balance.
         self._integral = 0.0
         self._fire = 1.0          # firing rate, relative to nominal
+        # Two-timescale OU perturbation on load_demand (sub-model 4). Seeded from
+        # the stationary distribution so episodes do not all start at exactly
+        # d.load_demand.
+        self._ou_fast = self.rng.gauss(0.0, SIGMA_LOAD_FAST_TPH)
+        self._ou_slow = self.rng.gauss(0.0, SIGMA_LOAD_SLOW_TPH)
         # Collapsed-liquid water mass in the drum-span region [kg]. At the
         # nominal state this is rho_f(p_nom) * V_DRUM_50_M3 -> indicated 50 %.
         self._m_liq = rho_f_kg_m3(_P_NOM_PA) * V_DRUM_50_M3
@@ -504,15 +552,24 @@ class BoilerSim:
         p_kgfcm2g = st["drum_pressure"]
         p_Pa = kgfcm2g_to_Pa(p_kgfcm2g)
 
-        # ---- steam demand: the turbine pulls, with slow load swings ----
-        # (swing is the placeholder load wander; sub-model 4 replaces it with a
-        # cross-correlated OU process fitted to the fingerprint.)
-        swing = 2.0 * math.sin(t_s / 1800.0)          # +/- 2 TPH over 30 min
+        # ---- steam demand: the turbine pulls, with slow load wander ----
+        # Two-timescale OU on load_demand (sub-model 4). Advancing it here means
+        # every tag inherits the wander through the physics, and a single shared
+        # process is what makes the tags cross-correlated.
+        af = math.exp(-DT_S / TAU_LOAD_FAST_S)
+        as_ = math.exp(-DT_S / TAU_LOAD_SLOW_S)
+        self._ou_fast = (af * self._ou_fast
+                         + SIGMA_LOAD_FAST_TPH * math.sqrt(1.0 - af * af)
+                         * self.rng.gauss(0.0, 1.0))
+        self._ou_slow = (as_ * self._ou_slow
+                         + SIGMA_LOAD_SLOW_TPH * math.sqrt(1.0 - as_ * as_)
+                         * self.rng.gauss(0.0, 1.0))
+        load_wander = self._ou_fast + self._ou_slow    # t/h
         # The turbine cannot pass rated flow on sagging pressure. Without this
         # coupling a fuel-side fault drives pressure to zero unchecked, which
         # no real plant does.
         throttle = max(0.3, min(1.0, p_kgfcm2g / 60.0))
-        steam = (d.load_demand + swing) * throttle     # t/h
+        steam = (d.load_demand + load_wander) * throttle     # t/h
 
         # ================= WATER SIDE  (SI internally) ===================
         # Single-element PI on INDICATED drum level (the transmitter sees the
@@ -669,12 +726,12 @@ class BoilerSim:
              "heat_absorbed": heat_absorbed})
         self.diag.append(self._diag_pending)
 
-        # ---- measurement noise, per-tag (PRE-REWRITE -- sub-model 4) ----
+        # ---- measurement noise: white, EMIT ONLY (sub-model 4) ----
+        # From the fingerprint white-noise estimates (DERIVATIONS §7.2). Added to
+        # the emitted copy only -- the controllers ran on the clean state above.
         out = {"t": t_s}
-        noise = {"drum_level": 0.15, "feed_water_flow": 0.35, "steam_flow": 0.35,
-                 "drum_pressure": 0.05, "bed_temp_avg": 1.2, "ms_temperature": 0.8}
         for tag, v in st.items():
-            out[tag] = round(v + self.rng.gauss(0, noise[tag]), 3)
+            out[tag] = round(v + self.rng.gauss(0, EMIT_NOISE[tag]), 3)
         return out
 
     # -------------------------------------------------------------------
@@ -805,16 +862,21 @@ def _self_test() -> None:
     if _KCAL_PER_KG_AIR_BAND[0] <= 3400.0 / 5.46 <= _KCAL_PER_KG_AIR_BAND[1]:
         errs.append("band too wide: the inconsistent (3400, 5.46) pair should fail it")
 
-    # 5. Nominal energy balance closes with no fitted constant: a 90-min
-    #    no-fault run holds pressure and bed within their normal bands.
-    sim = BoilerSim(_spec("selftest_energy_normal", 90.0))
-    rows = sim.run()
-    p = _series(rows, "drum_pressure")
-    bed = _series(rows, "bed_temp_avg")
-    if max(abs(x - NOMINAL["drum_pressure"]) for x in p) > 1.0:
-        errs.append(f"no-fault pressure left +/-1 kg/cm2: {min(p):.2f}..{max(p):.2f}")
-    if max(abs(x - NOMINAL["bed_temp_avg"]) for x in bed) > 20.0:
-        errs.append(f"no-fault bed left +/-20 degC: {min(bed):.1f}..{max(bed):.1f}")
+    # 5. Nominal energy balance closes with no fitted constant. Bands are wide
+    #    enough for the sub-model-4 OU load wander (no-fault bed can swing ~20
+    #    degC, within the fingerprint's 24-38 degC within-1h envelope; pressure
+    #    ~1.3 kg/cm2). Checked over several seeds so one lucky trajectory cannot
+    #    hide a gross error.
+    for seed in range(4):
+        rows = BoilerSim(_spec("selftest_energy_normal", 90.0, seed=seed)).run()
+        p = _series(rows, "drum_pressure")
+        bed = _series(rows, "bed_temp_avg")
+        if max(abs(x - NOMINAL["drum_pressure"]) for x in p) > 3.0:
+            errs.append(f"seed {seed}: no-fault pressure left +/-3 kg/cm2: "
+                        f"{min(p):.2f}..{max(p):.2f}")
+        if max(abs(x - NOMINAL["bed_temp_avg"]) for x in bed) > 30.0:
+            errs.append(f"seed {seed}: no-fault bed left +/-30 degC: "
+                        f"{min(bed):.1f}..{max(bed):.1f}")
 
     # 6. e_p is the PHYSICAL capacitance, NOT a fit to the 44.53-min ar1
     #    timescale. Must sit within 2x of the correction's physical band and
@@ -1221,6 +1283,97 @@ def _ds_recheck() -> None:
             f"conductivity trajectory re-derivation off by {worst * 100:.1f}% (>10%)")
 
 
+def _acf(x, lag):
+    n = len(x)
+    m = sum(x) / n
+    d = [v - m for v in x]
+    num = sum(d[i] * d[i + lag] for i in range(n - lag))
+    den = sum(v * v for v in d)
+    return num / den if den else 0.0
+
+
+def _pearson(x, y):
+    n = len(x)
+    mx, my = sum(x) / n, sum(y) / n
+    sx = sum((a - mx) ** 2 for a in x) ** 0.5
+    sy = sum((b - my) ** 2 for b in y) ** 0.5
+    return sum((a - mx) * (b - my) for a, b in zip(x, y)) / (sx * sy) if sx and sy else 0.0
+
+
+def _ou_recheck() -> None:
+    """Sub-model 4: measure the ACHIEVED noise / drift / cross-correlation of
+    LONG no-fault runs and compare to the fingerprint. The fingerprint numbers
+    were measured from a 120 h record; a 45-240 min episode is far too short to
+    estimate a 3 h-tau process, so this uses 3 x 30 h runs.
+
+    Per CLAUDE.md the long single-tag autocorrelations (bed 255 min, ms 707 min)
+    are INHERITED input slowness -- reported, NOT forced. HARD asserts only on:
+    emitted `steam_flow` sd and 1 h autocorrelation (what the OU is fitted to),
+    the bed 30-min autocorrelation (the inherited drift must actually appear),
+    and steam<->bed cross-correlation (single shared driver).
+    """
+    import statistics as _st
+    S = {"steam_flow": [], "drum_pressure": [], "bed_temp_avg": [], "ms_temperature": []}
+    inc = {k: [] for k in S}
+    xcorr = {"steam_bed": [], "steam_p": [], "bed_p": []}
+    dt_min = DT_S / 60.0
+    for seed in range(3):
+        rows = BoilerSim(_spec(f"ou_{seed}", 30.0 * 60.0, seed=seed)).run()
+        ser = {k: [r[k] for r in rows] for k in S}
+        for k in S:
+            S[k].append(ser[k])
+            inc[k] += [b - a for a, b in zip(ser[k], ser[k][1:])]
+        xcorr["steam_bed"].append(_pearson(ser["steam_flow"], ser["bed_temp_avg"]))
+        xcorr["steam_p"].append(_pearson(ser["steam_flow"], ser["drum_pressure"]))
+        xcorr["bed_p"].append(_pearson(ser["bed_temp_avg"], ser["drum_pressure"]))
+
+    print("\nsub-model-4: achieved noise / drift / cross-correlation vs fingerprint "
+          "(3 x 30-h no-fault runs):")
+    lags = {"5min": int(5 / dt_min), "30min": int(30 / dt_min), "1h": int(60 / dt_min)}
+    fp_acf = {"steam_flow": (0.875, 0.647, 0.502),
+              "drum_pressure": (0.435, 0.148, 0.053),
+              "bed_temp_avg": (0.846, 0.571, 0.416),
+              "ms_temperature": (0.773, 0.406, 0.264)}
+    fp_sd = {"steam_flow": 2.379, "drum_pressure": 0.765,
+             "bed_temp_avg": 10.68, "ms_temperature": 4.33}
+    stat = {}
+    for k in S:
+        sd = _st.mean(_st.pstdev(s) for s in S[k])
+        a = tuple(_st.mean(_acf(s, L) for s in S[k]) for L in lags.values())
+        incsd = _st.pstdev(inc[k])
+        stat[k] = (sd, a, incsd)
+        print(f"  {k:15s} sd {sd:6.2f} (fp {fp_sd[k]:5.2f})  "
+              f"acf 5m/30m/1h {a[0]:.2f}/{a[1]:.2f}/{a[2]:.2f} "
+              f"(fp {fp_acf[k][0]:.2f}/{fp_acf[k][1]:.2f}/{fp_acf[k][2]:.2f})  "
+              f"incr-sd {incsd:.3f}")
+    print("  white noise added at emit (fingerprint §7.2): "
+          + " ".join(f"{k.split('_')[0]}={v}" for k, v in EMIT_NOISE.items()))
+    xb = _st.mean(xcorr["steam_bed"]); xp = _st.mean(xcorr["steam_p"])
+    bp = _st.mean(xcorr["bed_p"])
+    print(f"  cross-corr (pearson_level): steam<->bed {xb:+.2f} (fp +0.87)  "
+          f"steam<->p {xp:+.2f} (fp +0.35, incr_1min -0.09)  bed<->p {bp:+.2f} (fp +0.39)")
+    print("  drum_pressure (correction 1): e_p PHYSICAL (679 J/Pa); achieved "
+          f"pressure sd {stat['drum_pressure'][0]:.2f} / acf-1h "
+          f"{stat['drum_pressure'][1][2]:.2f} vs fp 0.77 / 0.05 (44.5-min ar1) "
+          "-- see report disagreement.")
+
+    errs = []
+    ssd, sa, _ = stat["steam_flow"]
+    if not (1.8 <= ssd <= 3.2):
+        errs.append(f"steam_flow sd {ssd:.2f} outside 1.8-3.2 t/h (fp 2.38)")
+    if not (0.25 <= sa[2] <= 0.65):
+        errs.append(f"steam_flow 1 h autocorrelation {sa[2]:.2f} outside 0.25-0.65 (fp 0.50)")
+    if not (0.40 <= stat["bed_temp_avg"][1][1] <= 0.85):
+        errs.append(f"bed 30-min autocorrelation {stat['bed_temp_avg'][1][1]:.2f} "
+                    f"outside 0.40-0.85 -- the inherited driver drift is not showing")
+    if xb < 0.6:
+        errs.append(f"steam<->bed cross-correlation {xb:.2f} < 0.6 (fp 0.87)")
+    if errs:
+        raise AssertionError("sub-model-4 stats FAILED:\n  " + "\n  ".join(errs))
+    print("  sub-model-4 stats OK (steam sd + 1 h acf, bed 30-min acf, "
+          "steam<->bed cross-corr all in band)")
+
+
 def _mutation_check() -> None:
     """Break what the swell tests test; confirm a test actually fails.
 
@@ -1333,6 +1486,10 @@ def _mutation_check() -> None:
          "C_BW_NOMINAL_PPM = C_FW_PPM * _NOMINAL_CYCLES",
          "C_BW_NOMINAL_PPM = C_FW_PPM * _NOMINAL_CYCLES * 0.7",
          "ds_drift"),
+        ("M9 kill the slow OU component (load wander only fast)",
+         "load_wander = self._ou_fast + self._ou_slow    # t/h",
+         "load_wander = self._ou_fast + 0.0 * self._ou_slow    # t/h",
+         "ou_slow"),
     ]
     for label, old, new, kind in e_muts:
         if old not in src:
@@ -1383,6 +1540,19 @@ def _mutation_check() -> None:
             k0, ke = sim.diag[0]["kappa_bw_uS"], sim.diag[-1]["kappa_bw_uS"]
             if abs(ke / k0 - 1.0) > 0.03:
                 caught = f"no-fault kappa_bw drifted {(ke / k0 - 1) * 100:+.1f} % (init off equilibrium)"
+        elif kind == "ou_slow":             # steam 1 h autocorrelation collapses
+            ns: dict = {}
+            exec(compile(mutated, "<mut>", "exec"), ns)
+            a1h = []
+            for seed in range(2):
+                rows = ns["BoilerSim"](ns["EpisodeSpec"](
+                    episode_id="mut_ou", family="N", tier="A", duration_min=24 * 60.0,
+                    seed=seed)).run()
+                s = [r["steam_flow"] for r in rows]
+                a1h.append(_acf(s, int(60 / (DT_S / 60.0))))
+            m = sum(a1h) / len(a1h)
+            if m < 0.22:                     # fast-only OU (tau 27 min): exp(-60/27) = 0.11
+                caught = f"steam_flow 1 h autocorrelation -> {m:.2f} (was ~0.4; slow OU gone)"
         if not caught:
             raise AssertionError(f"{label}: NOTHING caught it -- an energy check is inert")
         print(f"  {label}: caught -- {caught}")
@@ -1393,4 +1563,5 @@ if __name__ == "__main__":
     _direction_checks()
     _headline_recheck()
     _ds_recheck()
+    _ou_recheck()
     _mutation_check()

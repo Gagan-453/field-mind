@@ -677,19 +677,40 @@ mass; the L1 water-balance residual absorbs the difference and must be tuned
 with that in mind. A steaming-rate void term is a candidate for a later stage;
 not added now because its coefficient would itself be unfittable ASSUMED.
 
-### 7.1 Driver drift - cross-correlated Ornstein-Uhlenbeck
+### 7.1 Driver drift - two-timescale Ornstein-Uhlenbeck on `load_demand`  (sub-model 4, built 2026-09-01)
 
-The multi-hour wander is produced by OU processes on the drivers, not by tag
-relaxation:
+The multi-hour wander is produced by an OU perturbation on `load_demand`, not by
+tag relaxation. A SINGLE shared process is what makes the tags
+cross-correlated - no per-tag noise injection, so the balances still close.
 
-| driver | tau | provenance |
+```
+load = d.load_demand + ou_fast + ou_slow            [t/h]
+ou_x(t+dt) = ou_x(t)*exp(-dt/tau_x) + sigma_x*sqrt(1 - exp(-2 dt/tau_x))*N(0,1)
+```
+
+| component | tau | sigma | provenance |
+|---|---|---|---|
+| `ou_fast` | 26.62 min | 1.4 t/h | **FITTED**: `steam_flow.ar1.timescale_minutes`. The single-AR1 fit; a real record needs a slower part too (steam_flow autocorr is still 0.50 at 1 h). |
+| `ou_slow` | 3.0 h | 2.1 t/h | **ASSUMED** (tau 2-6 h) + **FITTED** split: `sqrt(1.4^2 + 2.1^2) = 2.52 t/h` targets emitted `steam_flow` sd ~ 2.5 (fingerprint cov 3.98 % of 67 = 2.67) and 1 h autocorrelation ~ 0.50 (fingerprint 0.502). |
+
+**Achieved** (3 x 30-h no-fault runs, `sim.py _ou_recheck`):
+
+| tag | sd (fp) | acf 5m/30m/1h (fp) |
 |---|---|---|
-| `load_demand` | 26.6 min | **FITTED**: `fingerprint.json.tags.steam_flow.ar1.timescale_minutes` |
-| `heat_absorption` / `coal_cv_factor` slow terms | hours | **FITTED** to the 1 h drift horizons (`drift_by_horizon`: bed 11.5 degC, ms 5.2 degC) |
+| `steam_flow` | 2.34 (2.38) | 0.91/0.59/0.35  (0.88/0.65/0.50) |
+| `bed_temp_avg` | 6.07 (10.68) | 0.97/0.66/0.39  (0.85/0.57/0.42) |
+| `ms_temperature` | 1.16 (4.33) | 0.93/0.62/0.37  (0.77/0.41/0.26) |
+| `drum_pressure` | 0.22 (0.77) | 0.23/0.00/0.00  (0.44/0.15/0.05) |
 
-OU innovations are **cross-correlated** (shared load factor) so
-`fingerprint.json.cross_tag_correlation.pearson_level` steam<->bed about **+0.87**
-is reproduced. Achieved value reported after regeneration.
+Cross-correlation `pearson_level` steam<->bed **+0.95** (fingerprint +0.87). See
+`reports/stage3_submodel4.md` for the bed/ms/pressure sd gaps and the
+steam<->pressure sign gap (recorded, not forced - CLAUDE.md).
+
+### 7.2 Measurement noise - white, added at emit only  (sub-model 4, built 2026-09-01)
+
+`EMIT_NOISE` in `sim.py`. Dropped from the old ad-hoc dict (bed 1.2, ms 0.8 -
+~20x too large) to the fingerprint white-noise estimates
+(`tags.<tag>.measurement_noise.hf_noise_est_2nd_diff`):
 
 ### 7.2 Measurement noise - white, added at emit only
 
@@ -706,6 +727,11 @@ Dropped from the old ad-hoc dict to the fingerprint's white-noise estimates
 | `feed_water_flow` | 0.109 t/h | **ASSUMED** - no reference column; mirrors `steam_flow` |
 
 Noise is added to the emitted copy only; it does not feed the controllers.
+Achieved emitted per-sample increment sd (3 x 30-h runs): bed 0.085, ms 0.039,
+steam 0.200, pressure 0.031 - these are white noise + OU drift; the real
+per-sample increments (calibration-gap table, CLAUDE.md) are bed 0.273 /
+ms 0.067 / steam 0.188, so bed and ms still move a little less sample-to-sample
+than the real trace. Recorded (report), not forced.
 
 ---
 
