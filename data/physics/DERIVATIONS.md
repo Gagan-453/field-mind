@@ -820,21 +820,31 @@ section 5.3; a no-fault episode stays flat at about 816.)
 
 ## 9. Load coefficient re-fit  *(done - stage 4, 2026-09-01)*
 
-`configs/base.yaml checks.load_coef_degc_per_tph` = **2.75, unchanged**.
+`configs/base.yaml checks.load_coef_degc_per_tph`: **2.75 -> 2.43**, and the
+episodes were regenerated (`state_timeline_load_coef` = 2.43).
 
-- Re-fit over the regenerated N01-N06: least-squares `slope(bed) vs
-  slope(steam_flow)` over 10-min windows gives **2.21 degC/(t/h), R^2 0.61**.
-- **Not adopted.** OLS slope with estimation noise on the regressor (emit noise
-  on `steam_flow`) is attenuated toward 0. The value that MINIMISES the no-fault
-  load-normalised bed-slope residual (swept over 2.0 - 3.2) is **2.75 - 2.85**,
-  which equals the simulator generator gain `K_BED_LOAD = 2.75`. The
-  normalisation `_load_normalised_bed_slope` must cancel exactly what the
-  generator adds; 2.21 leaves a `0.54 * slope(steam)` residual that lifts the
-  family-E detector floor above the family-E signal (see
-  `reports/stage4_regeneration.md` disagreement 1).
+- **Level regression** `bed ~ 850 + coef*(steam - 67)` over the regenerated
+  N01-N06: **2.43 degC/(t/h), R^2 0.82** - the form the DEVIATION band uses.
+  This is the config value.
+- The **slope regression** `slope(bed) ~ slope(steam)` is *window-length
+  dependent*: 1.43 (5 min) / 1.97 (10 min) / 2.41 (20 min) / 2.88 (40 min) /
+  3.16 (55 min). This is the `tau_bed = 139 s` lag - over a short window the
+  contemporaneous steam slope is a poor proxy for the lagged load the bed
+  responds to. It is **not** measurement-noise attenuation: the errors-in-
+  variables factor from the emit noise on `steam_flow`
+  (`SE(slope) = 4.3e-4 t/h/min` at 40 min) is **0.99995**.
+- No single coefficient is correct for the 5-min (`balance`, `_patterns`) and
+  55-min (`rates_long`) slope checks. Their thresholds are set from the
+  **measured** no-fault distribution *at* coef 2.43, so the FP rate is
+  calibrated regardless of the residual normalisation error.
+- **2.75 (the earlier value) is withdrawn** - it had been chosen because it
+  matched `K_BED_LOAD`, which is circular (the same defect as `sim.py` and
+  `l1_checks` once sharing K = 0.22). `K_BED_LOAD` is now decoupled.
 - Still **NOT** the fingerprint's 3.90 (different boiler / operating point).
-- This is the `LOAD_COEF` stamped into every `ground_truth.json`
-  (`state_timeline_load_coef`), so the DEVIATION band and this value move
-  together and a future re-fit is a visible change.
+- Consequence for family E: the no-fault load-normalised bed slope over 55 min
+  has p99.7 ~ 0.285, ~1700x the pure emit-noise slope SE - i.e. the spread is
+  real low-frequency bed wander, and family E (55-min slope 0.19-0.24) is below
+  it. Family E is masked by the drivers' own wander, not by the normalisation
+  choice. See `reports/stage4_regeneration.md` disagreement 1.
 
 The new value and R2 go in the before/after report and here on completion.

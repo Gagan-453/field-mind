@@ -281,12 +281,15 @@ K_PA = PA_AIR_FRACTION * LAMBDA_EXCESS * _T_BED_SPAN        # ~447 K     DERIVED
 #   (K_PA structure: f_PA * lambda gives the fraction of stoichiometric-air
 #    dilution removed as PA falls; * (T_bed - T_ref) converts it to a bed-temp
 #    rise. It already carries the G_FG normalisation implicitly via lambda.)
-K_BED_LOAD = 2.75      # ASSUMED (range 2.0 - 4.0 degC per t/h): steady load-
-                       # following bed-temperature rise. Anchored to
-                       # configs/base.yaml checks.load_coef_degc_per_tph = 2.75
-                       # (unchanged here) and bounded above by the fingerprint's
-                       # bed~load slope 3.9 degC/(t/h) (different boiler, 774 degC
-                       # bed -- CLAUDE.md §9 says do not simply copy it).
+K_BED_LOAD = 2.75      # ASSUMED (range 2.0 - 4.0 degC per t/h): the instantaneous
+                       # load-following bed-target gain. NO LONGER tied to
+                       # configs/base.yaml load_coef_degc_per_tph: stage-4 showed
+                       # the coefficient L1 measures downstream is window- and
+                       # lag-dependent (level regr. 2.43; slope regr. 1.4 at
+                       # 5 min rising to 3.2 at 55 min, from the tau 139 s bed
+                       # lag) and is a different quantity from this target gain.
+                       # Bounded above by the fingerprint bed~load slope 3.9
+                       # degC/(t/h) (different boiler -- CLAUDE.md §9).
 
 # h_f and h_fg at 1 atm -- the state the leaking saturated water flashes toward.
 # DERIVED from IF97 (not literals): saturation properties at standard atmosphere.

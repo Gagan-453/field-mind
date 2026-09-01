@@ -68,12 +68,27 @@ Episode durations were extended where the RCA trajectory did not fit
 (A01 55→70, A03 50→60, B/C several, D01 70→160, D02 60→130, D03 50→80, D04 65→85,
 E01 240→200, E02 200→180, E03 180→160). All 30 tier labels unchanged.
 
-**Family A is a knife-edge.** Near `eff·81.6 ≈ steam demand` a 0.02 change in
-effectiveness moves time-to-trip from ~15 min to "never", and the sub-model-4
-slow load OU (σ 2.1 t/h) sets a different baseline load per seed. Effectiveness
-was therefore solved **per scenario seed**, not from one global number. The
-load sensitivity is physical (a marginal feed restriction is more or less
-survivable with the load at the time) and is kept.
+**Family A is a knife-edge, and per-seed severity is a deliberate benchmark
+design choice — not a fitted quantity.** Near `eff·81.6 ≈ steam demand` the
+fault is a marginal deficit, and the sub-model-4 slow load OU (σ 2.1 t/h) sets a
+different baseline load per seed, so the same effectiveness gives a different
+outcome per episode. Measured `d(time-to-trip)/d(effectiveness)` at the chosen
+operating points:
+
+| episode (seed) | eff | trip @ eff−0.01 / eff / eff+0.01 (min) | sensitivity |
+|---|---|---|---|
+| A02 fast (201) | 0.75 | 11.7 / 13.1 / 15.0 | ≈ **1.7 min per +1 pp** |
+| A06 (205) | 0.82 | 24.6 / 30.2 / 40.4 | ≈ **8 min per +1 pp** |
+| A01 (200) | 0.81 | 21.2 / 29.2 / *never* | steepens to ∞ at the upper edge |
+
+So each variant's `feed_valve_effectiveness` was **chosen per scenario** to land
+its time-to-trip in the RCA band (20 % @ ~25 min, trip @ ~30–40 min for the
+canonical cases; faster for the "fast" variant; alarm-only for "caught"), the
+same way the `duration_min`, `tier` and modality set are chosen per scenario.
+It is not a regression fit and carries no R²; the number in `episode_build.py`
+is a design parameter of that episode. The underlying load sensitivity is
+physical — a marginal feed restriction is more or less survivable with the load
+at the time — and is kept rather than suppressed.
 
 **Family D is carried by a long ramp.** The corrected bed lag (τ 139 s) reaches
 its target in minutes, so RCA Case 7's 90-min / 125-min approach is produced by
@@ -143,15 +158,46 @@ DERIVATIONS §4.1). `records.json coal_lab_report.gcv_kcal_kg` now `int(4040·cv
 ALARM/TRIP thresholds (bed 880/940, level 20/10, pressure 55) are **unchanged**
 — real RCA setpoints.
 
-### load coefficient re-fit (DERIVATIONS §9)
-Slope-regression `slope(bed) ~ slope(steam)` over the regenerated N01–N06:
-**2.21 °C/tph, R² 0.61**. But OLS slope with estimation noise on the regressor
-is attenuated toward 0; the value that **minimises the no-fault load-normalised
-bed-slope residual** is **2.75–2.85** (swept), which equals the simulator's
-generator gain `K_BED_LOAD = 2.75`. Kept at **2.75** — the normalisation must
-cancel exactly what the generator adds, and 2.21 leaves a `0.54·slope(steam)`
-residual that raises the family-E detector's floor. `config` value therefore
-**did not move**; no second regeneration needed for it.
+### load coefficient re-fit (DERIVATIONS §9) — **2.75 → 2.43**
+
+`configs/base.yaml checks.load_coef_degc_per_tph` was **2.75**; it is now
+**2.43** — the **level regression** `bed ~ 850 + coef·(steam − 67)` over the
+regenerated N01–N06 (**R² 0.82**), the form the DEVIATION band structurally
+uses. `state_timeline_load_coef` in every `ground_truth.json` is 2.43 and the
+episodes were regenerated.
+
+**Why not the slope regression, why not 2.75:**
+
+| quantity | value |
+|---|---|
+| OLS `slope(bed) ~ slope(steam)`, 5-min windows | 1.43 (R² 0.34) |
+| … 10-min | 1.97 (R² 0.50) |
+| … 20-min | 2.41 (R² 0.57) |
+| … 40-min | 2.88 (R² 0.66) |
+| … 55-min | 3.16 (R² 0.72) |
+| **level regression `bed ~ steam`** | **2.43 (R² 0.82)** |
+| simulator generator gain `K_BED_LOAD` | 2.75 |
+
+The slope regression is **window-length dependent**, not
+errors-in-variables-attenuated by measurement noise. Pure emit-noise OLS-slope
+SE over a 40-min window is **2.3 × 10⁻⁴ °C/min** and the implied attenuation
+factor `λ = var(true) / (var(true) + var(err))` is **0.99995** (0.998 even at
+5 min) — measurement noise changes the fitted slope by ~0.01 %, not the 20 %
+that a 2.21→2.75 correction would need. The window dependence is the **τ 139 s
+bed lag**: over a short window the contemporaneous `slope(steam)` is a poor
+proxy for the slightly-lagged load the bed actually tracks, diluting the
+regression; over a long window the lag is a small fraction and the slope rises
+past the generator gain.
+
+There is therefore **no single correct coefficient** for the slope-based checks
+(they use 5-min and 55-min windows). The **level** relationship the DEVIATION
+band needs is well defined (2.43, R² 0.82), so that is the config value; the
+slope-check thresholds below are set from the **measured** no-fault distribution
+*at* coef 2.43, so their FP rate is calibrated whatever the residual
+normalisation error. `K_BED_LOAD = 2.75` (the sim's instantaneous target gain)
+is **decoupled** — it is a different quantity and its comment no longer claims a
+config anchor. **Picking 2.75 because it matched the generator was circular and
+is withdrawn.**
 
 ### L1 thresholds re-tuned against the new noise
 Measured over **12 fresh-seeded no-fault runs (seeds 900–911, disjoint from
@@ -160,61 +206,96 @@ statistic; the aggregate rate was **measured**, not assumed independent.
 
 | key | old | new | no-fault p99.7 of the statistic |
 |---|---|---|---|
+| `checks.load_coef_degc_per_tph` | 2.75 | **2.43** | level regression `bed ~ steam`, R² 0.82 (see above) |
 | `checks.balance.level_gain_pct_per_min_per_tph` | 0.22 | **0.586** | — (matches `geometry.K_level(66)`; was an invented literal) |
 | `checks.rates.bed_temp_avg.threshold` | 0.4 | **1.6** | 1.28 °C/min (10-min slope, **not** load-normalised → OU load swings it) |
 | `checks.rates.drum_pressure.threshold` | −0.05 | **−0.15** | 0.12 kg/cm²/min |
-| `checks.rates_long.bed_temp_avg` | 0.08 / 40 min | **0.22 / 55 min** | 0.24 (55-min load-normalised) — see finding below |
+| `checks.rates_long.bed_temp_avg` | 0.08 / 40 min | **0.28 / 55 min** | 0.285 (55-min load-normalised, at coef 2.43) — see finding below |
 | `checks.rates_long.ms_temperature.threshold` | 0.05 | **0.20** | 0.20 |
 | `checks.balance.residual_tph` | 2.0 | **1.5** | 0.13 t/h |
 | `checks.balance.p_falling` | 0.05 | **0.15** | 0.12 |
-| `checks.balance.bed_rising` | 0.3 | **1.3** | 1.19 (5-min load-normalised) |
+| `checks.balance.bed_rising` | 0.3 | **1.3** | 1.21 (5-min load-normalised, at coef 2.43) |
 | `l1_checks._patterns` bed-slope literals (code, not config) | 0.4 / 0.2 / 0.1 | **`bed_rising` / 0.5 / 0.3** | the 0.4 literal fired the "energy accumulating" pattern ~15×/h on a healthy plant |
 
-**Achieved false-positive rate — analytic, from the fresh no-fault set:**
+**Achieved false-positive rate — analytic, from the 12 fresh no-fault runs:**
 
 | check | FP ticks/hour |
 |---|---|
-| RATE:bed_temp_avg (dominated by `rates_long`, threshold 0.22) | 1.10 |
+| RATE:bed_temp_avg (`rates` 1.6 + `rates_long` 0.28) | 0.43 |
 | RATE:drum_pressure | 0.24 |
 | BALANCE:drum_pressure | 0.24 |
 | BALANCE:bed_temp_avg | 0.14 |
-| **aggregate** | **1.48 / hour** (target ≤ 2) |
+| **aggregate** | **0.81 / hour** (target ≤ 2) |
 
-Per-family L1 detection is intact — first WATCH+ fact after onset: A 2.5–18 min,
-B 2–27 min (BALANCE water-residual), C 1.5–20 min, D 5.5–9.5 min. **This is NOT
-a harness Q5 result** — it is the analytic trigger rate of L1 over no-fault
-windows. A closed-loop Q5 on held-out episodes is a scoped follow-up
-(deliberately not iterated against these same episodes).
+Per-family L1 first-flag after onset: **A 2.5–18 min, B 3.5–27.5 min** (BALANCE
+water-residual), **C 0.5–20.5 min, D 5.5–11 min**; **E01/E02/E03 never**
+(finding 1). **This is NOT a harness Q5 result** — it is the analytic trigger
+rate of L1 over no-fault windows. A closed-loop Q5 on held-out episodes is a
+scoped follow-up (deliberately not iterated against these same episodes).
 
 ## Disagreements recorded, not resolved
 
-1. **Family E is now at the edge of detectability. (stop-rule-2 hit — recorded,
-   not resolved by tuning.)** With the OU load driver + the per-subsystem process
-   noise, the no-fault load-normalised bed slope over 55 min has p99.7 ≈ 0.24
-   °C/min. Family E's own signal is ~0.15–0.24 °C/min (over its full duration).
-   The two distributions **overlap** — no threshold catches family E without
-   ~1 FP/hour on that one check. Confirmed against the generated episodes:
-   `rates_long.bed` fires on **E01 at +95 min and E02 at +97 min** (still lead
-   time in a 200 / 180 min episode); **E03 is never flagged by L1**. The 40 °C /
-   15 σ margin CLAUDE.md described is gone; CLAUDE.md itself predicted "about
-   4 σ against real variability" and it is now < 2 σ, partly because family E
-   was also softened (0.985 → 0.984–0.986) to keep bed_max clear of the 880
-   alarm under the process noise (E03 bed_max 874). **Options for the advisor:**
-   (a) strengthen family E — conflicts with its "crosses nothing" definition,
-   and every stronger seed/severity tested pushed bed_max ≥ 878; (b) give L1 a
-   **cumulative-offset** drift detector (family E's *offset* from the
-   load-normalised baseline reaches +12–20 °C, well outside no-fault ±5 °C — a
-   slope detector is the wrong instrument for a ramp), an L1 redesign out of
-   scope for a data stage; (c) accept low family-E detectability and report it.
-   Chosen: (c) for now, `rates_long.bed` threshold 0.22 so E01/E02 clear it,
-   aggregate FP still < 2/h.
+1. **Family E's fouling drift is masked by the plant's own low-frequency
+   wander.** (stop-rule-2 hit — recorded, not resolved by tuning.) The no-fault
+   load-normalised bed slope over 55 min has p99.7 ≈ **0.285 °C/min**, against a
+   pure emit-noise OLS-slope SE of **1.4 × 10⁻⁴ °C/min** — a factor of **~1,700**.
+   The no-fault spread is therefore ~entirely **real bed movement** from the OU
+   load + per-subsystem process disturbances (correlated, low-frequency), not
+   measurement noise. Family E's own 55-min slope is **0.19–0.24 °C/min**,
+   *below* the no-fault p99.7; `rates_long.bed` (threshold 0.28, set at that
+   p99.7) fires on **none of E01/E02/E03**.
+   - **This is not a "wrong instrument" problem.** For a linear ramp in noise the
+     OLS slope *is* the matched filter (minimum-variance unbiased); a longer
+     window shrinks the *measurement* SE (∝ N^−1.5) but not the correlated-drift
+     term, which already dominates by 1,700× — confirmed empirically (40 → 55 min
+     moved the no-fault p99.7 only 0.35 → 0.285).
+   - **A cumulative-offset detector would help, for the right reason:** its
+     sensitivity to a small persistent bias grows with elapsed time (it
+     integrates the offset), where a fixed-window slope's SNR against correlated
+     drift does not improve once the window exceeds the drift correlation time.
+     Family E's *offset* from the load-normalised baseline reaches +12–20 °C over
+     its full duration, well outside the no-fault envelope. Building it is an
+     L1-stage change, out of scope here.
+   - **Options for the advisor:** (a) accept that family E is not slope-detectable
+     and add the cumulative-offset detector in the agent stage; (b) strengthen
+     family E — but see finding 2, every stronger seed/severity pushed bed_max
+     toward the 880 alarm. Chosen: (a). `rates_long.bed` threshold left at the
+     honest no-fault p99.7 (0.28), not pushed into the distribution to claim a
+     marginal detection. Aggregate FP 0.81/h.
 
-2. **`load_coef` empirical fit (2.21) ≠ the value used (2.75).** §9 asks for the
-   fit to the normals; the fit is errors-in-variables-attenuated and using it
-   degrades the family-E normalisation. 2.75 (generator gain, residual-minimising)
-   is used. Both figures and the reason are in the config comment.
+2. **The family-E severity squeeze is *not* a two-plant variability artifact —
+   checked.** Family E was softened (0.985 → 0.984–0.986) to keep bed_max under
+   the 880 alarm. The 880 alarm / 850 nominal (30 °C headroom) is from the plan
+   PDF (our 67 t/h boiler); the OU variability was fitted to the xinan boiler at
+   a 774 °C bed. Measured on the 12 fresh no-fault runs:
 
-3. **Family C bed cooling is now small (~8–12 °C vs the old 35 °C).** The
+   | | ours (synthetic) | xinan fingerprint |
+   |---|---|---|
+   | bed sd | 7.10 °C | 10.68 °C (**0.66×**) |
+   | bed 1 h-block ptp, mean / p95 / max | 12.6 / 28.2 / 31.4 °C | 24.6 / 38.3 / 45.1 °C |
+   | no-fault bed max | 865.5 °C (14.5 °C below the alarm) | — |
+   | no-fault ticks within 5 °C of the 880 alarm | **0 / 15 840 (0.00 %)** | — |
+
+   Our bed carries **~⅔ of the fingerprint's absolute variability** and the
+   no-fault trace never approaches 880 — so the imported variability *is*
+   consistent with the 30 °C band and the squeeze is physics (drift masking),
+   not a mismatch. **But it is a near thing:** the no-fault 1 h-ptp p95 is
+   28 °C against a 30 °C band, i.e. the load wander alone occasionally fills 93 %
+   of the headroom. If the full fingerprint variability (≈ 1.5× more, per the
+   `stage3_submodel4.md` sd gap) were reproduced, the no-fault trace *would*
+   reach 880 and the band would be untenable — the 0.66× under-reproduction is
+   load-bearing, not just a recorded gap.
+
+3. **`load_coef` — the fit is not the generator gain, and that is now the
+   config value.** OLS `slope(bed) ~ slope(steam)` is window-length dependent
+   (1.4 at 5 min → 3.2 at 55 min) from the τ 139 s bed lag; the errors-in-
+   variables factor from measurement noise is **0.9999**, so it explains ~none
+   of the spread. The **level** regression (the DEVIATION-band form) is
+   **2.43, R² 0.82** and is the value used — replacing the earlier 2.75, which
+   had been chosen because it matched `K_BED_LOAD` (circular). Episodes
+   regenerated; `state_timeline_load_coef` = 2.43.
+
+5. **Family C bed cooling is now small (~8–12 °C vs the old 35 °C).** The
    pressure-integrator quasi-steady sag is ≈ `60·fuel_availability`, so an
    RCA-faithful sag to ~57 kg/cm² needs `fuel_availability ≈ 0.955`, which only
    removes ~5 % of heat and cools the *average* bed ~8–12 °C. RCA Case 6's
@@ -224,22 +305,26 @@ windows. A closed-loop Q5 on held-out episodes is a scoped follow-up
    drop — verified to fire on all six C episodes. Recorded; the old 35 °C was
    flagged "on the strong side" in `stage3_submodel2.md` disagreement 6.
 
-4. **`steam↔pressure` / `bed↔pressure` cross-correlation sign** is still
+6. **`steam↔pressure` / `bed↔pressure` cross-correlation sign** is still
    negative (−0.21 / −0.12) against the fingerprint's +0.35 / +0.39. Unchanged
    from `stage3_submodel4.md` disagreement 2 — the real plant's drum-pressure
    setpoint co-drifts with load over hours; ours is fixed at 66. A slow OU on
    the pressure setpoint is the candidate fix, still deferred. The process noise
    added here does not touch this.
 
-5. **`drum_pressure` sd 0.12 vs fingerprint 0.77** — likewise unchanged and same
+7. **`drum_pressure` sd 0.12 vs fingerprint 0.77** — likewise unchanged and same
    cause (fixed setpoint). Recorded in `stage3_submodel4.md`.
 
 ## Blocked / needs a decision
 - **Family-E detectability (disagreement 1).** The question for the advisor:
-  accept it, or authorise an L1 cumulative-offset drift detector in the agent
-  stage. Not a data-generation fix.
+  accept it and add an L1 cumulative-offset drift detector in the agent stage,
+  or revisit family E. Not a data-generation fix.
+- **The 0.66× bed-variability under-reproduction is load-bearing (disagreement
+  2).** If a later stage closes the `stage3_submodel4.md` bed-sd gap, the 30 °C
+  DEVIATION/alarm band and family E both have to be revisited — flagged so it is
+  not closed silently.
 - **A closed-loop harness Q5** on held-out normal episodes (fresh seeds again,
-  or more generated normals) to confirm the analytic 1.48/h — deliberately not
+  or more generated normals) to confirm the analytic 0.81/h — deliberately not
   done here to keep the retune uncircular.
 
 ## What I could not verify
@@ -252,6 +337,9 @@ windows. A closed-loop Q5 on held-out episodes is a scoped follow-up
   the single steam↔bed target; the (τ, σ) pair is a ridge, not a point (τ 20 or
   35 min gave the same +0.87 with a rescaled σ).
 - **Family E's "crosses nothing" guarantee** holds for the three chosen seeds
-  (bed_max 874/875/874) but is **seed-sensitive**: seeds 602 / 608 / 611 at the
-  same severity reach bed_max 880–884. The generated episodes are safe; the
-  guarantee is not robust to an arbitrary seed.
+  — bed_max **876.8 / 874.6 / 871.2** (E01 / E02 / E03) against the 880 alarm —
+  but is **seed-sensitive and E01's 3.2 °C margin is thin**: seeds 602 / 608 /
+  611 at the same severity reach bed_max 880–884, which is why the seeds were
+  fixed. The generated episodes are safe (gate C6 passes); the guarantee is not
+  robust to an arbitrary seed, and it is bound up with the 0.66× bed-variability
+  under-reproduction (disagreement 2).

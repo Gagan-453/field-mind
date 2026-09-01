@@ -75,15 +75,20 @@ agent:
 # ---------------------------------------------------------------------------
 checks:
   sample_period_s: 5.0
-  # How much bed temperature moves per TPH of load; the load component
-  # _load_normalised_bed_slope removes before flagging a drift.
-  # Stage-4 refit over the regenerated N01-N06: OLS slope(bed)~slope(steam)
-  # gives 2.21 (R2 0.61), but errors-in-variables attenuation biases that low;
-  # the value that MINIMISES the no-fault load-normalised bed-slope residual is
-  # 2.75-2.85, matching the simulator generator gain K_BED_LOAD = 2.75. Kept at
-  # 2.75. Also the LOAD_COEF stamped into every ground_truth.json (DEVIATION
-  # band); state_timeline_load_coef records it so a future refit is visible.
-  load_coef_degc_per_tph: 2.75
+  # How much bed temperature moves per TPH of load; the component
+  # _load_normalised_bed_slope removes before flagging a drift, and the
+  # reference the DEVIATION band uses (bed_ref = 850 + coef*(steam-67)).
+  # Stage-4 refit over the regenerated N01-N06 (DERIVATIONS 9): the LEVEL
+  # regression bed~steam gives 2.43, R2 0.82 -- used here. The SLOPE regression
+  # is window-length dependent (5min 1.4, 10min 2.0, 40min 2.9, 55min 3.2)
+  # because the bed lags steam by tau 139 s; that dilution, NOT measurement
+  # noise (the errors-in-variables factor from emit noise is 0.9999), is why a
+  # short-window OLS slope reads low. No single coef is correct for every
+  # window; the slope-check thresholds below are set from the measured no-fault
+  # distribution AT this coef, so their FP rate is calibrated regardless.
+  # This is the LOAD_COEF stamped into every ground_truth.json
+  # (state_timeline_load_coef) so a future refit is a visible relabel.
+  load_coef_degc_per_tph: 2.43
 
   limits:
     bed_temp_avg:
@@ -108,17 +113,18 @@ checks:
     drum_pressure: {threshold: -0.15, sustained_min: 5.0, direction: down, unit: "kg/cm2/min", severity: WATCH}
 
   # Long-horizon drift. The ONLY thing that catches family E.
-  # STAGE-4 FINDING (reports/stage4_regeneration.md): with the OU load driver +
-  # per-subsystem process disturbances, the no-fault load-normalised bed slope
-  # over 55 min has p99.7 ~ 0.24 degC/min, and family E's own signal is
-  # ~0.15-0.24 degC/min -- the two distributions OVERLAP. There is no threshold
-  # that catches family E without ~1 FP/hour on this one check. 0.22 is the
-  # compromise (aggregate stays < 2/h); family E detection is now marginal, a
-  # recorded disagreement for the advisor / an L1 cumulative-offset detector.
-  # Window widened 40 -> 55 min (the longest that fits the 60-min buffer) to
-  # tighten the no-fault spread as far as it will go.
+  # STAGE-4 FINDING (reports/stage4_regeneration.md): the no-fault
+  # load-normalised bed slope over 55 min has p99.7 ~ 0.28 degC/min, which is
+  # ~1700x the pure emit-noise OLS-slope SE (1.4e-4) -- i.e. the spread is real
+  # low-frequency bed wander from the OU drivers, not measurement noise, and a
+  # longer window does not shrink correlated drift. Family E's own 55-min slope
+  # is ~0.19-0.24 degC/min, BELOW this threshold: family E is masked by the
+  # plant's own wander and is NOT reliably slope-detectable. Threshold set at
+  # the no-fault p99.7 (not into the distribution). The fix is a cumulative-
+  # offset drift detector (sensitivity grows with elapsed time), an L1-stage
+  # change -- advisor question, see the report.
   rates_long:
-    bed_temp_avg:   {threshold: 0.22,  sustained_min: 55.0, direction: up,   unit: "degC/min", severity: WATCH}
+    bed_temp_avg:   {threshold: 0.28,  sustained_min: 55.0, direction: up,   unit: "degC/min", severity: WATCH}
     ms_temperature: {threshold: 0.20,  sustained_min: 40.0, direction: up,   unit: "degC/min", severity: INFO}
     drum_pressure:  {threshold: -0.01, sustained_min: 40.0, direction: down, unit: "kg/cm2/min", severity: INFO}
 
@@ -129,7 +135,8 @@ checks:
     # residual_tph: no-fault 5-min residual p99.7 = 0.13 t/h; family B leak
     #   residual is ~2-3 t/h, so 1.5 separates them with margin.
     # p_falling: no-fault 5-min pressure slope p99.7 = 0.12 kg/cm2/min.
-    # bed_rising: no-fault 5-min load-normalised bed slope p99.7 = 1.19.
+    # bed_rising: no-fault 5-min load-normalised bed slope p99.7 = 1.21 (at
+    #   coef 2.43; the 5-min window under-corrects, beta_5min ~ 1.4).
     level_gain_pct_per_min_per_tph: 0.586
     residual_tph: 1.5
     window_min: 5.0
