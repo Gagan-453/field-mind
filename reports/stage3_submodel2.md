@@ -13,10 +13,17 @@ bare `bed_target` literals `900 / 250 / 450 / 400 / -200`) is replaced by:
 - **Physical pressure integrator**: `dp/dt = (Q_evap_supply − W_steam·hfg) / E_P`
   with `E_P = 679 J/Pa` from boiler-water + metal thermal mass × `dTsat/dp`.
   **Not** fitted to the 44.53-min `drum_pressure` ar1 timescale (correction 1).
-- **Bed / ms** first-order lags (τ_bed ≈ 6 min, τ_ms ≈ 55 s — kept fast per the
-  CLAUDE.md stage-1 correction) toward a target built from deviation gains, each
-  DERIVED from the combustion mass/energy balance via a bed conductance
-  `G_BED_EFF = G_FG + G_WW` (flue gas **plus** the in-bed water-wall clamp).
+- **Bed / ms** first-order lags (τ_bed ≈ 139 s — see correction C1 below, was
+  wrongly 356 s in the first cut; τ_ms ≈ 55 s — kept fast per the CLAUDE.md
+  stage-1 correction) toward a target built from deviation gains, each DERIVED
+  from the combustion mass/energy balance via a bed conductance
+  `G_BED_EFF = G_FG + G_WW` (flue gas **plus** the in-bed water-wall clamp;
+  `BETA_FURNACE` in `G_WW` is FITTED-to-expectation — correction C2 below).
+
+> **Post-review corrections applied — see the "Corrections" section at the end.**
+> C1 fixes a physics bug (`TAU_BED_S` used `G_FG` not `G_BED_EFF`); C2 relabels
+> `BETA_FURNACE`. The verification tables below the fold are from the first cut;
+> the current numbers are in the Corrections section and the sub-model-4 report.
 
 Load-swing placeholder and emit-noise dict are still pre-rewrite (sub-model 4).
 Episodes NOT regenerated. `configs/base.yaml` NOT touched.
@@ -259,3 +266,57 @@ No new stop-rule hits. Decisions deferred to later stages:
   (0.06 per kg/cm2) are controller tunings, unsourced both before and after;
   changed only to keep the faster physical `E_P` stable. Documented, not
   verified.
+
+---
+
+## Corrections (post-review, 2026-09-01)
+
+### C1 — `TAU_BED_S` used the wrong conductance (physics bug, fixed)
+`TAU_BED_S = M_BED_KG·C_BED / G_FG_NOM` gave 356 s, but every bed deviation gain
+(`K_COMB` / `K_FUEL` / `K_CV` and the leak quench) is `Q / G_BED_EFF`. A
+first-order lag's `τ = C/G` must use the **same** `G` that sets its steady-state
+gain `ΔT = ΔQ/G`. Corrected to `TAU_BED_S = M_BED_KG·C_BED / G_BED_EFF` =
+**139 s** — the bed lag was **2.6× too slow for its own sensitivity**.
+
+- **Self-test 6a added**: asserts `M_BED_KG·C_BED/TAU_BED_S`,
+  `Q_FUEL_NOM/K_COMB` and `G_BED_EFF` are one number (rel-tol 1e-9).
+- **Mutation M10 added**: `TAU_BED_S` back to `/ G_FG_NOM` → self-test 6a fails
+  (`denominator 30917 != G_BED_EFF 78903`). Caught.
+- **Direction check 8 (E12) reworked**: with the faster bed the ms dip is
+  briefer (bed catches up in ~5 min, not ~8), and the ~2 °C dip is now
+  comparable to the OU load wander. Changed to a **paired** step-minus-no-step
+  difference on 4 seeds, measured 30–150 s after the step: **dip −1.83 °C →
+  recover +4.29 °C**. Still the RCA Case 4 direction. M6 (flip the ms-flow sign)
+  still caught (+9.85 °C, no dip).
+- All 8 direction checks, 10 self-test groups, 10 mutations pass. Steady-state
+  magnitudes are **unchanged** (the gain `Q/G_BED_EFF` did not move); only the
+  response speed.
+
+**Effect on the fault families** (τ 356 s → 139 s, 4-seed means):
+
+| metric | old (τ 356 s) | new (τ 139 s) | change |
+|---|---|---|---|
+| family C (`fuel_availability` 0.80) bed sag rate, first 20 min after onset | 2.00 °C/min | **2.48 °C/min** | +24 % (reaches the cooler quasi-steady state sooner) |
+| family D (`coal_cv_factor` 1.16) time from onset to bed > 940 °C | ~14.1 min | **~10.6 min** | **−25 % (~3.5 min sooner)** — a detection-lead-time (T6) input |
+| family E (`heat_absorption` 0.985) bed rise at +40 / +80 / +120 / +180 min | +6.0 / +9.5 / +11.9 / +12.3 °C | +6.7 / +10.4 / +11.9 / +11.7 °C | negligible at long horizons — the fouling ramp, not τ, sets the shape; still crosses nothing (max < 880) |
+
+### C2 — `BETA_FURNACE` relabelled FITTED-TO-EXPECTATION
+The reviewer is right: the `G_WW` *structure* is physics, but `BETA_FURNACE =
+0.45` was **chosen to produce acceptable output**, not read from practice. Its
+provenance in `sim.py` and DERIVATIONS §4 is now **FITTED-TO-EXPECTATION**,
+with the two constraints stated explicitly:
+
+1. a 3.5 t/h tube leak quenches the average bed **~15–25 °C** (RCA Case 11
+   scale), and
+2. family-E fouling (0.985) stays **under the 880 °C bed alarm** across seeds.
+
+**Range where both hold: `BETA_FURNACE ∈ [0.30, 0.65]`**, nominal 0.45. Below
+0.30 family E reaches the 880 alarm; above ~0.65 the leak sag drops under ~14 °C
+and family D (cv 1.16) only reaches ~955 °C. Full sweep table in DERIVATIONS
+§4.3. The nominal 0.45 also sits inside the physical furnace water-wall
+heat-split band (~40–55 %) — a sanity check, not the source.
+
+### What did not change
+`E_P` stays the physical 679 J/Pa (correction 1 of the original review stands).
+`K_PA` keeps the `G_FG` normalisation. The GCV/air_st consistency test, the
+M3/M4 non-double-count proof, and the refusal to force bed/ms sd are unchanged.

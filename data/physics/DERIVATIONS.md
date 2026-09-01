@@ -372,16 +372,16 @@ regenerated in this stage.
 | `LAMBDA_EXCESS` | 1.25 | **ASSUMED** (1.15 - 1.35). Total excess-air ratio; sets flue-gas mass flow and `PRIMARY_AIR_MIN`. |
 | `PA_AIR_FRACTION` | 0.55 | **ASSUMED** (0.45 - 0.65). Primary/total air split. Sets `K_PA` and `PRIMARY_AIR_MIN`. |
 | `C_PG` | 1150 J/kg/K | **ASSUMED** (1100 - 1250). Flue-gas cp; sets `G_FG`. |
-| `BETA_FURNACE` | 0.45 | **ASSUMED** (0.35 - 0.55). Water-wall heat pickup in the bed zone; sets `G_WW`. |
+| `BETA_FURNACE` | 0.45 | **FITTED-TO-EXPECTATION** (0.30 - 0.65). NOT a practice figure -- chosen so the bed sensitivity is right (§4.3). Sets `G_WW`. |
 | `T_FW_C` | 150 degC | **ASSUMED** (140 - 160). Economiser-outlet feedwater temp; duty magnitude only. |
 | `T_FLUE_REF_C` | 200 degC | **ASSUMED** (150 - 260). APH-heated PA inlet; the `(T_bed - T_ref)` span in `K_PA`. |
-| `M_BED_KG`, `C_BED` | 11000 kg, 1000 J/kg/K | **ASSUMED** (8000-16000, 900-1100). `tau_bed` only. |
+| `M_BED_KG`, `C_BED` | 11000 kg, 1000 J/kg/K | **ASSUMED** (8000-16000, 900-1100). `tau_bed = M_bed*c_bed / G_BED_EFF` = **139 s** (`/ G_BED_EFF`, NOT `/ G_FG` -- tau and gain share one conductance; §4.3). |
 | `M_SH_METAL_KG`, `C_STEEL`, `_CP_STEAM` | 6000 kg, 490, 2900 J/kg/K | **ASSUMED** (3500-10000, 470-510, 2800-3500). `tau_ms` only (~55 s). |
 | `K_MS_BED` | 0.35 | **ASSUMED** (0.28 - 0.40). Superheater outlet sensitivity to bed temp. |
 | `K_MS_FLOW` | 0.45 degC/(t/h) | **ASSUMED** (0.2 - 0.8). ms fall per t/h of extra steam (RCA Case 4 direction). See §9. |
 | `K_BED_LOAD` | 2.75 degC/(t/h) | **ASSUMED** (2.0 - 4.0). Anchored to `configs/base.yaml load_coef_degc_per_tph` (unchanged); fingerprint bed~load slope 3.9 is the upper bound (different boiler -- §9). |
 
-### 4.3 Bed conductance `G_BED_EFF` -- why the flue-gas-only denominator was wrong
+### 4.3 Bed conductance `G_BED_EFF` and `BETA_FURNACE` -- FITTED to expectation
 
 The bed-temperature deviation gains divide a heat perturbation by a conductance.
 Using `G_FG` alone (`m_fluegas * cp_g`, ~3.1e4 W/K) made the bed ~2.5x too
@@ -395,10 +395,40 @@ G_WW  = BETA_FURNACE * Q_fuel_nom / (T_bed_nom - Tsat(p_nom))
 G_BED_EFF = G_FG + G_WW  =  3.09e4 + 4.80e4  =  7.89e4 W/K
 ```
 
+**`BETA_FURNACE = 0.45` is FITTED TO EXPECTATION, not an ASSUMED practice
+figure.** The *structure* (a parallel water-wall sink linearised about the
+saturation temperature) is physics; the *value* was chosen to make two
+downstream numbers come out right:
+
+1. a **3.5 t/h tube leak quenches the average bed ~15-25 degC** (RCA Case 11
+   scale for a one-compartment sharp drop seen on a six-compartment average);
+2. **family-E fouling (heat_absorption 0.985) stays under the 880 degC bed
+   alarm** across seeds (an episode that trips is a mislabel).
+
+Measured window where BOTH still hold (bed quench is a clean paired
+leak-minus-no-leak difference; family-E max is the worst of 4 seeds):
+
+| `BETA_FURNACE` | `G_BED_EFF` | leak 3.5 t/h bed sag | leak 6.0 t/h | family-E max bed |
+|---|---|---|---|---|
+| 0.25 | 5.76e4 | 24 degC | 41 degC | ~880 (fails constraint 2) |
+| **0.30** | 6.29e4 | 22 degC | 38 degC | 879.6 (edge) |
+| **0.45** (nominal) | 7.89e4 | **18 degC** | **30 degC** | 876.5 |
+| **0.65** | 1.00e5 | 14 degC | 24 degC | 874.5 |
+| 0.75 | -- | 12 degC | 21 degC | -- (family D cv 1.16 only reaches ~955, weak) |
+
+So the **defensible range is `BETA_FURNACE` in [0.30, 0.65]**, nominal 0.45.
+It happens to sit inside the physical furnace water-wall heat-split band
+(~40-55 % of gross fuel heat picked up in the bed/furnace zone) -- that
+agreement is a sanity check, not the provenance.
+
 `K_COMB = K_FUEL = K_CV = Q_fuel_nom / G_BED_EFF = 768 K` per unit relative
-heat imbalance. `K_PA` keeps the `G_FG` normalisation (implicit via `lambda`)
-because reducing excess air raises the *gas* temperature directly and the
-water walls buffer it less -- `K_PA = PA_AIR_FRACTION * LAMBDA_EXCESS *
+heat imbalance. The bed first-order lag uses the **same** conductance:
+`tau_bed = M_bed*c_bed / G_BED_EFF = 139 s` (a `tau = C/G` must use the `G`
+that sets its steady-state gain `dT = dQ/G`; an earlier version divided by
+`G_FG` and was 2.6x too slow -- `_self_test` check 6a now asserts the two
+denominators are one number). `K_PA` keeps the `G_FG` normalisation (implicit
+via `lambda`) because reducing excess air raises the *gas* temperature directly
+and the water walls buffer it less -- `K_PA = PA_AIR_FRACTION * LAMBDA_EXCESS *
 (T_bed - T_ref) = 447 K`.
 
 ### 4.4 `e_p` -- PHYSICAL, not fitted to the ar1 timescale (correction 1)
@@ -613,7 +643,7 @@ relaxation.
 | tau | provenance (sub-model 2) |
 |---|---|
 | drum pressure | **DERIVED** (physical). `tau_p ~ E_P / (dQ/dp)`. `E_P = 679 J/Pa` from water + metal thermal mass * `dTsat/dp` (§4.4). **NOT** fitted to `drum_pressure.ar1.timescale_minutes = 44.53` -- that is inherited input slowness (correction 1); an ar1 fit wants `E_P ~ 1.3e4`, 19x higher. |
-| bed temperature | **DERIVED**: `tau_bed = M_bed*c_bed / G_FG = 356 s` (~6 min). Fast, per the CLAUDE.md stage-1 correction. `bed_temp_avg.ar1 = 254.9 min` is inherited from load variation. |
+| bed temperature | **DERIVED**: `tau_bed = M_bed*c_bed / G_BED_EFF = 139 s` (~2.3 min). Uses the SAME conductance as the bed gains (§4.3); an earlier version divided by `G_FG` (356 s) and was 2.6x too slow for its own sensitivity. Fast, per the CLAUDE.md stage-1 correction. `bed_temp_avg.ar1 = 254.9 min` is inherited from load variation. |
 | main steam temperature | **DERIVED**: `tau_ms = M_sh_metal*c_steel / (W_steam*cp_steam) = 55 s`. Fast. `ms.ar1 = 706.7 min` likewise inherited. |
 
 Achieved autocorrelation vs the fingerprint (esp. `drum_pressure` -> 44.53 min)

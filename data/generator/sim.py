@@ -240,12 +240,21 @@ M_COAL_NOM = Q_FUEL_NOM / GCV_J_PER_KG                       # ~3.58 kg/s DERIVE
 # boiling evaporator surface immersed in it. Omitting it (dividing only by G_FG)
 # made the bed ~2.5x too sensitive to every heat perturbation: a 3.5 t/h leak
 # quenched the *average* bed 45 degC, family E crossed the 880 alarm. Both are
-# fixed by using G_BED_EFF = G_FG + G_WW for the heat-source / heat-sink terms.
+# fixed by using G_BED_EFF = G_FG + G_WW for the heat-source / heat-sink terms
+# AND for tau_bed (same conductance sets tau and gain). BETA_FURNACE below is
+# FITTED to make those two numbers come out right -- see DERIVATIONS §4.3.
 C_PG = 1150.0          # ASSUMED (range 1100 - 1250 J/kg/K): mean flue-gas cp at
                        # bed temperature. Affects G_FG -> bed gains and K_PA.
-BETA_FURNACE = 0.45    # ASSUMED (range 0.35 - 0.55): fraction of gross fuel heat
-                       # absorbed by water walls in the bed / furnace zone (the
-                       # rest is picked up downstream or lost). Sets G_WW.
+BETA_FURNACE = 0.45    # FITTED-TO-EXPECTATION (range 0.30 - 0.65), NOT a
+                       # practice figure: chosen so the bed-temperature
+                       # sensitivity comes out right -- specifically so a 3.5 t/h
+                       # leak quenches the average bed ~15-25 degC (RCA Case 11
+                       # scale) and family E fouling stays under the 880 degC bed
+                       # alarm. It is *consistent with* the physical furnace
+                       # water-wall heat split (~40-55 % of gross fuel heat is
+                       # picked up in the bed/furnace zone), but that agreement
+                       # is a check, not the source. Range = the window where
+                       # both constraints still hold (DERIVATIONS §4.3).
 _M_FLUEGAS_NOM = (M_COAL_NOM * (1.0 - COAL_ULT["ash"])
                   + M_COAL_NOM * AIR_ST * LAMBDA_EXCESS)     # ~26.9 kg/s DERIVED
 G_FG_NOM = _M_FLUEGAS_NOM * C_PG                             # ~3.1e4 W/K DERIVED
@@ -302,7 +311,11 @@ M_BED_KG = 11000.0     # ASSUMED (range 8000 - 16000): fluidised-bed solids
                        # inventory (sand + ash + fuel char). Affects tau_bed only.
 C_BED = 1000.0         # ASSUMED (range 900 - 1100 J/kg/K): bed-material cp
                        # (silica sand / ash). Affects tau_bed only.
-TAU_BED_S = (M_BED_KG * C_BED) / G_FG_NOM                   # ~355 s  DERIVED
+# tau = C / G MUST use the SAME conductance that sets the steady-state gain.
+# The bed deviation gains (K_COMB/K_FUEL/K_CV and the leak quench) are all
+# Q / G_BED_EFF, so tau_bed = M_bed*c_bed / G_BED_EFF -- NOT / G_FG_NOM.
+# (`_bed_lag_consistency()` self-test asserts the two denominators are one object.)
+TAU_BED_S = (M_BED_KG * C_BED) / G_BED_EFF                  # ~139 s  DERIVED
 M_SH_METAL_KG = 6000.0 # ASSUMED (range 3500 - 10000): primary + secondary
                        # superheater tube bundles + headers + desuperheater +
                        # interconnecting pipe metal. Affects tau_ms only.
@@ -680,7 +693,7 @@ class BoilerSim:
         st["drum_pressure"] += dp_dt_Pa_s * DT_S / _PA_PER_KGFCM2
         st["drum_pressure"] = max(5.0, st["drum_pressure"])
 
-        # ---- bed temperature: first-order lag (tau ~ 6 min) toward a target ----
+        # ---- bed temperature: first-order lag (tau_bed ~ 139 s) toward a target ----
         # built from deviation terms, each gain DERIVED from the combustion
         # mass/energy balance (DERIVATIONS §4), NOT a bare literal:
         #   load       K_BED_LOAD * (steam - nominal)      -- load-following rise
@@ -885,6 +898,20 @@ def _self_test() -> None:
         errs.append(f"E_P {E_P:.0f} J/Pa not within 2x of physical band {_E_P_PHYS_BAND}")
     if E_P > _E_P_AR1_FIT / 5.0:
         errs.append(f"E_P {E_P:.0f} within 5x of the ar1 fit {_E_P_AR1_FIT:.0f} -- looks fitted")
+
+    # 6a. The bed first-order lag tau = C/G MUST use the SAME conductance that
+    #     sets its steady-state gain. The gains K_COMB/K_FUEL/K_CV are
+    #     Q_FUEL_NOM / G_BED_EFF; tau_bed must be M_bed*c_bed / G_BED_EFF, i.e.
+    #     M_bed*c_bed/tau_bed, Q_FUEL_NOM/K_COMB and G_BED_EFF are one number.
+    #     (Regression guard: an earlier version divided tau by G_FG_NOM, making
+    #     the bed lag 2.6x too slow for its own sensitivity.)
+    g_from_tau = M_BED_KG * C_BED / TAU_BED_S
+    g_from_gain = Q_FUEL_NOM / K_COMB
+    if abs(g_from_tau - G_BED_EFF) / G_BED_EFF > 1e-9:
+        errs.append(f"bed tau uses G={g_from_tau:.0f}, not G_BED_EFF={G_BED_EFF:.0f} "
+                    f"(the gain's denominator)")
+    if abs(g_from_gain - G_BED_EFF) / G_BED_EFF > 1e-9:
+        errs.append(f"bed gain uses G={g_from_gain:.0f}, not G_BED_EFF={G_BED_EFF:.0f}")
 
     # 7. family E (fouling) crosses NO limit. An episode here that reaches the
     #    880 bed alarm is a mislabel (episode_build.py), not a severe one; and
@@ -1154,18 +1181,29 @@ def _direction_checks() -> None:
           f"valid range PA >= {PRIMARY_AIR_MIN:.2f}  [{'OK' if ok7 else 'FAIL'}]")
 
     # -- 8. E12  sharp load rise -> ms transient DIP (RCA Case 4 direction:
-    # firing lags, steam mass through the superheater jumps first), then RECOVERS
-    # as the bed catches up. We do NOT impose the fingerprint's +0.31 degC/(t/h)
-    # steady-state slope (R^2 0.03 -- not a relationship). Disagreement recorded.
-    e12 = BoilerSim(_spec("dir_ms_load", 45.0, family="N",
-                          schedules=[Schedule(600.0, "load_demand", 77.0, 1.0)]))
-    e12r = e12.run()
-    ms_pre = _window_mean(e12r, "ms_temperature", 300, 570)
-    ms_dip = _window_mean(e12r, "ms_temperature", 660, 900)      # 1-5 min after step
-    ms_rec = _window_mean(e12r, "ms_temperature", 1800, 2400)    # 20-30 min after
-    ok8 = (ms_dip < ms_pre - 1.0) and (ms_rec > ms_dip + 2.0)
-    print(f"  load 67->77: ms {ms_pre:.2f} -> dip {ms_dip:.2f} (Case-4 fall) "
-          f"-> recover {ms_rec:.2f}  [{'OK' if ok8 else 'FAIL'}]")
+    # firing + bed lag, steam mass through the superheater jumps first), then
+    # RECOVERS as the bed catches up. PAIRED with a no-step run on the same seed
+    # so the OU load wander (sub-model 4, ~+/-2 degC on ms, comparable to the dip)
+    # cancels -- only the step's effect remains. The bed lag is now tau ~ 139 s
+    # (corrected), so the dip is brief: measured 30-150 s after the step. We do
+    # NOT impose the fingerprint's +0.31 degC/(t/h) steady-state slope
+    # (R^2 0.03 -- not a relationship). Disagreement recorded.
+    def _ms_at(seed, stepped):
+        sch = [Schedule(600.0, "load_demand", 77.0, 1.0)] if stepped else []
+        r = BoilerSim(_spec(f"dir_ms_{seed}_{stepped}", 45.0, family="N",
+                            schedules=sch, seed=seed)).run()
+        return ({w: _window_mean(r, "ms_temperature", *w)
+                 for w in [(630, 750), (1800, 2400)]})
+    dips, recs = [], []
+    for seed in range(4):
+        st, no = _ms_at(seed, True), _ms_at(seed, False)
+        dips.append(st[(630, 750)] - no[(630, 750)])       # 30-150 s after step
+        recs.append(st[(1800, 2400)] - no[(1800, 2400)])   # 20-30 min after
+    md, mr = sum(dips) / len(dips), sum(recs) / len(recs)
+    ok8 = (md < -0.5) and (mr > md + 1.5) and (mr > 0.0)
+    print(f"  load 67->77 (paired, 4 seeds): ms step-minus-nostep "
+          f"dip {md:+.2f} degC (Case-4 fall) -> recover {mr:+.2f}  "
+          f"[{'OK' if ok8 else 'FAIL'}]")
 
     if not all([ok1, ok2, ok3, ok4, ok5, ok6, ok7, ok8]):
         raise AssertionError("direction check FAILED -- a sub-model sign is wrong")
@@ -1490,6 +1528,10 @@ def _mutation_check() -> None:
          "load_wander = self._ou_fast + self._ou_slow    # t/h",
          "load_wander = self._ou_fast + 0.0 * self._ou_slow    # t/h",
          "ou_slow"),
+        ("M10 bed tau divided by G_FG_NOM instead of G_BED_EFF",
+         "TAU_BED_S = (M_BED_KG * C_BED) / G_BED_EFF",
+         "TAU_BED_S = (M_BED_KG * C_BED) / G_FG_NOM",
+         "bed_tau"),
     ]
     for label, old, new, kind in e_muts:
         if old not in src:
@@ -1540,6 +1582,13 @@ def _mutation_check() -> None:
             k0, ke = sim.diag[0]["kappa_bw_uS"], sim.diag[-1]["kappa_bw_uS"]
             if abs(ke / k0 - 1.0) > 0.03:
                 caught = f"no-fault kappa_bw drifted {(ke / k0 - 1) * 100:+.1f} % (init off equilibrium)"
+        elif kind == "bed_tau":             # tau and gain denominators diverge
+            ns: dict = {}
+            exec(compile(mutated, "<mut>", "exec"), ns)
+            g_tau = ns["M_BED_KG"] * ns["C_BED"] / ns["TAU_BED_S"]
+            if abs(g_tau - ns["G_BED_EFF"]) / ns["G_BED_EFF"] > 1e-9:
+                caught = (f"bed tau denominator {g_tau:.0f} != gain denominator "
+                          f"G_BED_EFF {ns['G_BED_EFF']:.0f}")
         elif kind == "ou_slow":             # steam 1 h autocorrelation collapses
             ns: dict = {}
             exec(compile(mutated, "<mut>", "exec"), ns)
