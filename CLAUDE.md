@@ -343,3 +343,63 @@ Anything taken on trust, and what would be needed to check it.
 
 The last two sections are the point of the report. A report with both empty is
 a signal to look harder, not a clean bill of health.
+---
+
+## Do not fit plant time constants to fingerprint autocorrelation
+
+`fingerprint.json` autocorrelation timescales measure **how smooth a signal is**,
+not **how fast the plant responds**. A signal driven by a slow input is smooth
+regardless of the plant's own dynamics, so those timescales are largely
+inherited from slow load variation.
+
+Reference: steam flow, which is the *input*, has τ = 27 min. Drum pressure 44.5,
+bed 255, main steam 701. The increment cross-correlation for steam→bed peaks at
+**lag 0** — the plant responds in minutes.
+
+**Rule:** derive plant time constants from physics (capacitance, thermal mass,
+geometry). Reproduce long autocorrelation through slow **driver** drift, never
+by slowing the plant. Fitting both is double-counting, because the OU drivers
+already supply the slowness.
+
+This has been caught twice: first on bed and main steam relaxation, then on the
+pressure integrator capacitance `e_p`. Assume it will recur.
+
+## A large fit-vs-physics gap is evidence, not a footnote
+
+If a fitted value disagrees with a physical estimate of the same quantity by
+more than **3×**, stop and investigate before proceeding. Do not record the gap
+and continue.
+
+The `e_p` case: the physical estimate gave 0.8–1.2e3 J/Pa, the fit wanted
+1.3e4 — a 13× gap, recorded as "not resolved". That gap *was* the diagnosis:
+the fit was absorbing inherited input slowness. A gap that large means one of
+the two numbers is measuring something other than what it claims.
+
+## ASSUMED inputs describing the same object must be mutually consistent
+
+Two ASSUMED constants that derive from the same physical thing cannot be chosen
+independently. Cross-check them and record the check.
+
+The coal case: `GCV = 3400 kcal/kg` was ASSUMED directly, while `air_st = 5.46
+kg/kg` was DERIVED from a *separately* ASSUMED ultimate analysis. Dulong ties
+them — an analysis giving air_st ≈ 5.46 implies GCV ≈ 4100, not 3400. Pick one
+ultimate analysis and derive both from it, with the consistency check as a
+self-test.
+
+Look for this wherever two constants share a physical origin: drum geometry and
+water inventory, coal analysis and heating value, circulation ratio and circuit
+water mass.
+
+## Explanations are claims and need the same standard as constants
+
+A wrong explanation of a discrepancy is worse than an unexplained one, because
+nobody looks again.
+
+When a number disagrees with an outside value, either **verify** the cause (run
+the alternative and show it reproduces the observed difference) or record it as
+**unexplained** with both figures. Never attribute a cause you have not tested.
+
+Precedent: a ρ_g difference was attributed to the atmospheric constant in the
+gauge→absolute conversion. Both sides used 101325, and the proposed alternative
+would have moved the value *further* apart. The correct entry was "unexplained,
+immaterial against the 15× G_sw band".
