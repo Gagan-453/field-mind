@@ -214,6 +214,10 @@ class BoilerSim:
         self._m_liq = rho_f_kg_m3(_P_NOM_PA) * V_DRUM_50_M3
         # None until the inventory clamp is hit; then "floor" / "ceiling".
         self.m_liq_saturated: str | None = None
+        # Per-step diagnostics (NOT emitted / NOT in the CSV). One dict per
+        # step with the clean internals the tests need to check the code path:
+        #   t, level_liquid (mass path), level_swell (void term), p_clean.
+        self.diag: list[dict] = []
 
     # -------------------------------------------------------------------
     def _apply_schedules(self, t_s: float) -> None:
@@ -299,6 +303,14 @@ class BoilerSim:
         st["drum_level"] = max(0.0, min(100.0, level_liquid + level_swell))
         st["feed_water_flow"] = feed_tph
         st["steam_flow"] = steam
+        # Diagnostics (NOT emitted). level_indicated_clean is the composed,
+        # pre-noise value actually written to st["drum_level"]; the tests assert
+        # it equals level_liquid + level_swell EXACTLY (composition), separately
+        # from checking the emit noise size.
+        self.diag.append({"t": t_s, "level_liquid": level_liquid,
+                          "level_swell": level_swell,
+                          "level_indicated_clean": st["drum_level"],
+                          "p_clean": p_kgfcm2g})
 
         # ================= ENERGY SIDE  (PRE-REWRITE -- sub-model 2) ======
         # Combustion control: feeder speed tracks load with a pressure trim.
@@ -443,35 +455,131 @@ def _window_mean(rows, key, t0, t1):
     return sum(xs) / len(xs)
 
 
-def _direction_checks() -> None:
-    """The four sign claims the instruction asked to be verified numerically.
-    Uses a common seed and averages 90 s windows so measurement noise cancels.
-    """
-    print("\ndirection checks (state expected sign -> measured):")
+def _dwin(diag, key, t0, t1):
+    xs = [d[key] for d in diag if t0 <= d["t"] <= t1]
+    return sum(xs) / len(xs)
 
-    # -- 1. load INCREASE -> pressure falls -> voids expand -> level rises (swell)
-    inc = BoilerSim(_spec("dir_load_up", 40.0, family="N",
-                          schedules=[Schedule(600.0, "load_demand", 82.0, 2.0)])).run()
-    p_before = _window_mean(inc, "drum_pressure", 300, 570)
-    p_after = _window_mean(inc, "drum_pressure", 660, 900)
-    # isolate the swell term from the (noiseless) pressure means:
-    swell_before = -G_SW_PCT_PER_KGFCM2 * (p_before - P_NOM_KGFCM2G)
-    swell_after = -G_SW_PCT_PER_KGFCM2 * (p_after - P_NOM_KGFCM2G)
-    ok1 = (p_after < p_before) and (swell_after > swell_before)
-    print(f"  load +15 t/h: p {p_before:.2f}->{p_after:.2f} kg/cm2 (expect fall), "
-          f"swell {swell_before:+.2f}->{swell_after:+.2f} % (expect rise)  "
+
+def _ols_slope(xs, ys):
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    sxx = sum((x - mx) ** 2 for x in xs)
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    return sxy / sxx
+
+
+def _exact_composition_check(sim, rows):
+    """Split into two assertions the instruction asked to keep separate.
+
+      (a) COMPOSITION is exact: the pre-noise value step() wrote to
+          st['drum_level'] equals level_liquid + level_swell to 1e-9. Cannot be
+          fooled by any tolerance -- it catches step() dropping the term,
+          negating it in the compose line, or scaling it.
+      (b) The only thing between level_indicated_clean and the emitted
+          drum_level is the emit noise: max abs diff < 0.9 (~6 sd) AND the RMS
+          sits in [0.08, 0.24] around the sd=0.15 the emit loop adds.
+
+    Only valid where the [0,100] clamp is not active (load-step runs); pass
+    such runs. Raises AssertionError; returns (max_compose_err, noise_rms).
+    """
+    diag = sim.diag
+    assert len(diag) == len(rows), "diag / rows length mismatch"
+    compose_err = [abs(d["level_indicated_clean"]
+                       - (d["level_liquid"] + d["level_swell"])) for d in diag]
+    max_compose = max(compose_err)
+    if max_compose >= 1e-9:
+        raise AssertionError(
+            f"composition not exact: max |indicated_clean - (liquid + swell)| "
+            f"= {max_compose:.3e} (>= 1e-9) -- step() is not adding swell as written")
+    noise = [r["drum_level"] - d["level_indicated_clean"] for r, d in zip(rows, diag)]
+    max_noise = max(abs(n) for n in noise)
+    rms = (sum(n * n for n in noise) / len(noise)) ** 0.5
+    if max_noise >= 0.9 or not (0.08 <= rms <= 0.24):
+        raise AssertionError(
+            f"emit-noise inconsistent: max |drum_level - indicated_clean| "
+            f"= {max_noise:.3f}, rms = {rms:.3f} (expect ~0.15)")
+    return max_compose, rms
+
+
+def _swell_trace_check(sim, rows, tol_slope=0.10):
+    """OLS slope of (emitted drum_level - mass-path level_liquid) on
+    (p_clean - p_nom) over the whole run must equal -G_sw within tol_slope.
+    This is the pressure->indicated-level gain measured from the EMITTED data
+    through the emit noise, compared against the module's real G_sw -- so a
+    sign flip or a magnitude error in step() fails it even though the mutated
+    code's own diag stays internally consistent.
+
+    Raises AssertionError; returns slope.
+    """
+    diag = sim.diag
+    xs = [d["p_clean"] - P_NOM_KGFCM2G for d in diag]
+    ys = [r["drum_level"] - d["level_liquid"] for r, d in zip(rows, diag)]
+    slope = _ols_slope(xs, ys)
+    if abs(slope - (-G_SW_PCT_PER_KGFCM2)) >= tol_slope:
+        raise AssertionError(
+            f"pressure->level gain in emitted trace = {slope:.3f}, "
+            f"expected -G_sw = {-G_SW_PCT_PER_KGFCM2:.3f} (tol {tol_slope})")
+    return slope
+
+
+def _direction_checks() -> None:
+    """Sign claims verified against the EMITTED trace / returned state.
+    Checks 1, 2 and 4b key on pressure movement from the PRE-REWRITE energy
+    block (PRESS_GAIN, unsourced) -- PROVISIONAL, re-run after sub-model 2.
+    """
+    print("\ndirection checks (expected sign -> measured; PROVISIONAL = pre-rewrite energy):")
+
+    # -- 1 & 2: shrink-and-swell SIGN, from the emitted trace.
+    # Load steps kept inside feed-valve max (81.6 t/h) and fuel ceiling
+    # (1.15*67 ~ 77) so the mass path does not saturate. The pressure move is
+    # a TRANSIENT in the pre-rewrite energy model, so we pick the sample where
+    # p_clean is furthest from nominal and check the emitted swell offset
+    # (drum_level - mass-path level_liquid) there. Non-tautological: emitted
+    # data, real stimulus, real response, compared to the module G_sw.
+    # Quantitative gate = the whole-run trace slope (600 samples, all the
+    # pressure variation) inside _swell_trace_check: |slope - (-G_sw)| < 0.10.
+    # The extreme-pressure sample is a second, weaker confirmation: at the
+    # transient peak the emitted offset must (i) have the right sign and
+    # (ii) match the swell prediction -G_sw*dp within 25 %. Steps are 67->77
+    # up (fuel ceiling ~77) and 67->57 down (alarm_lo 55), the largest that
+    # stay in-envelope; window is p_peak +/- 0.4 averaged.
+    def _swell_sign(sim, rows, direction):
+        diag = sim.diag
+        ce, rms = _exact_composition_check(sim, rows)
+        slope = _swell_trace_check(sim, rows)
+        if direction == "swell":                        # load up  -> p sags
+            pk = min(d["p_clean"] for d in diag)
+            near = [(r, d) for r, d in zip(rows, diag) if d["p_clean"] <= pk + 0.4]
+        else:                                           # load down -> p rises
+            pk = max(d["p_clean"] for d in diag)
+            near = [(r, d) for r, d in zip(rows, diag) if d["p_clean"] >= pk - 0.4]
+        dp = sum(d["p_clean"] - P_NOM_KGFCM2G for _, d in near) / len(near)
+        offset = sum(r["drum_level"] - d["level_liquid"] for r, d in near) / len(near)
+        predicted = -G_SW_PCT_PER_KGFCM2 * dp
+        sign_ok = (offset > 0) if direction == "swell" else (offset < 0)
+        match_ok = abs(offset - predicted) < 0.25 * abs(predicted)
+        return dict(pk=pk, dp=dp, n=len(near), offset=offset, predicted=predicted,
+                    slope=slope, rms=rms, ok=(sign_ok and match_ok))
+
+    inc_sim = BoilerSim(_spec("dir_load_up", 50.0, family="N",
+                              schedules=[Schedule(600.0, "load_demand", 77.0, 2.0)]))
+    inc = inc_sim.run()
+    r1 = _swell_sign(inc_sim, inc, "swell")
+    ok1 = r1["ok"]
+    print(f"  load +10 t/h  [PROVISIONAL]: p peak {r1['pk']:.2f} kg/cm2 "
+          f"(dp {r1['dp']:+.2f}, n={r1['n']}); emitted offset {r1['offset']:+.3f} % "
+          f"vs -G_sw*dp {r1['predicted']:+.3f} % (expect > 0, swell); "
+          f"trace slope {r1['slope']:+.3f} vs {-G_SW_PCT_PER_KGFCM2:+.3f}  "
           f"[{'OK' if ok1 else 'FAIL'}]")
 
-    # -- 2. load DECREASE -> pressure rises -> voids collapse -> level falls (shrink)
-    dec = BoilerSim(_spec("dir_load_dn", 40.0, family="N",
-                          schedules=[Schedule(600.0, "load_demand", 52.0, 2.0)])).run()
-    p_before = _window_mean(dec, "drum_pressure", 300, 570)
-    p_after = _window_mean(dec, "drum_pressure", 660, 900)
-    swell_before = -G_SW_PCT_PER_KGFCM2 * (p_before - P_NOM_KGFCM2G)
-    swell_after = -G_SW_PCT_PER_KGFCM2 * (p_after - P_NOM_KGFCM2G)
-    ok2 = (p_after > p_before) and (swell_after < swell_before)
-    print(f"  load -15 t/h: p {p_before:.2f}->{p_after:.2f} kg/cm2 (expect rise), "
-          f"swell {swell_before:+.2f}->{swell_after:+.2f} % (expect fall/shrink)  "
+    dec_sim = BoilerSim(_spec("dir_load_dn", 50.0, family="N",
+                              schedules=[Schedule(600.0, "load_demand", 57.0, 2.0)]))
+    dec = dec_sim.run()
+    r2 = _swell_sign(dec_sim, dec, "shrink")
+    ok2 = r2["ok"]
+    print(f"  load -10 t/h  [PROVISIONAL]: p peak {r2['pk']:.2f} kg/cm2 "
+          f"(dp {r2['dp']:+.2f}, n={r2['n']}); emitted offset {r2['offset']:+.3f} % "
+          f"vs -G_sw*dp {r2['predicted']:+.3f} % (expect < 0, shrink); "
+          f"trace slope {r2['slope']:+.3f} vs {-G_SW_PCT_PER_KGFCM2:+.3f}  "
           f"[{'OK' if ok2 else 'FAIL'}]")
 
     # -- 3. family A (feed valve capped) -> feed < steam, level falls
@@ -549,7 +657,74 @@ def _headline_recheck() -> None:
         raise AssertionError(f"G_sw re-derivation disagrees by {rel*100:.1f}% (>3%)")
 
 
+def _mutation_check() -> None:
+    """Break what the swell tests test; confirm a test actually fails.
+
+    Two mutations of `step()`, applied to the SOURCE and exec'd in a fresh
+    namespace (the check functions still see this module's real constants):
+
+      M1  drop `+ level_swell` from the compose line  -- diag still logs the
+          real level_swell, so the composed value no longer matches it.
+      M2  flip the sign of level_swell               -- the mutated code's own
+          diag stays internally consistent; only the module-constant comparison
+          exposes it.
+    """
+    import pathlib
+
+    src = pathlib.Path(__file__).read_text()
+    load_up = dict(episode_id="mut", family="N", tier="A", duration_min=50.0)
+    mutations = [
+        ("M1 drop swell from compose line",
+         'st["drum_level"] = max(0.0, min(100.0, level_liquid + level_swell))',
+         'st["drum_level"] = max(0.0, min(100.0, level_liquid))'),
+        ("M2 flip swell sign",
+         "level_swell = -G_SW_PCT_PER_KGFCM2 * (p_kgfcm2g - P_NOM_KGFCM2G)",
+         "level_swell = +G_SW_PCT_PER_KGFCM2 * (p_kgfcm2g - P_NOM_KGFCM2G)"),
+    ]
+
+    print("\nmutation check (corrupt step(), confirm a test fails):")
+    for label, old, new in mutations:
+        if old not in src:
+            raise AssertionError(f"{label}: mutation target string not found")
+        ns: dict = {}
+        exec(compile(src.replace(old, new, 1), "<mutated sim>", "exec"), ns)
+        sim = ns["BoilerSim"](ns["EpisodeSpec"](
+            schedules=[ns["Schedule"](600.0, "load_demand", 82.0, 2.0)], **load_up))
+        rows = sim.run()
+
+        caught = []
+        try:
+            _exact_composition_check(sim, rows)
+        except AssertionError:
+            caught.append("exact-composition (a)")
+        try:
+            _swell_trace_check(sim, rows)
+        except AssertionError:
+            caught.append("trace-slope (b)")
+        off_b = (_window_mean(rows, "drum_level", 300, 570)
+                 - _dwin(sim.diag, "level_liquid", 300, 570))
+        off_a = (_window_mean(rows, "drum_level", 1500, 3000)
+                 - _dwin(sim.diag, "level_liquid", 1500, 3000))
+        if not (off_a > off_b + 0.3):
+            caught.append("direction-1 sign")
+
+        if not caught:
+            raise AssertionError(
+                f"{label}: NOTHING caught it -- a swell test is inert, "
+                f"delete or replace it")
+        print(f"  {label}: caught by {', '.join(caught)}")
+
+    # sanity: unmutated source passes all three
+    sim = BoilerSim(_spec("mut_baseline", 50.0, family="N",
+                          schedules=[Schedule(600.0, "load_demand", 82.0, 2.0)]))
+    rows = sim.run()
+    _exact_composition_check(sim, rows)
+    _swell_trace_check(sim, rows)
+    print("  baseline (unmutated): all three pass")
+
+
 if __name__ == "__main__":
     _self_test()
     _direction_checks()
     _headline_recheck()
+    _mutation_check()
