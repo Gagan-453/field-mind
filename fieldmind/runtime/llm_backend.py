@@ -200,7 +200,8 @@ class GeminiBackend(LLMBackend):
                  json_mode: bool = True,
                  max_retries: int = 5,
                  backoff_base_s: float = 2.0,
-                 backoff_cap_s: float = 60.0, **_):
+                 backoff_cap_s: float = 60.0,
+                 min_interval_s: float = 0.0, **_):
         self.model = model
         self.temperature = temperature
         self.timeout_s = timeout_s
@@ -208,6 +209,13 @@ class GeminiBackend(LLMBackend):
         self.max_retries = max_retries
         self.backoff_base_s = backoff_base_s
         self.backoff_cap_s = backoff_cap_s
+        # Proactive client-side spacing between calls. The free tier is ~15 RPM
+        # and a full-episode run makes calls back-to-back, so without this every
+        # call 429s and the retry loop turns a 5-minute run into an hour.
+        # Set from config (llm.gemini.min_interval_s) when running against the
+        # rate-limited tier.
+        self.min_interval_s = min_interval_s
+        self._next_ok = 0.0
         self.api_key = os.environ.get(api_key_env, "")
         if not self.api_key:
             raise RuntimeError(
@@ -239,6 +247,12 @@ class GeminiBackend(LLMBackend):
         req_data = json.dumps(body).encode()
         headers = {"Content-Type": "application/json",
                    "x-goog-api-key": self.api_key}
+
+        if self.min_interval_s:
+            gap = self._next_ok - time.time()
+            if gap > 0:
+                time.sleep(gap)
+            self._next_ok = time.time() + self.min_interval_s
 
         # ---- retry loop: 429 (rate limit) and 5xx (transient server) and
         #      network drops (timeout, SSL EOF) get exponential backoff with
