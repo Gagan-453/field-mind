@@ -30,7 +30,7 @@ from pathlib import Path
 
 from ..runtime.llm_backend import LLMBackend
 from ..schemas import AgentEnvelope, Fact
-from .l4_diagnose import extract_json
+from .l4_diagnose import extract_json, est_tokens
 
 PROMPT_DIR = Path(__file__).parent / "prompts"
 
@@ -39,9 +39,11 @@ class Verifier:
     def __init__(self, backend: LLMBackend, cfg: dict):
         self.backend = backend
         self.cfg = cfg
+        self.log_prompts = bool(cfg.get("log_prompts", False))
         self.template = (PROMPT_DIR / "verifier.txt").read_text()
         self.disagreements = 0
         self.calls = 0
+        self.retries = 0
 
     def should_run(self, triage_level: str, top_confidence: float) -> bool:
         """Policy switch, exposed as decision variable `v` in Plan §11.2."""
@@ -75,13 +77,24 @@ class Verifier:
                             model=reply.model,
                             tokens={"prefill": reply.prefill_tokens,
                                     "decode": reply.decode_tokens})
+        env.retries = getattr(reply, "retries", 0)
+        self.retries += env.retries
+        env.prompt_tokens = reply.prefill_tokens or est_tokens(prompt)
+        if self.log_prompts:
+            env.prompt = prompt
+            env.raw_reply = reply.text
+
         if reply.status != "ok":
             env.status = reply.status
+            env.error = getattr(reply, "error", "")
+            env.payload = {"error": env.error or reply.status}
             return env
 
         payload = extract_json(reply.text)
         if not isinstance(payload, dict):
             env.status = "invalid_schema"
+            env.error = "no JSON found"
+            env.payload = {"error": "no JSON found"}
             return env
 
         env.payload = payload

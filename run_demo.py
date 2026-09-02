@@ -48,21 +48,29 @@ def main():
                     help="overrides llm.backend in the config")
     ap.add_argument("--ablate-text", action="store_true",
                     help="remove all notes (T8 modality ablation)")
+    ap.add_argument("--log-prompts", action="store_true",
+                    help="store the rendered prompt and raw model reply in "
+                         "every AgentEnvelope (large output; for debugging)")
+    ap.add_argument("--episodes", default=None,
+                    help="comma-separated episode ids to run (subset)")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--out", default="results")
     args = ap.parse_args()
 
     cfg = load_config(args.config, args.backend)
+    cfg.setdefault("agent", {})["log_prompts"] = args.log_prompts
     ep_dir = Path(cfg["paths"]["episodes"])
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if args.episode:
         targets = [ep_dir / args.episode]
+    elif args.episodes:
+        targets = [ep_dir / e.strip() for e in args.episodes.split(",") if e.strip()]
     elif args.all:
         targets = sorted(p for p in ep_dir.iterdir() if p.is_dir())
     else:
-        ap.error("give --episode <id> or --all")
+        ap.error("give --episode <id>, --episodes a,b,c, or --all")
 
     print(f"backend = {cfg['llm']['backend']}"
           f"{'  [TEXT ABLATED]' if args.ablate_text else ''}")

@@ -65,6 +65,7 @@ class LLMReply:
     decode_tokens: int = 0
     ttft_ms: float = 0.0            # time to first token, headline metric on device
     error: str = ""
+    retries: int = 0               # transient-failure retries spent on this call
 
 
 class LLMBackend:
@@ -192,15 +193,21 @@ class GeminiBackend(LLMBackend):
 
     name = "gemini"
 
-    def __init__(self, model: str = "gemini-2.0-flash",
+    def __init__(self, model: str = "gemini-flash-lite-latest",
                  api_key_env: str = "GOOGLE_API_KEY",
                  temperature: float = 0.1,
                  timeout_s: float = 30.0,
-                 json_mode: bool = True, **_):
+                 json_mode: bool = True,
+                 max_retries: int = 5,
+                 backoff_base_s: float = 2.0,
+                 backoff_cap_s: float = 60.0, **_):
         self.model = model
         self.temperature = temperature
         self.timeout_s = timeout_s
         self.json_mode = json_mode
+        self.max_retries = max_retries
+        self.backoff_base_s = backoff_base_s
+        self.backoff_cap_s = backoff_cap_s
         self.api_key = os.environ.get(api_key_env, "")
         if not self.api_key:
             raise RuntimeError(
@@ -209,6 +216,7 @@ class GeminiBackend(LLMBackend):
             )
 
     def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        import random
         import urllib.request
         import urllib.error
 
@@ -228,42 +236,69 @@ class GeminiBackend(LLMBackend):
         if self.json_mode:
             body["generationConfig"]["responseMimeType"] = "application/json"
 
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(body).encode(),
-            headers={"Content-Type": "application/json",
-                     "x-goog-api-key": self.api_key},
-            method="POST",
-        )
+        req_data = json.dumps(body).encode()
+        headers = {"Content-Type": "application/json",
+                   "x-goog-api-key": self.api_key}
 
-        t0 = time.perf_counter()
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
-                data = json.loads(resp.read().decode())
-        except urllib.error.HTTPError as e:
-            return LLMReply(text="", status="error", backend="cloud",
-                            model=self.model,
-                            latency_ms=(time.perf_counter() - t0) * 1000,
-                            error=f"HTTP {e.code}: {e.read()[:200]!r}")
-        except Exception as e:                                  # timeout, DNS, ...
-            return LLMReply(text="", status="timeout", backend="cloud",
-                            model=self.model,
-                            latency_ms=(time.perf_counter() - t0) * 1000,
-                            error=str(e))
+        # ---- retry loop: 429 (rate limit) and 5xx (transient server) and
+        #      network drops (timeout, SSL EOF) get exponential backoff with
+        #      jitter, honouring Retry-After when the server sends it. A 4xx
+        #      that is NOT 429 (e.g. 404 dead model, 400 bad request) is
+        #      permanent and returns immediately.
+        t_all = time.perf_counter()
+        retries = 0
+        last_err = "unknown"
+        for attempt in range(self.max_retries + 1):
+            t0 = time.perf_counter()
+            req = urllib.request.Request(url, data=req_data, headers=headers,
+                                         method="POST")
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                    data = json.loads(resp.read().decode())
+                break                                          # success
+            except urllib.error.HTTPError as e:
+                payload = e.read()[:300]
+                last_err = f"HTTP {e.code}: {payload!r}"
+                transient = e.code == 429 or 500 <= e.code < 600
+                if not transient or attempt == self.max_retries:
+                    return LLMReply(
+                        text="", status="error", backend="cloud",
+                        model=self.model, retries=retries,
+                        latency_ms=(time.perf_counter() - t_all) * 1000,
+                        error=last_err)
+                ra = e.headers.get("Retry-After") if e.headers else None
+                wait = (float(ra) if ra and str(ra).isdigit()
+                        else min(self.backoff_cap_s,
+                                 self.backoff_base_s * (2 ** attempt)))
+                wait += random.uniform(0, 0.5 * wait)
+            except Exception as e:                              # timeout, SSL, DNS
+                last_err = str(e)
+                if attempt == self.max_retries:
+                    return LLMReply(
+                        text="", status="timeout", backend="cloud",
+                        model=self.model, retries=retries,
+                        latency_ms=(time.perf_counter() - t_all) * 1000,
+                        error=last_err)
+                wait = min(self.backoff_cap_s,
+                           self.backoff_base_s * (2 ** attempt))
+                wait += random.uniform(0, 0.5 * wait)
+            retries += 1
+            time.sleep(wait)
 
-        latency = (time.perf_counter() - t0) * 1000
+        latency = (time.perf_counter() - t_all) * 1000
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except (KeyError, IndexError):
             # Safety filter or empty candidate. Treat as a schema failure so the
             # normal repair/fallback path handles it.
             return LLMReply(text="", status="error", backend="cloud",
-                            model=self.model, latency_ms=latency,
+                            model=self.model, latency_ms=latency, retries=retries,
                             error=f"no candidate: {json.dumps(data)[:200]}")
 
         usage = data.get("usageMetadata", {})
         return LLMReply(
             text=text, backend="cloud", model=self.model, latency_ms=latency,
+            retries=retries,
             prefill_tokens=usage.get("promptTokenCount", 0),
             decode_tokens=usage.get("candidatesTokenCount", 0),
             ttft_ms=0.0,   # not exposed by the non-streaming endpoint

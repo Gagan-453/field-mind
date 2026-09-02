@@ -202,7 +202,7 @@ class AgentEnvelope:
     """
     agent: str                                # "diagnostician" | "verifier"
     tick: int
-    status: str = "ok"                        # ok | invalid_schema | timeout | degraded
+    status: str = "ok"                        # ok | invalid_schema | timeout | error
     payload: dict[str, Any] = field(default_factory=dict)
     cited_facts: list[str] = field(default_factory=list)
     cited_cases: list[str] = field(default_factory=list)
@@ -210,6 +210,18 @@ class AgentEnvelope:
     backend: str = "unknown"                  # npu | gpu | cpu | cloud | mock
     model: str = "unknown"
     tokens: dict[str, int] = field(default_factory=lambda: {"prefill": 0, "decode": 0})
+    retries: int = 0                          # transient-failure retries this call
+    retrieved_cases: list[str] = field(default_factory=list)   # case ids, rank order, as prompted
+
+    # Debugging aids. `prompt_tokens` and `error` are ALWAYS filled (the
+    # scheduling study needs the prompt size; a failed call needs its reason).
+    # `prompt` and `raw_reply` are only filled when run with --log-prompts,
+    # because the full rendered prompt is ~1-3 kB and would bloat every
+    # runs_*.json by an order of magnitude on a normal run.
+    prompt_tokens: int = 0
+    error: str = ""
+    prompt: str = ""                          # rendered prompt, --log-prompts only
+    raw_reply: str = ""                       # unparsed model text, --log-prompts only
 
     def to_dict(self) -> dict:
         return asdict(self)

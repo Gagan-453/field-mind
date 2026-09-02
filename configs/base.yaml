@@ -20,11 +20,19 @@ llm:
   backend: mock
 
   gemini:
-    model: gemini-2.0-flash
+    # gemini-2.0-flash was decommissioned (HTTP 404 "no longer available",
+    # observed 2026-09-02) -- every call in the old runs_gemini.json errored and
+    # the pipeline silently fell back to the deterministic ranking. Switched to
+    # the lite alias, which is fast and non-"thinking" (no thoughtsTokenCount
+    # eating the maxOutputTokens budget, unlike gemini-3.6-flash).
+    model: gemini-flash-lite-latest
     api_key_env: GOOGLE_API_KEY     # export it; never put the key in this file
     temperature: 0.1
     timeout_s: 30
     json_mode: true                 # cloud stand-in for grammar-constrained decoding
+    max_retries: 5                  # 429 / 5xx / network drop: exp backoff + jitter
+    backoff_base_s: 2.0
+    backoff_cap_s: 60.0
 
   litert:
     mode: adb                       # adb (host drives board) | local (agent on board)

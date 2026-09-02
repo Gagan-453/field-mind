@@ -80,14 +80,23 @@ def validate(payload: dict) -> tuple[bool, str]:
     return True, ""
 
 
+def est_tokens(text: str) -> int:
+    """Cheap prompt-size estimate when the backend does not report one (a
+    failed call, or the device path before it parses litert's timing block).
+    ~4 chars/token is close enough for the scheduling study's bucketing."""
+    return (len(text) + 3) // 4
+
+
 class Diagnostician:
     def __init__(self, backend: LLMBackend, cfg: dict):
         self.backend = backend
         self.cfg = cfg
+        self.log_prompts = bool(cfg.get("log_prompts", False))
         self.template = _load("diagnostician.txt")
         self.repair = _load("repair.txt")
         self.parse_failures = 0
         self.calls = 0
+        self.retries = 0
 
     # -------------------------------------------------------------------
     def build_prompt(self, evidence: str, retrieved: dict,
@@ -157,9 +166,18 @@ class Diagnostician:
                             model=reply.model,
                             tokens={"prefill": reply.prefill_tokens,
                                     "decode": reply.decode_tokens})
+        env.retries = getattr(reply, "retries", 0)
+        self.retries += env.retries
+        env.prompt_tokens = reply.prefill_tokens or est_tokens(prompt)
+        env.retrieved_cases = [c.get("case_id") for c in retrieved.get("cases", [])]
+        if self.log_prompts:
+            env.prompt = prompt
+            env.raw_reply = reply.text
 
         if reply.status != "ok":
             env.status = reply.status          # timeout / error, recorded not hidden
+            env.error = getattr(reply, "error", "")
+            env.payload = {"error": env.error or reply.status}
             return env
 
         payload = extract_json(reply.text)
@@ -177,9 +195,15 @@ class Diagnostician:
             env.latency_ms += reply2.latency_ms
             env.tokens["prefill"] += reply2.prefill_tokens
             env.tokens["decode"] += reply2.decode_tokens
+            env.retries += getattr(reply2, "retries", 0)
+            self.retries += getattr(reply2, "retries", 0)
+            if self.log_prompts:
+                env.raw_reply = (env.raw_reply + "\n---REPAIR REPLY---\n"
+                                 + (reply2.text or ""))
 
         if not ok:
             env.status = "invalid_schema"
+            env.error = why
             env.payload = {"error": why}
             return env
 

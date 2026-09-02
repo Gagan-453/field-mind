@@ -146,6 +146,11 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                   f"{asmt.headline[:58]:58s} | {top}")
 
     wall = time.perf_counter() - t0
+    envs = [e for a in assessments for e in a.get("envelopes", [])]
+    ptoks = [e.get("prompt_tokens", 0) for e in envs if e.get("prompt_tokens")]
+    env_status = {}
+    for e in envs:
+        env_status[e["status"]] = env_status.get(e["status"], 0) + 1
     return {
         "episode_id": ep.id,
         "backend": cfg["llm"]["backend"],
@@ -161,5 +166,10 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
             ver.disagreements / max(1, ver.calls), 3),
         "deadline_miss_rate": round(
             sum(a["deadline_miss"] for a in assessments) / max(1, len(assessments)), 4),
+        "diag_calls": diag.calls,
+        "ver_calls": ver.calls,
+        "llm_retries": getattr(diag, "retries", 0) + getattr(ver, "retries", 0),
+        "mean_prompt_tokens": round(sum(ptoks) / len(ptoks), 1) if ptoks else 0,
+        "envelope_status_counts": env_status,
         "ablate_text": ablate_text,
     }
