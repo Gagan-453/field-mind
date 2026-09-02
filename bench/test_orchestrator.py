@@ -122,6 +122,102 @@ orch.checks.run = real_run
 
 
 # =====================================================================
+print("\nbug 1 -- FULL-EPISODE recovery: one injected fault must not change "
+      "any OTHER tick's state")
+# =====================================================================
+from fieldmind.agent.l4_diagnose import Diagnostician                 # noqa: E402
+from fieldmind.agent.l1_checks import CheckLayer                      # noqa: E402
+from datetime import datetime, timedelta                             # noqa: E402
+
+EP_NAME = "ep_A05_fcv_caught"          # develops a deviation, then recovers
+_EPOCH = datetime(2026, 8, 21, 6, 0, 0)
+
+
+def replay_states(inject_tick=None, kind=None):
+    """Replay EP_NAME through a fresh real agent; optionally inject a one-tick
+    fault. Returns the list of per-tick state strings."""
+    ep = Episode(ROOT / "data/episodes" / EP_NAME)
+    orch, asset, *_ = build_agent(CFG, ep.notes, ep.records)
+    wm = new_world_model(ep.id, asset.equipment)
+    tick_s = CFG["agent"]["tick_period_s"]
+    win = SensorWindow(window_min=60.0,
+                       sample_period_s=CFG["checks"]["sample_period_s"])
+
+    real_diag = orch.diag.run
+    real_checks = orch.checks.run
+
+    def diag_maybe_timeout(tick, *a, **k):
+        env = real_diag(tick, *a, **k)
+        if kind == "llm" and tick == inject_tick:
+            env.status = "timeout"
+            env.payload = {"error": "injected"}
+            env.cited_facts = []
+        return env
+
+    def checks_maybe_validity(window, tick, trusted, blowdown_tph=1.0):
+        facts = real_checks(window, tick, trusted, blowdown_tph)
+        if kind == "validity" and tick == inject_tick:
+            facts.append(Fact(id="FZ", check="VALIDITY", tags=["drum_pressure"],
+                              window=(tick, tick), value=0.0,
+                              detail="drum_pressure stuck (injected one tick)",
+                              severity="ALARM"))
+        return facts
+
+    orch.diag.run = diag_maybe_timeout
+    orch.checks.run = checks_maybe_validity
+
+    states = []
+    n = int(ep.duration_s // tick_s)
+    for kk in range(n):
+        for row in ep.samples_between(kk * tick_s, (kk + 1) * tick_s):
+            win.append(row["t"], row)
+        if not win.ready(5.0):
+            continue
+        ts = (_EPOCH + timedelta(seconds=(kk + 1) * tick_s)).isoformat()
+        states.append((kk, orch.tick(wm, win, kk, ts, now_s=(kk + 1) * tick_s).state))
+    return states, wm
+
+
+base_states, _ = replay_states()
+base_map = dict(base_states)
+# Inject at the FIRST DEVIATION tick: the diagnostician is running there, and
+# there are DEVIATION and (post-recovery) NORMAL ticks AFTER it -- those are
+# the ticks the latch used to swallow. ALARM ticks mask DEGRADED in
+# derive_state, so an injection point followed only by ALARM would not test
+# anything.
+dev_ticks = [k for k, s in base_states if s == "DEVIATION"]
+assert dev_ticks, "ep has no DEVIATION tick -- pick another episode"
+inj = dev_ticks[0]
+after = [(k, s) for k, s in base_states if k > inj]
+recoverable_after = [(k, s) for k, s in after if s in ("NORMAL", "DEVIATION")]
+assert recoverable_after, "no NORMAL/DEVIATION tick after injection -- weak test"
+
+llm_states, llm_wm = replay_states(inject_tick=inj, kind="llm")
+val_states, val_wm = replay_states(inject_tick=inj, kind="validity")
+
+llm_diff = [(k, base_map[k], s) for k, s in llm_states if base_map.get(k) != s]
+# the VALIDITY injection legitimately changes its OWN tick (VALIDITY fact is
+# severity ALARM), so allow a difference at exactly the injection tick.
+val_diff = [(k, base_map[k], s) for k, s in val_states
+            if base_map.get(k) != s and k != inj]
+
+check(f"one injected LLM timeout at tick {inj} (DEVIATION) changes NO other "
+      f"tick's state -- {len(recoverable_after)} NORMAL/DEVIATION ticks follow "
+      f"it that the latch would flip to DEGRADED",
+      llm_diff == [], f"diffs: {llm_diff[:8]}")
+check("...and wm.degraded_mode is clear at end of episode",
+      llm_wm.degraded_mode is None, f"({llm_wm.degraded_mode!r})")
+check(f"one transient VALIDITY fact at tick {inj} changes only that tick",
+      val_diff == [], f"diffs: {val_diff[:8]}")
+check("...and drum_pressure is back in trusted_tags at end of episode",
+      "drum_pressure" in val_wm.trusted_tags,
+      f"({sorted(val_wm.trusted_tags)})")
+check("...and no post-injection NORMAL/DEVIATION tick reads DEGRADED",
+      not any(s == "DEGRADED" for k, s in val_states if k > inj),
+      f"{[(k, s) for k, s in val_states if k > inj and s == 'DEGRADED'][:8]}")
+
+
+# =====================================================================
 print("\nbug 2 -- _merge keeps the deterministic (accumulated) confidence and "
       "does not drop carried hypotheses")
 # =====================================================================
