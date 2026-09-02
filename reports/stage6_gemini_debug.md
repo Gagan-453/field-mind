@@ -155,4 +155,83 @@ only because the LLM path was dead and the fallback was showing through.
 
 ## Part 3 — 6-episode subset, gemini vs mock
 
-*(filled in when the run completes)*
+### What happened to the run
+
+It **completed** (exit 0, both files written) but took **6 h 33 m**
+(15:29 → 22:05), not the ~30 min estimated. Cause: the Gemini free tier's
+**per-day request quota (~1,500 RPD)** ran out partway through. The
+`min_interval_s = 4.0` limiter handles the ~15 **RPM** limit but nothing tracks
+the daily one, so once the quota (this run + the earlier dead-model run's 141
+calls + a few probes) was spent, every request 429s and the retry loop burns
+~62 s per tick (5 backoffs, cap 60 s) before falling back to deterministic.
+
+| episode | wall | diag | ver | backoff-retries | ~HTTP reqs | envelope status |
+|---|---|---|---|---|---|---|
+| ep_N01_normal | 0 s | 0 | 0 | 0 | 0 | — (QUIET, no LLM) |
+| ep_N04_normal | 0 s | 0 | 0 | 0 | 0 | — |
+| **ep_A01_fcv_seize** | 626 s | 106 | 47 | **0** | 153 | 128 ok / 25 invalid_schema |
+| **ep_A05_fcv_caught** | 526 s | 87 | 42 | **0** | 129 | 129 ok |
+| ep_B01_tube_leak | **4551 s** | 128 | 75 | **245** | 448 | 106 ok / 48 invalid_schema / **49 error** |
+| ep_C01_wet_coal | **3463 s** | 43 | 0 | **215** | 258 | **43 error / 0 ok** |
+
+Totals: **~988 HTTP requests** (460 of them backoff-retries),
+**363 ok / 73 invalid_schema / 92 error** envelopes.
+**A01 and A05 ran clean; B01 is half rate-limited; C01 is entirely
+rate-limited out** (every diagnostician call errored → deterministic fallback
+every tick → T3 faithfulness fell to 0.73).
+
+### The comparison (mock is deterministic; only A01 / A05 are clean gemini data)
+
+| episode | backend | diag | ver | retries | parseF | verDisagree | mean prompt tok | T2 top1 | T3 faith |
+|---|---|---|---|---|---|---|---|---|---|
+| ep_A01_fcv_seize | **gemini** | 106 | 47 | 0 | **0.038** | **0.447** | **1530** | **0.377** | 1.000 |
+| ep_A01_fcv_seize | mock | 106 | 3 | 0 | 0.000 | 0.000 | 1882* | 0.208 | 1.000 |
+| ep_A05_fcv_caught | **gemini** | 87 | 42 | 0 | **0.034** | **0.405** | **1331** | **0.230** | 1.000 |
+| ep_A05_fcv_caught | mock | 87 | 11 | 0 | 0.000 | 0.000 | 1788* | 0.161 | 1.000 |
+| ep_B01_tube_leak | gemini | 128 | 75 | 245 | 0.008 | 0.333 | 1724 | 0.625 | 1.000 |
+| ep_B01_tube_leak | mock | 128 | 26 | 0 | 0.000 | 0.000 | 2112* | 0.680 | 1.000 |
+| ep_C01_wet_coal | gemini | 43 | 0 | 215 | 0.000† | 0.000† | 2049 | 0.000 | **0.731** |
+| ep_C01_wet_coal | mock | 43 | 0 | 0 | 0.000 | 0.000 | 2048* | 0.000 | 1.000 |
+| N01, N04 | both | 0 | 0 | 0 | — | — | — | — | 1.000 |
+
+\* mock `mean_prompt_tokens` is `est_tokens` (`len/4`); Gemini's real
+`promptTokenCount` runs **~15–25 % lower** (1530 vs 1882 on A01). The scheduling
+study should use the real count where available and treat `est_tokens` as an
+upper bound.
+† C01's diagnostician **never got an ok reply** (43/43 error), so `parseF` and
+`verDisagree` have no denominator — 0.000 here means "not measurable", not "no
+failures".
+
+Aggregate over the 6: `gemini Q1 0.754 / Q2_top1 0.308 / Q2_top3 0.317 /
+Q3 0.955 / Q4_prec 0.444` vs `mock Q1 0.754 / Q2_top1 0.262 / Q2_top3 0.394 /
+Q3 1.0 / Q4_prec 0.379`. **S7 deadline-miss rate 0.090 → C1 FAILS** on gemini —
+the 60–85 s rate-limited ticks blow the 200 ms hard-stage budget (the HARD
+stages themselves are fine; the SOFT LLM stage stall propagates into
+`tick_latency_ms`). This is a measurement artifact of the free tier, not the
+pipeline.
+
+### What the clean episodes (A01, A05) show
+
+- **Gemini beats mock on T2 top-1** where RCA-01 is retrievable: A01
+  0.377 vs 0.208, A05 0.230 vs 0.161. Real reasoning over the retrieved set
+  helps, consistent with the tick-49 single-call result in Part 2.
+- **The verifier does its job on a real backend**: disagreement 0.40–0.45
+  (mock's verifier always agrees, so mock's 0.000 is structural). ~40 % of
+  verifier calls flag something — that rate is now a measurable quantity.
+- **Parse-failure rate ~3–4 %** on `gemini-flash-lite-latest` with
+  `responseMimeType: application/json` and one repair retry. Non-zero — the
+  repair path and deterministic fallback are load-bearing, not decorative.
+- Real prompt token count **~1.3–1.7 k** per diagnostician call (mock's
+  `len/4` estimate over-reads).
+
+### Not done / needs a decision
+
+- **B01 and C01 gemini numbers are not usable** — re-run needed after the
+  daily quota resets (~midnight Pacific) or on a paid key. Do **not** re-run on
+  the same key today; it will just rate-limit again.
+- **`run_demo` writes only at the end.** A 6.5 h run that could have been killed
+  at any point for zero output. A one-line change to dump `runs_*.json`
+  per-episode would make cloud runs recoverable. Flagged, not made.
+- A **per-day request budget** in `GeminiBackend` (stop calling after N
+  requests, return `error` immediately) would fail fast instead of burning
+  62 s/tick once the quota is gone.
