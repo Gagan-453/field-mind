@@ -58,16 +58,28 @@ class Orchestrator:
              now_s: float) -> Assessment:
         t_tick = time.perf_counter()
 
+        # Clear any TRANSIENT degraded marker from a previous tick. The only
+        # persistent degraded state is the degradation ladder (rung >= 1),
+        # which degrade()/recover() own; a one-off LLM timeout on an earlier
+        # tick must NOT latch DEGRADED for the rest of the episode (known bug 1
+        # -- one failed call turned ep_N01_normal into 56 false positives).
+        wm.degraded_mode = (None if self.rung == 0
+                            else f"rung{self.rung}:{self.LADDER[self.rung]}")
+
         # ---------------- L1: deterministic checks (HARD stage) ----------
         t0 = time.perf_counter()
         facts = self.checks.run(window, tick_no, wm.trusted_tags)
         hard_ms = (time.perf_counter() - t0) * 1000
 
-        # A tag flagged by VALIDITY leaves the trusted set. Any balance that
-        # depended on it is reported as SUSPENDED, never silently skipped.
-        for f in facts:
-            if f.check == "VALIDITY":
-                wm.trusted_tags.discard(f.tags[0])
+        # Trust is recomputed from THIS tick's VALIDITY facts, not latched: a
+        # tag whose instrument fault has cleared (transient stuck / spike) is
+        # trusted again next tick. A genuinely frozen instrument keeps emitting
+        # a VALIDITY fact every tick (_validity runs over every tag regardless
+        # of trust), so it stays out. Any balance that needs an untrusted tag
+        # is still reported SUSPENDED by L1, never silently skipped.
+        validity_tags = {f.tags[0] for f in facts
+                         if f.check == "VALIDITY" and f.tags}
+        wm.trusted_tags = set(TAGS) - validity_tags
 
         # Cache latest values for the trip-prediction extrapolation in triage.
         for tag in TAGS:
@@ -248,13 +260,81 @@ class Orchestrator:
     @staticmethod
     def _merge(deterministic: dict, model: dict) -> dict:
         """Model ranking wins on ORDER and WORDING; the deterministic layer
-        wins on which fact ids are cited. That split is the whole design: the
-        model is allowed to reason, not to assert evidence."""
-        out = dict(model)
-        out.setdefault("unexplained", [])
-        out["unexplained"] += deterministic.get("unexplained", [])
-        if not out.get("hypotheses"):
-            out["hypotheses"] = deterministic["hypotheses"]
+        wins on CONFIDENCE and on which fact ids are cited. That split is the
+        whole design: the model is allowed to reason, not to assert evidence,
+        and not to overwrite the cross-tick belief accumulator.
+
+        Known bug 2: the old body did ``out = dict(model)``, so a single LLM
+        reply replaced the accumulated hypothesis list wholesale and the
+        log-odds carried across ticks was thrown away -- symptom was ~9.5
+        distinct actions proposed per episode from a 16-action catalogue.
+        """
+        det_hyps = deterministic.get("hypotheses", []) or []
+        det_by_cause = {h.get("cause"): h for h in det_hyps}
+        det_by_case = {h.get("case_ref"): h for h in det_hyps if h.get("case_ref")}
+
+        merged: list[dict] = []
+        matched_causes: set = set()
+        for mh in model.get("hypotheses", []) or []:
+            dh = (det_by_cause.get(mh.get("cause"))
+                  or det_by_case.get(mh.get("case_ref")))
+            if dh is not None:
+                matched_causes.add(dh.get("cause"))
+                merged.append({
+                    # model wins: position in this list, wording, discriminator,
+                    # and which of THIS tick's fact ids it cites (fact ids are
+                    # tick-local; L4 already validated these via check_citations
+                    # or this merge would not have been called).
+                    "cause": mh.get("cause") or dh.get("cause"),
+                    "discriminator": (mh.get("discriminator")
+                                      or dh.get("discriminator", "")),
+                    "supports": list(mh.get("supports", []))[:6],
+                    # deterministic wins: the cross-tick accumulated confidence.
+                    "confidence": float(dh.get("confidence", 0.0)),
+                    "case_ref": dh.get("case_ref") or mh.get("case_ref"),
+                })
+            else:
+                # A model-only idea: allowed to be raised, but it has not
+                # accumulated any belief -- cap its confidence.
+                merged.append({
+                    "cause": mh.get("cause", "unknown"),
+                    "discriminator": mh.get("discriminator", ""),
+                    "confidence": min(float(mh.get("confidence", 0.3)), 0.5),
+                    "supports": list(mh.get("supports", []))[:6],
+                    "case_ref": mh.get("case_ref"),
+                    "model_only": True,
+                })
+
+        # Deterministic hypotheses the model did not mention are NOT dropped:
+        # the accumulator persists across ticks and one tick where the LLM
+        # omitted a hypothesis is not a reason to retire it. They carry no
+        # citation for this tick (their accumulated supports are stale
+        # tick-local ids) -- confidence alone keeps them ranked.
+        for dh in det_hyps:
+            if dh.get("cause") in matched_causes:
+                continue
+            if any(m["cause"] == dh.get("cause") for m in merged):
+                continue
+            merged.append({
+                "cause": dh.get("cause"),
+                "discriminator": dh.get("discriminator", ""),
+                "confidence": float(dh.get("confidence", 0.0)),
+                "supports": [],
+                "case_ref": dh.get("case_ref"),
+                "carried": True,
+            })
+
+        if not merged:
+            merged = [{"cause": h.get("cause"), "confidence": float(h.get("confidence", 0.0)),
+                       "supports": [], "case_ref": h.get("case_ref"),
+                       "discriminator": h.get("discriminator", "")} for h in det_hyps]
+
+        out = {
+            "headline": model.get("headline") or deterministic.get("headline"),
+            "unexplained": (list(model.get("unexplained", []))
+                            + list(deterministic.get("unexplained", []))),
+            "hypotheses": merged,
+        }
         for i, h in enumerate(out["hypotheses"]):
             h["rank"] = i + 1
             h["confidence"] = float(h["confidence"])
