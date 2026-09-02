@@ -98,7 +98,7 @@ class Orchestrator:
 
         # ---------------- L3: retrieval ----------------------------------
         slopes = self._slopes(window)
-        signature = build_signature(facts, slopes)
+        signature = build_signature(facts, slopes, self.checks.bands)
         retrieved = self.retriever.retrieve(facts, signature, now_s, level,
                                             operator_query=self.operator_query)
 

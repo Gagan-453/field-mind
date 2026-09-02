@@ -78,12 +78,25 @@ check("least-squares slope recovers a known ramp",
       abs(_slope_per_min([i * 0.5 for i in range(60)], 5.0) - 6.0) < 1e-6)
 
 print("\nbanding")
-check("small movement is SLOW, not FLAT (family E depends on this)",
-      direction_and_band("bed_temp_avg", 0.08) == ("UP", "SLOW"))
-check("true stillness is FLAT",
-      direction_and_band("bed_temp_avg", 0.001) == ("FLAT", "-"))
+BANDS = CFG["bands"]
+# Stage-6 deadbands: FLAT means "not moving more than a healthy plant does".
+# bed_temp_avg deadband is 2.1 degC/min (p99.7 of the no-fault 10-min slope --
+# the OU load driver swings the un-normalised bed slope that hard). A 0.5
+# degC/min bed drift is inside healthy variation and reads FLAT; family E's
+# ~0.2 degC/min fouling drift is well inside it (Stage-4 finding: family E is
+# not slope-detectable).
+check("healthy-plant bed drift (0.5 degC/min) reads FLAT",
+      direction_and_band("bed_temp_avg", 0.5, BANDS) == ("FLAT", "-"))
+check("movement just past the deadband is SLOW, not FLAT",
+      direction_and_band("bed_temp_avg", 3.0, BANDS) == ("UP", "SLOW"))
+check("mid-band bed movement is MED",
+      direction_and_band("bed_temp_avg", 15.0, BANDS) == ("UP", "MED"))
 check("large movement is FAST",
-      direction_and_band("drum_level", -0.9) == ("DOWN", "FAST"))
+      direction_and_band("drum_level", -0.9, BANDS) == ("DOWN", "FAST"))
+check("module BAND_EDGES fallback mirrors configs/base.yaml checks.bands",
+      all(tuple(BANDS[t]) == tuple(v)
+          for t, v in __import__("fieldmind.agent.l1_symbolize",
+                                 fromlist=["BAND_EDGES"]).BAND_EDGES.items()))
 
 print("\nLIMIT")
 # Ramp INTO the condition. Teleporting a tag to its alarm value in one sample

@@ -29,28 +29,37 @@ BANDS = ["SLOW", "MED", "FAST"]
 
 # Per-tag band edges in tag units per minute: (deadband, slow/med, med/fast).
 #
-#   |slope| < deadband        -> FLAT   (genuinely not moving)
-#   deadband..lo              -> SLOW   (drifting; family E lives here)
+#   |slope| < deadband        -> FLAT   (not moving more than a healthy plant)
+#   deadband..lo              -> SLOW   (drifting)
 #   lo..hi                    -> MED
 #   >= hi                     -> FAST
 #
-# The SLOW band is not optional. Several case signatures are defined by slow
-# movement (RCA-04 tube leak, RCA-09 fouling drift), and without a SLOW band
-# those triples can never match anything, which silently zeroes out two whole
-# fault families.
+# CONFIG IS AUTHORITATIVE: configs/base.yaml checks.bands. This dict is only
+# the device fallback for a direction_and_band() call made without bands (the
+# unit tests, mostly) and must mirror the config. Re-derived in Stage 6 by the
+# Stage-4 method -- deadband = p99.7 of the no-fault 10-min |slope|
+# distribution (seeds 900-911), so >=99.7% of no-fault ticks read FLAT;
+# slow/med and med/fast keep the old per-tag multiple of the deadband.
+# reports/stage6_band_edges.md.
 BAND_EDGES = {
-    "drum_level":      (0.03, 0.15, 0.50),     # %/min
-    "feed_water_flow": (0.05, 0.30, 1.00),     # TPH/min
-    "steam_flow":      (0.05, 0.30, 1.00),
-    "drum_pressure":   (0.004, 0.02, 0.08),    # kg/cm2/min
-    "bed_temp_avg":    (0.03, 0.15, 0.50),     # degC/min
-    "ms_temperature":  (0.04, 0.20, 0.80),
+    "drum_level":      (0.022, 0.11, 0.37),    # %/min
+    "feed_water_flow": (0.46, 2.8, 9.2),       # TPH/min
+    "steam_flow":      (0.46, 2.8, 9.2),
+    "drum_pressure":   (0.16, 0.8, 3.2),       # kg/cm2/min
+    "bed_temp_avg":    (2.1, 10.0, 35.0),      # degC/min
+    "ms_temperature":  (0.6, 3.0, 12.0),
 }
 
 
-def direction_and_band(tag: str, slope: float) -> tuple[str, str]:
-    """Map a numeric slope onto (UP|DOWN|FLAT, SLOW|MED|FAST|-)."""
-    dead, lo, hi = BAND_EDGES.get(tag, (0.03, 0.15, 0.50))
+def direction_and_band(tag: str, slope: float,
+                       bands: dict | None = None) -> tuple[str, str]:
+    """Map a numeric slope onto (UP|DOWN|FLAT, SLOW|MED|FAST|-).
+
+    `bands` is configs/base.yaml checks.bands (list-per-tag). Falls back to
+    the module BAND_EDGES mirror when not supplied.
+    """
+    edges = (bands or {}).get(tag) or BAND_EDGES.get(tag, (0.022, 0.11, 0.37))
+    dead, lo, hi = edges
     mag = abs(slope)
     if mag < dead:
         return "FLAT", "-"
@@ -58,7 +67,8 @@ def direction_and_band(tag: str, slope: float) -> tuple[str, str]:
     return ("UP" if slope > 0 else "DOWN"), band
 
 
-def build_signature(facts: list[Fact], slopes: dict[str, float]) -> dict:
+def build_signature(facts: list[Fact], slopes: dict[str, float],
+                    bands: dict | None = None) -> dict:
     """Sparse signature over (tag, direction, band) -> weight.
 
     Two sources feed it:
@@ -69,7 +79,7 @@ def build_signature(facts: list[Fact], slopes: dict[str, float]) -> dict:
     """
     sig: dict[tuple[str, str, str], float] = {}
     for tag, slope in slopes.items():
-        d, b = direction_and_band(tag, slope)
+        d, b = direction_and_band(tag, slope, bands)
         # FLAT observations carry less weight than movement, but not zero.
         # FLAT is weak evidence: on a healthy plant nearly everything is flat,
         # so a case is not distinguished by predicting flatness. Movement is

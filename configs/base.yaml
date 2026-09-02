@@ -128,6 +128,32 @@ checks:
     ms_temperature: {threshold: 0.20,  sustained_min: 40.0, direction: up,   unit: "degC/min", severity: INFO}
     drum_pressure:  {threshold: -0.01, sustained_min: 40.0, direction: down, unit: "kg/cm2/min", severity: INFO}
 
+  # Signature magnitude bands, per tag: [deadband, slow/med, med/fast], in tag
+  # units per minute, applied to the 10-min least-squares slope the signature
+  # is built from (orchestrator._slopes -> l1_symbolize.direction_and_band).
+  #     |slope| < deadband -> FLAT   (not moving more than a healthy plant does)
+  #     deadband .. slow/med -> SLOW
+  #     slow/med .. med/fast -> MED
+  #     >= med/fast          -> FAST
+  # Was hard-coded in l1_symbolize.py and MISSED by the Stage-4 threshold
+  # retune (which only touched this file). Re-derived here by the Stage-4
+  # method: deadband = p99.7 of the no-fault 10-min |slope| distribution over
+  # the 12 fresh-seeded no-fault runs (seeds 900-911, disjoint from N01-N06),
+  # so >=99.7% of no-fault ticks read FLAT per tag (measured 0.9968-0.9976,
+  # was 0.065-0.33 for bed/pressure/ms/feed under the old edges -- the old
+  # deadbands were the noise floor of the PRE-regeneration physics, ~20-40x
+  # too small, so a healthy plant was coded as moving on 4 of 6 tags every
+  # tick). slow/med and med/fast keep each tag's old multiple of its deadband
+  # (5-6x and 16.7-20x) rescaled onto the new deadband -- the old edges were
+  # themselves just deadband multiples. Report: reports/stage6_band_edges.md.
+  bands:
+    drum_level:      [0.022, 0.11, 0.37]    # %/min
+    feed_water_flow: [0.46,  2.8,  9.2]     # TPH/min
+    steam_flow:      [0.46,  2.8,  9.2]     # TPH/min
+    drum_pressure:   [0.16,  0.8,  3.2]     # kg/cm2/min
+    bed_temp_avg:    [2.1,   10.0, 35.0]    # degC/min
+    ms_temperature:  [0.6,   3.0,  12.0]    # degC/min
+
   balance:
     # level_gain: was 0.22 (an invented literal, DERIVATIONS 3.1); now matches
     #   the simulator's geometry.K_level(66 kg/cm2(g)) so the L1 water balance
