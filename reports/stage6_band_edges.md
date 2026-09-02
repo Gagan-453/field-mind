@@ -218,29 +218,56 @@ verbatim; provenance is unchanged from the original `l1_symbolize.BAND_EDGES`
 
 ## Unresolved — written into the report per the working agreement
 
-1. **The band edges are still a coarse hand-set vocabulary with no
-   derivation.** Moving them to config did not give them provenance. The
-   criterion-based derivation (no-fault ≥ 85 % FLAT + every fault family's
-   headline tag moving) is defensible and the four numbers above show it works
-   on the physics — it fails only the **mock** `Q2_top1`, which is a per-tick
-   count over a backend that does not reason. The 2×2 (above) tested whether the
-   case labels' band granularity is uncalibrated on both sides and should leave
-   the matcher: it should **not** — direction-only matching lowers `Q2_top1` in
-   both band regimes, and no {criterion bands, direction-only} combination beats
-   the status-quo 0.334. **Decision for the advisor:** the criterion bands fix
-   the FCV/RCA-01 cluster (offline rank 1/1/1/1) but degrade the mock aggregate
-   because families B/C/D lose noise-driven matches. Resolving it needs a
-   retrieval metric that is not a mock per-tick top-1 (aggregated-signature
-   rank, or the Stage-5 cluster-top-1 / discriminator-accuracy). Until then the
-   Stage-5 bands stand and a healthy plant reads as moving on 4 of 6 tags.
+1. **The deadbands were not the problem; the case signatures' band LABELS are.**
+   (Advisor item.) The 2×2 rejected the "drop band matching" idea — bands carry
+   real information — but it also isolated where the aggregate loss comes from.
+   Criterion bands give **RCA-01 offline rank 1 on all four FCV episodes** (was
+   3 / 8 / 1 / 7): they fix the single most important case in the library. The
+   aggregate `Q2_top1` falls anyway because **~9 of the 13 library case
+   signatures carry `SLOW`/`MED`/`FAST` labels extracted from narrative prose**
+   ("rose sharply" → `FAST`, "gradual drift" → `SLOW`) that **no episode can
+   reach under honest deadbands** — the stale deadbands only "matched" them by
+   also firing on healthy wander (~7.7 noise triples per no-fault episode). The
+   fix is one of:
+   - **re-derive each case's band labels from what the simulator actually
+     produces for that mechanism** (measure the post-onset slope percentiles per
+     tag for the episode(s) that instantiate the case, assign the label from the
+     band those percentiles fall in) — this touches `case_library.json`, so it
+     needs advisor sign-off and a note that the label then reflects *our
+     simulator*, not the PDF; **or**
+   - **make band matching soft** — credit an adjacent-band pair partially
+     (`SLOW`↔`MED` and `MED`↔`FAST` at, say, 0.5) instead of exact-triple only,
+     so a fault that lands one band off its label is not scored as a total miss.
+   Either removes the dependence on an uncalibrated granularity without dropping
+   the (real) directional + magnitude signal.
 
-2. **If the criterion bands are ever adopted, bed must be load-normalised only
+2. **HIGH PRIORITY — the offline coverage tool disagrees with the live
+   harness, and every Stage 5 / Stage 6 coverage conclusion rests on the
+   offline tool.** (Record only — not investigated this pass.)
+   `mock Q2_top1 = 0.173` over 17 scored episodes is ≈ **3** correct episodes.
+   But the offline tool reports **4 FCV episodes at RCA-01 rank 1** under the
+   same criterion bands, which alone would be `4/17 ≈ 0.235` — and that is
+   before any other family contributes. The two tools are measuring **different
+   objects**: the offline tool aggregates the signature over the *whole
+   episode* (the union of every triple ever seen post-onset, persistence ≥ 0.15)
+   and matches once; the live agent matches **per tick** on that tick's
+   signature, k = 4, then the mock re-ranks. A per-episode union signature is
+   denser and more stable than any single tick's, so the offline rank is
+   systematically more favourable. **This needs settling before the Stage 5 and
+   Stage 6 coverage conclusions are trusted** — including "RCA-01 borderline",
+   the cluster table's episode→case retrievals, and every "reproduces / does not
+   reproduce" verdict, all of which are offline-tool outputs. The likely
+   resolution is to make the offline tool replay per-tick and report the
+   per-tick top-1 / top-3 the harness would, keeping the aggregated view only as
+   a secondary diagnostic.
+
+3. **If the criterion bands are ever adopted, bed must be load-normalised only
    in the rising direction** (DERIVATIONS §9.1). As measured, normalising the
    family C bed slope flips it from DOWN (matches RCA-06/14) to ~flat/UP. A
    one-sided normalisation (`min(0, raw)` style, or require `steam_flow` flat)
    avoids it; a symmetric one does not.
 
-3. **`ms_temperature` is not load-driven** (no-fault `slope(ms) ~ slope(steam)`
+4. **`ms_temperature` is not load-driven** (no-fault `slope(ms) ~ slope(steam)`
    R² = 0.02) — normalising it does nothing, so it would stay raw. Recorded so
    the asymmetry with bed is not read as an oversight.
 
