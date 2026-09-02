@@ -848,3 +848,36 @@ episodes were regenerated (`state_timeline_load_coef` = 2.43).
   choice. See `reports/stage4_regeneration.md` disagreement 1.
 
 The new value and R2 go in the before/after report and here on completion.
+
+### 9.1 Raw vs load-normalised bed slope in the SYMBOLIZER  *(stage 6, 2026-09-02)*
+
+The case signatures in `data/kb/case_library.json` were transcribed from
+`docs/Boiler_Failure_Case_Studies_RCA.pdf`, which describes bed temperature **as
+an engineer reads the trend on the DCS - raw**, with load whatever it happened
+to be. `l1_symbolize` builds its `bed_temp_avg` triple from
+`orchestrator._slopes`, which as of stage 6 is the **raw** 10-min slope.
+
+Stage 6 tried banding it on the **load-normalised** slope
+(`slope(bed) - load_coef*slope(steam)`, coef 2.43, the §9 quantity) so the
+descriptor deadband would not have to clear the load-following component of the
+no-fault bed wander (OLS `slope(bed) ~ slope(steam)` R^2 0.37 on the no-fault
+10-min window). It was reverted (mock `Q2_top1` 0.334 -> 0.173), but the
+finding stands and is recorded here:
+
+- **Raw and normalised agree at steady load** and diverge when load moves.
+- **They can differ in SIGN under a moving load.** Family C (fuel cap ->
+  pressure sag -> turbine throttles -> `slope(steam) < 0`): the normalisation
+  term `-coef*slope(steam)` is then **positive** and can push a genuinely
+  falling bed toward flat or up. Measured on `ep_C02_feeder_trip`: raw bed
+  slope mean **-0.253 degC/min** (falling, matches RCA-06 / RCA-14 `bed DOWN`),
+  load-normalised mean **+0.044 degC/min** (rising - wrong sign). `ep_C01`
+  -0.135 -> -0.019; `ep_C05` -0.211 -> -0.053 (both normalise toward flat).
+  This is the same inversion `_load_normalised_bed_slope` structurally avoids by
+  only ever testing it against a **positive** rise threshold (family E / D
+  drift), never using it to establish a DOWN direction.
+- If bed normalisation is revisited for the symbolizer, it must be gated to the
+  rising case, or `steam_flow` must itself be flat, or the family C bed triple
+  will contradict the RCA case it is meant to match. **Do not adjust the case
+  signatures to fit a normalised symbolizer** - the PDF is the reference.
+
+Full numbers: `reports/stage6_band_edges.md`.

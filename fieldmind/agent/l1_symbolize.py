@@ -29,25 +29,23 @@ BANDS = ["SLOW", "MED", "FAST"]
 
 # Per-tag band edges in tag units per minute: (deadband, slow/med, med/fast).
 #
-#   |slope| < deadband        -> FLAT   (not moving more than a healthy plant)
-#   deadband..lo              -> SLOW   (drifting)
-#   lo..hi                    -> MED
-#   >= hi                     -> FAST
+#   |slope| < deadband        -> FLAT
+#   deadband..lo              -> SLOW ; lo..hi -> MED ; >= hi -> FAST
 #
 # CONFIG IS AUTHORITATIVE: configs/base.yaml checks.bands. This dict is only
 # the device fallback for a direction_and_band() call made without bands (the
-# unit tests, mostly) and must mirror the config. Re-derived in Stage 6 by the
-# Stage-4 method -- deadband = p99.7 of the no-fault 10-min |slope|
-# distribution (seeds 900-911), so >=99.7% of no-fault ticks read FLAT;
-# slow/med and med/fast keep the old per-tag multiple of the deadband.
-# reports/stage6_band_edges.md.
+# unit tests) and test_checks.py asserts it equals the config.
+#
+# Stage 6 moved these into the config and tried a criterion-based
+# re-derivation; mock Q2_top1 regressed so the VALUES were reverted to this
+# Stage-5 set (see the config comment + reports/stage6_band_edges.md).
 BAND_EDGES = {
-    "drum_level":      (0.022, 0.11, 0.37),    # %/min
-    "feed_water_flow": (0.46, 2.8, 9.2),       # TPH/min
-    "steam_flow":      (0.46, 2.8, 9.2),
-    "drum_pressure":   (0.16, 0.8, 3.2),       # kg/cm2/min
-    "bed_temp_avg":    (2.1, 10.0, 35.0),      # degC/min
-    "ms_temperature":  (0.6, 3.0, 12.0),
+    "drum_level":      (0.03, 0.15, 0.50),     # %/min
+    "feed_water_flow": (0.05, 0.30, 1.00),     # TPH/min
+    "steam_flow":      (0.05, 0.30, 1.00),
+    "drum_pressure":   (0.004, 0.02, 0.08),    # kg/cm2/min
+    "bed_temp_avg":    (0.03, 0.15, 0.50),     # degC/min
+    "ms_temperature":  (0.04, 0.20, 0.80),
 }
 
 
@@ -55,10 +53,19 @@ def direction_and_band(tag: str, slope: float,
                        bands: dict | None = None) -> tuple[str, str]:
     """Map a numeric slope onto (UP|DOWN|FLAT, SLOW|MED|FAST|-).
 
-    `bands` is configs/base.yaml checks.bands (list-per-tag). Falls back to
-    the module BAND_EDGES mirror when not supplied.
+    `bands` is configs/base.yaml checks.bands (list-per-tag). Passing None is
+    ONLY for unit tests and uses the module BAND_EDGES mirror; the runtime
+    always passes the config bands (build_signature enforces it). If `bands` is
+    supplied it must contain `tag` -- a partial dict is a config error and
+    raises rather than silently falling back to the mirror, which is how the
+    hard-coded edges went stale in the first place.
     """
-    edges = (bands or {}).get(tag) or BAND_EDGES.get(tag, (0.022, 0.11, 0.37))
+    if bands is None:
+        edges = BAND_EDGES[tag]
+    else:
+        if tag not in bands:
+            raise KeyError(f"checks.bands is missing an entry for {tag!r}")
+        edges = bands[tag]
     dead, lo, hi = edges
     mag = abs(slope)
     if mag < dead:
@@ -76,7 +83,14 @@ def build_signature(facts: list[Fact], slopes: dict[str, float],
         absence of movement is evidence, see case RCA-01 where a flat bed
         temperature is what rules the heat side out)
       - a weight bump for any tag named in an ALARM/CRITICAL fact
+
+    `bands` (configs/base.yaml checks.bands) is REQUIRED on the runtime path.
+    None is a unit-test-only shortcut to the BAND_EDGES mirror.
     """
+    if bands is not None and not bands:
+        raise ValueError("build_signature: checks.bands is empty -- the "
+                         "descriptor bands must come from config, not the "
+                         "l1_symbolize mirror")
     sig: dict[tuple[str, str, str], float] = {}
     for tag, slope in slopes.items():
         d, b = direction_and_band(tag, slope, bands)

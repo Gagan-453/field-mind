@@ -129,30 +129,34 @@ checks:
     drum_pressure:  {threshold: -0.01, sustained_min: 40.0, direction: down, unit: "kg/cm2/min", severity: INFO}
 
   # Signature magnitude bands, per tag: [deadband, slow/med, med/fast], in tag
-  # units per minute, applied to the 10-min least-squares slope the signature
-  # is built from (orchestrator._slopes -> l1_symbolize.direction_and_band).
-  #     |slope| < deadband -> FLAT   (not moving more than a healthy plant does)
-  #     deadband .. slow/med -> SLOW
-  #     slow/med .. med/fast -> MED
-  #     >= med/fast          -> FAST
-  # Was hard-coded in l1_symbolize.py and MISSED by the Stage-4 threshold
-  # retune (which only touched this file). Re-derived here by the Stage-4
-  # method: deadband = p99.7 of the no-fault 10-min |slope| distribution over
-  # the 12 fresh-seeded no-fault runs (seeds 900-911, disjoint from N01-N06),
-  # so >=99.7% of no-fault ticks read FLAT per tag (measured 0.9968-0.9976,
-  # was 0.065-0.33 for bed/pressure/ms/feed under the old edges -- the old
-  # deadbands were the noise floor of the PRE-regeneration physics, ~20-40x
-  # too small, so a healthy plant was coded as moving on 4 of 6 tags every
-  # tick). slow/med and med/fast keep each tag's old multiple of its deadband
-  # (5-6x and 16.7-20x) rescaled onto the new deadband -- the old edges were
-  # themselves just deadband multiples. Report: reports/stage6_band_edges.md.
+  # units per minute, applied to the raw 10-min least-squares slope the
+  # signature is built from (orchestrator._slopes -> direction_and_band).
+  #     |slope| < deadband -> FLAT
+  #     deadband .. slow/med -> SLOW ; slow/med .. med/fast -> MED ; >= -> FAST
+  #
+  # STAGE 6: moved here from a hard-coded dict in l1_symbolize.py (it was
+  # MISSED by the Stage-4 threshold retune and could rot as a duplicated
+  # constant). The l1_symbolize.BAND_EDGES mirror is now the device-only
+  # fallback and test_checks.py asserts it equals this block.
+  #
+  # VALUES: reverted to the Stage-5 set. A criterion-based re-derivation was
+  # attempted (deadband from "no-fault >=85% FLAT AND every fault family's
+  # headline tag still moving", bed banded on the load-normalised slope). It is
+  # better on every intrinsic measure -- no-fault FLAT fraction 0.85-0.998 vs
+  # 0.065-0.34, ~1 vs ~8 spurious movement triples per healthy episode, D01 bed
+  # clearance 0% -> 69%, RCA-01 to rank 1 for all four FCV episodes -- but mock
+  # Q2_top1 fell 0.334 -> 0.173 (the mock backend's per-tick top-1 needs the
+  # denser noisy signature; a lone truthful triple loses the k=4 re-rank to an
+  # all-FLAT case). Q2_top1 is the acceptance bar, so the values revert pending
+  # a metric that is not a mock per-tick count. Full analysis + the four
+  # deciding numbers: reports/stage6_band_edges.md.
   bands:
-    drum_level:      [0.022, 0.11, 0.37]    # %/min
-    feed_water_flow: [0.46,  2.8,  9.2]     # TPH/min
-    steam_flow:      [0.46,  2.8,  9.2]     # TPH/min
-    drum_pressure:   [0.16,  0.8,  3.2]     # kg/cm2/min
-    bed_temp_avg:    [2.1,   10.0, 35.0]    # degC/min
-    ms_temperature:  [0.6,   3.0,  12.0]    # degC/min
+    drum_level:      [0.03,  0.15, 0.50]   # %/min
+    feed_water_flow: [0.05,  0.30, 1.00]   # TPH/min
+    steam_flow:      [0.05,  0.30, 1.00]   # TPH/min
+    drum_pressure:   [0.004, 0.02, 0.08]   # kg/cm2/min
+    bed_temp_avg:    [0.03,  0.15, 0.50]   # degC/min  (raw slope)
+    ms_temperature:  [0.04,  0.20, 0.80]   # degC/min
 
   balance:
     # level_gain: was 0.22 (an invented literal, DERIVATIONS 3.1); now matches

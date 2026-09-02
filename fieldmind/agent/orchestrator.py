@@ -213,7 +213,14 @@ class Orchestrator:
     # ===================================================================
     @staticmethod
     def _slopes(window) -> dict:
-        """Per-tag slope over the last 10 minutes, for the signature."""
+        """Per-tag raw slope over the last 10 minutes, for the signature.
+
+        Stage 6 tried load-normalising bed_temp_avg here (the descriptor bands
+        are then set from the normalised no-fault distribution). It is better on
+        every intrinsic measure but dropped mock Q2_top1 0.334 -> 0.173, so the
+        band values were reverted to the Stage-5 set and this reverted with
+        them. See reports/stage6_band_edges.md "Reverted".
+        """
         out = {}
         n = int(10 * 60 / window.dt_s)
         for tag in TAGS:

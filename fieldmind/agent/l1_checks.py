@@ -110,8 +110,9 @@ class CheckLayer:
         # Long-horizon drift: the ONLY thing that catches family E.
         self.rates_long = cfg.get("rates_long", {})
         # Signature magnitude bands (l1_symbolize.direction_and_band). Owned by
-        # L1 config; the orchestrator hands them to build_signature.
-        self.bands = cfg.get("bands", {})
+        # L1 config; the orchestrator hands them to build_signature. Required --
+        # no silent default, so the config stays the single source.
+        self.bands = cfg["bands"]
         self.balance = cfg["balance"]
         self.validity = cfg["validity"]
         self.dt_s = cfg.get("sample_period_s", 5.0)

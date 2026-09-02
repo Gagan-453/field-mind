@@ -28,6 +28,14 @@ NOM = {"drum_level": 50.0, "feed_water_flow": 68.0, "steam_flow": 67.0,
 PASSED = FAILED = 0
 
 
+def _raises(fn):
+    try:
+        fn()
+    except Exception:
+        return True
+    return False
+
+
 def check(name, cond, extra=""):
     global PASSED, FAILED
     if cond:
@@ -79,24 +87,25 @@ check("least-squares slope recovers a known ramp",
 
 print("\nbanding")
 BANDS = CFG["bands"]
-# Stage-6 deadbands: FLAT means "not moving more than a healthy plant does".
-# bed_temp_avg deadband is 2.1 degC/min (p99.7 of the no-fault 10-min slope --
-# the OU load driver swings the un-normalised bed slope that hard). A 0.5
-# degC/min bed drift is inside healthy variation and reads FLAT; family E's
-# ~0.2 degC/min fouling drift is well inside it (Stage-4 finding: family E is
-# not slope-detectable).
-check("healthy-plant bed drift (0.5 degC/min) reads FLAT",
-      direction_and_band("bed_temp_avg", 0.5, BANDS) == ("FLAT", "-"))
-check("movement just past the deadband is SLOW, not FLAT",
-      direction_and_band("bed_temp_avg", 3.0, BANDS) == ("UP", "SLOW"))
-check("mid-band bed movement is MED",
-      direction_and_band("bed_temp_avg", 15.0, BANDS) == ("UP", "MED"))
-check("large movement is FAST",
+from fieldmind.agent.l1_symbolize import BAND_EDGES as _MIRROR   # noqa: E402
+# Band VALUES are the Stage-5 set (Stage 6 moved them to config but reverted
+# the criterion-based re-derivation after mock Q2 regressed -- see the config
+# comment). These check the banding FUNCTION against those values.
+check("small movement is SLOW, not FLAT (slow drifts must still register)",
+      direction_and_band("bed_temp_avg", 0.08, BANDS) == ("UP", "SLOW"))
+check("true stillness is FLAT",
+      direction_and_band("bed_temp_avg", 0.001, BANDS) == ("FLAT", "-"))
+check("a fast drum-level fall (-0.9 %/min) is FAST",
       direction_and_band("drum_level", -0.9, BANDS) == ("DOWN", "FAST"))
-check("module BAND_EDGES fallback mirrors configs/base.yaml checks.bands",
-      all(tuple(BANDS[t]) == tuple(v)
-          for t, v in __import__("fieldmind.agent.l1_symbolize",
-                                 fromlist=["BAND_EDGES"]).BAND_EDGES.items()))
+# The mirror in l1_symbolize.py is the device fallback for a test-only
+# direction_and_band(bands=None) call. It MUST equal the config or it silently
+# rots -- which is how BAND_EDGES went stale before Stage 6.
+check("l1_symbolize.BAND_EDGES mirror equals configs/base.yaml checks.bands",
+      {t: tuple(v) for t, v in BANDS.items()}
+      == {t: tuple(v) for t, v in _MIRROR.items()})
+check("direction_and_band raises on a bands dict missing the tag "
+      "(no silent fallback to the mirror)",
+      _raises(lambda: direction_and_band("bed_temp_avg", 1.0, {"drum_level": [0.03, 0.15, 0.5]})))
 
 print("\nLIMIT")
 # Ramp INTO the condition. Teleporting a tag to its alarm value in one sample
