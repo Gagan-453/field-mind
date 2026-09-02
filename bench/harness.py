@@ -58,6 +58,16 @@ class Episode:
         self.ground_truth = json.loads((self.path / "ground_truth.json").read_text())
         self.records = json.loads((self.path / "records.json").read_text()) \
             if (self.path / "records.json").exists() else {}
+        # query.txt: three operator query variants (vague / specific / wrong-
+        # premise, notes_gen.build_queries). The agent is handed the SPECIFIC
+        # one as the operator's question; the wrong-premise variant is kept for
+        # a future T-series sweep. Previously this file was written and never
+        # read (known bug 4).
+        qf = self.path / "query.txt"
+        self.queries = [l.strip() for l in qf.read_text().splitlines()
+                        if l.strip()] if qf.exists() else []
+        self.operator_query = (self.queries[1] if len(self.queries) >= 2
+                               else (self.queries[0] if self.queries else ""))
 
     def samples_between(self, t0: float, t1: float) -> list[dict]:
         return [r for r in self.rows if t0 <= r["t"] < t1]
@@ -67,8 +77,14 @@ class Episode:
         return self.rows[-1]["t"]
 
 
-def build_agent(cfg: dict, notes: list[dict]):
-    """Wire the pipeline. One place, so a sweep can rebuild it per configuration."""
+def build_agent(cfg: dict, notes: list[dict], records: dict | None = None):
+    """Wire the pipeline. One place, so a sweep can rebuild it per configuration.
+
+    `records` is the episode's records.json (coal lab reports, maintenance
+    history, boiler-water conductivity log). Eight of the thirty episodes list
+    `records` as a required modality; without this argument tier C was
+    untestable (known bug 3).
+    """
     p = cfg["paths"]
     backend = make_backend(cfg["llm"])          # <-- THE MODEL SWITCH
 
@@ -80,7 +96,8 @@ def build_agent(cfg: dict, notes: list[dict]):
 
     acfg = cfg["agent"]
     checks = CheckLayer(cfg["checks"])
-    retriever = Retriever(asset, cases, notes_store, experience, acfg)
+    retriever = Retriever(asset, cases, notes_store, experience, acfg,
+                          records=records or {})
     diag = Diagnostician(backend, acfg)
     ver = Verifier(backend, acfg)
     gate = Gate(catalogue, acfg)
@@ -94,7 +111,11 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
     modality ablation, and tier B/C accuracy MUST collapse under it or the
     episode is mislabelled."""
     notes = [] if ablate_text else ep.notes
-    orch, asset, cases, experience, backend, diag, ver = build_agent(cfg, notes)
+    # records.json is a separate modality from notes -- text ablation (T8)
+    # removes notes, not the coal lab report / conductivity log.
+    orch, asset, cases, experience, backend, diag, ver = build_agent(
+        cfg, notes, ep.records)
+    orch.operator_query = ep.operator_query
 
     tick_s = cfg["agent"]["tick_period_s"]
     window = SensorWindow(window_min=60.0,

@@ -246,7 +246,7 @@ def catalogue() -> list[EpisodeSpec]:
             correct_action_ids=["ACT-024", "ACT-025"],
             fault_onset_s=300.0, seed=seed))
 
-    return eps
+    return _apply_case_map(eps)
 
 
 # =======================================================================
@@ -282,6 +282,32 @@ def _raw_state(r: dict) -> str:
         #   to the RCA.
         return "DEVIATION"
     return "NORMAL"
+
+
+# Stage 5: the invented case ids the specs above were written against
+# (RCA-01b, RCA-02..RCA-09) are replaced by the real RCA library. The
+# episode -> real-case mapping is data, kept in one place so the advisor can
+# review it without diffing 24 directories. `null` means the episode's
+# documented mechanism has no standalone case in docs/Boiler_Failure_Case_
+# Studies_RCA.pdf -> T2/T6 are NOT-APPLICABLE for it (bench/evaluator.py),
+# not scored zero. See reports/stage5_case_library.md.
+_CASE_MAP_PATH = Path(__file__).resolve().parents[2] / "data" / "kb" / "episode_case_map.json"
+
+
+def _apply_case_map(eps: list[EpisodeSpec]) -> list[EpisodeSpec]:
+    if not _CASE_MAP_PATH.exists():
+        return eps
+    m = {e["episode"]: e for e in json.loads(_CASE_MAP_PATH.read_text())["episodes"]}
+    for spec in eps:
+        e = m.get(spec.episode_id)
+        if e is None:
+            continue
+        spec.root_cause_id = e["new"]              # may be None -> JSON null
+        # correct_action_ids also come from the mapped case (same fixed
+        # catalogue); [] where the mechanism has no real case -> T4 returns
+        # applicable:false (bench/evaluator.py), same fix as T2.
+        spec.correct_action_ids = list(e.get("actions", []))
+    return eps
 
 
 def state_timeline(spec: EpisodeSpec, rows: list[dict]) -> list:

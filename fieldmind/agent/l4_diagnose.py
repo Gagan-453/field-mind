@@ -111,11 +111,28 @@ class Diagnostician:
         notes = "\n".join(f"- [{n.get('author','?')}] {n['text']}"
                           for n in retrieved.get("notes", [])) or "(none relevant)"
 
+        # records.json (known bug 3): coal lab report, maintenance history and
+        # the boiler-water conductivity trend -- the last is the leak vs
+        # blow-down vs feed-fault discriminator in several RCA cases.
+        rv = retrieved.get("records", {}) or {}
+        rlines = []
+        if rv.get("coal_lab_report"):
+            rlines.append(f"- coal lab report: {rv['coal_lab_report']}")
+        for m in rv.get("maintenance_history", []):
+            rlines.append(f"- maintenance: {m}")
+        if rv.get("boiler_water_conductivity"):
+            rlines.append(f"- boiler water conductivity: {rv['boiler_water_conductivity']}")
+        for a in rv.get("alarm_log", []):
+            rlines.append(f"- alarm log: {a}")
+        records = "\n".join(rlines) or "(no records available)"
+
         return self.template.format(
+            operator_question=retrieved.get("operator_query") or "(none stated)",
             facts=evidence,
             candidates=", ".join(retrieved.get("candidates", [])) or "(none)",
             cases=cases or "(no similar case retrieved)",
             notes=notes,
+            records=records,
             world=wm_summary)
 
     # -------------------------------------------------------------------

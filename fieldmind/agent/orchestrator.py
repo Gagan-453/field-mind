@@ -44,6 +44,9 @@ class Orchestrator:
         self.gate = gate
         self.cfg = cfg
         self.policy = cfg.get("policy", "sequential")   # sequential|pipelined|conditional
+        # The operator's question for this episode (query.txt, known bug 4).
+        # Set by the harness after construction; "" when there is none.
+        self.operator_query = ""
         self.tick_budget_ms = cfg.get("tick_period_s", 30) * 1000
         self.hard_deadline_ms = cfg.get("hard_stage_deadline_ms", 200)
         self.llm_budget_ms = cfg.get("llm_budget_ms", 8000)
@@ -96,7 +99,8 @@ class Orchestrator:
         # ---------------- L3: retrieval ----------------------------------
         slopes = self._slopes(window)
         signature = build_signature(facts, slopes)
-        retrieved = self.retriever.retrieve(facts, signature, now_s, level)
+        retrieved = self.retriever.retrieve(facts, signature, now_s, level,
+                                            operator_query=self.operator_query)
 
         # Deterministic belief update runs BEFORE the model. If the LLM never
         # answers, we still have ranked hypotheses from signature matching

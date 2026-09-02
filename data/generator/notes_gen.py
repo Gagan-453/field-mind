@@ -50,18 +50,33 @@ DISTRACTOR_TEMPLATES = [
 
 # The note that actually explains a tier-B episode. Written in plant shorthand:
 # missing punctuation, abbreviations, occasional typo.
+#
+# Keyed by the episode-name STEM (episode_id with the `ep_XNN_` prefix stripped),
+# not by root_cause_id: Stage 5 re-pointed several episodes onto the same real
+# case id and onto `null`, so root_cause_id is no longer a stable key for "which
+# clue does this scenario get". A stem `k` matches an episode whose name is `k`
+# or starts with `k + "_"` (so tube_leak covers tube_leak_fast/slow/repeat).
 KEY_NOTES = {
-    "RCA-01": "fcv on feed line not responding properly to demand, noticed during last shift also. told inst dept",
-    "RCA-01b": "cbd on B side still cracked open ~40% from yest night, told day shift",
-    "RCA-02": "deaerator level running low since morning, makeup valve throttled. bfp A suction pr on lower side",
-    "RCA-03": "feed strainer dp slowly increasing over last 3 days, changeover planned but not done yet",
-    "RCA-04": "makeup consumption high since night shift, checked no visible leak outside. furnace side not checked",
-    "RCA-05": "coal recd yesterday looks wet, hopper level not coming down properly on B side",
-    "RCA-06": "feeder 2 tripped on ovld at 0610, reset taken. may trip again",
-    "RCA-07": "new coal consignment from different mine, lab report says CV higher. feeder calib not changed",
-    "RCA-08": "PA damper was serviced last week, position feedback not rechecked after that",
-    "RCA-09": "boiler efficiency slightly down this month, bed temp running higher for same load. to be reviewed",
+    "fcv_seize":       "fcv on feed line not responding properly to demand, noticed during last shift also. told inst dept",
+    "cbd_left_open":   "cbd on B side still cracked open ~40% from yest night, told day shift",
+    "bfp_suction":     "deaerator level running low since morning, makeup valve throttled. bfp A suction pr on lower side",
+    "strainer_choke":  "feed strainer dp slowly increasing over last 3 days, changeover planned but not done yet",
+    "tube_leak":       "makeup consumption high since night shift, checked no visible leak outside. furnace side not checked",
+    "wet_coal":        "coal recd yesterday looks wet, hopper level not coming down properly on B side",
+    "low_cv_coal":     "coal recd yesterday looks wet, hopper level not coming down properly on B side",
+    "feeder_trip":     "feeder 2 tripped on ovld at 0610, reset taken. may trip again",
+    "high_cv_coal":    "new coal consignment from different mine, lab report says CV higher. feeder calib not changed",
+    "low_primary_air": "PA damper was serviced last week, position feedback not rechecked after that",
+    "fouling_drift":   "boiler efficiency slightly down this month, bed temp running higher for same load. to be reviewed",
 }
+
+
+def _key_note_text(spec) -> str | None:
+    name = spec.episode_id.split("_", 2)[-1]      # ep_A01_fcv_seize -> fcv_seize
+    for k, text in KEY_NOTES.items():
+        if name == k or name.startswith(k + "_"):
+            return text
+    return None
 
 # Contradicts what the sensors say. Ground truth: SENSORS WIN, and the agent
 # should FLAG THE CONFLICT rather than silently discarding either side.
@@ -91,11 +106,12 @@ def build_notes(spec, rows, rng: random.Random) -> list[dict]:
     # ---- 1. the key note: only present for tier B and C episodes ----
     # A tier-A episode is solvable from the numbers, so it does NOT get one.
     # That is what makes the T8 ablation meaningful.
-    if spec.tier in ("B", "C") and spec.root_cause_id in KEY_NOTES:
+    key_note = _key_note_text(spec)
+    if spec.tier in ("B", "C") and key_note:
         # Timestamped BEFORE fault onset: the note is a clue available in
         # advance, which is exactly the lead-time advantage text should buy.
         t = max(0.0, (spec.fault_onset_s or 600.0) - rng.uniform(600, 2400))
-        add(t, KEY_NOTES[spec.root_cause_id], _tags_for(spec), "SEE_CASE")
+        add(t, key_note, _tags_for(spec), "SEE_CASE")
 
     # ---- 2. distractors: 3-8 irrelevant notes in the same time range ----
     for _ in range(rng.randint(3, 8)):

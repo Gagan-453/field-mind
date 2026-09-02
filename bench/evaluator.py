@@ -74,7 +74,10 @@ def t2_root_cause(run: dict) -> dict:
     """
     gt = run["ground_truth"]
     target = gt["root_cause_id"]
-    if target == "NONE":
+    # target is None when the episode's true mechanism has no case in the real
+    # RCA library (Stage 5, data/kb/episode_case_map.json): T2 is NOT-APPLICABLE,
+    # not a structural zero. "NONE" is a normal (no-fault) episode.
+    if target in (None, "NONE"):
         return {"applicable": False}
     onset = gt.get("fault_onset_t") or 0
     hits1 = hits3 = n = 0
@@ -143,7 +146,7 @@ def t6_lead_time(run: dict, tick_s: float = 30.0) -> dict:
     """
     gt = run["ground_truth"]
     trip, target = gt.get("trip_t"), gt["root_cause_id"]
-    if not trip or target == "NONE":
+    if not trip or target in (None, "NONE"):
         return {"applicable": False}
     for a in run["assessments"]:
         if a["hypotheses"] and a["hypotheses"][0].get("case_ref") == target:
@@ -219,6 +222,15 @@ def aggregate(evals: list[dict]) -> dict:
     lead = [e["T6_lead_time"]["lead_time_min"] for e in evals
             if e["T6_lead_time"].get("applicable")
             and e["T6_lead_time"].get("lead_time_min") is not None]
+    # Q2 / Q4 are scored only over episodes whose true cause maps to a case
+    # (Stage 5). Episodes re-pointed to a HELD-OUT case still count -- that is
+    # the generalisation test. Episodes with root_cause_id=null (no real case
+    # for the mechanism) carry correct_action_ids=[] too and are excluded from
+    # both.
+    q2_scored = [e["episode_id"] for e in evals
+                 if e["T2_root_cause"].get("applicable")]
+    q4_scored = [e["episode_id"] for e in evals
+                 if e["T4_actions"].get("applicable")]
 
     return {
         "n_episodes": len(evals),
@@ -226,9 +238,14 @@ def aggregate(evals: list[dict]) -> dict:
                                  for e in evals) / len(evals), 3),
         "Q2_top1": mean("T2_root_cause", "top1"),
         "Q2_top3": mean("T2_root_cause", "top3"),
+        "Q2_n_episodes_scored": len(q2_scored),
+        "Q2_episodes_not_applicable":
+            sorted(e["episode_id"] for e in evals
+                   if e["family"] != "N" and not e["T2_root_cause"].get("applicable")),
         "Q3_faithfulness": mean("T3_faithfulness", "faithfulness"),
         "Q4_action_precision": mean("T4_actions", "precision"),
         "Q4_action_recall": mean("T4_actions", "recall"),
+        "Q4_n_episodes_scored": len(q4_scored),
         "Q5_fp_per_hour": round(sum(fp) / len(fp), 2) if fp else None,
         "Q6_lead_time_min_mean": round(sum(lead) / len(lead), 1) if lead else None,
         "Q6_n_faults_caught_before_trip": len(lead),
