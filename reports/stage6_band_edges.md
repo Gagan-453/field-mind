@@ -14,13 +14,25 @@ config.
 
 A criterion-based **re-derivation** of the edge values was attempted and
 **reverted**: it is better on every intrinsic measure but dropped the
-acceptance metric (`mock Q2_top1 0.334 → 0.173`). The band values in the config
-are the Stage-5 set; `orchestrator._slopes` is back to the raw slope. Baseline
-metrics are restored exactly (`Q2_top1 0.334`, `Q2_top3 0.505`, `Q1 0.743`,
-`Q4 0.38 / 0.926`, `Q5 0.91`, `S7 0`).
+acceptance metric (`mock Q2_top1 0.334 → 0.173`). A follow-up 2×2
+(*The 2×2* section) then tested whether removing band specificity from the
+matcher recovers it — it does not (best of the four cells is the status quo,
+0.334; direction-only + criterion bands = 0.240). So **everything is reverted**:
+the band values in the config are the Stage-5 set, `orchestrator._slopes` is
+back to the raw slope, the matcher is band-specific. Baseline metrics restored
+exactly (`Q2_top1 0.334`, `Q2_top3 0.505 → 0.507`, `Q1 0.743`, `Q4 0.38 /
+0.926`, `Q5 0.91`, `S7 0`; the +0.002 on `Q2_top3` is from the separate
+orchestrator-bug fixes, not the bands).
 
-The analysis below is kept because it is a real finding about the descriptor
-vocabulary and the advisor needs it; it is **not** acted on here.
+What survived: `BAND_EDGES` moved out of `fieldmind/agent/l1_symbolize.py` into
+`configs/base.yaml` `checks.bands` (it had been missed by the Stage-4 threshold
+retune and was a duplicated constant that could rot), with strict wiring —
+`CheckLayer` requires `cfg["bands"]`, `build_signature` refuses an empty bands
+dict, `direction_and_band` raises on a partial one, and `test_checks.py` asserts
+the module mirror equals the config.
+
+The analysis below is kept as the evidence for the advisor decision in
+*Unresolved* 1; it is **not** acted on here.
 
 ## The four deciding numbers (for the attempted re-derivation)
 
@@ -105,6 +117,68 @@ re-ranks retrieved cases and does no reasoning (CLAUDE.md), so this is a
 mock-harness artifact — but `Q2_top1` on mock is the stated acceptance bar and
 a device demo is imminent, so the values revert.
 
+## The 2×2 — is band specificity carrying real signal?
+
+**Hypothesis tested:** the SLOW/MED/FAST labels in the case signatures were
+assigned by reading PDF prose ("rose sharply" → FAST), never calibrated against
+what magnitude the plant produces. If so, `Q2_top1 = 0.334` holds only because
+the stale deadbands (20–70× too small) push episodes into MED/FAST where they
+happen to agree with equally-uncalibrated case labels — and band specificity
+would be noise on both sides that should come out of the matcher.
+
+**Test:** a `band_specific` flag in `CaseLibrary.match` / `_collapse_bands` that,
+when off, collapses SLOW/MED/FAST to one "moving" bucket per `(tag, direction)`
+before the weighted-Jaccard (FLAT keeps its 0.35 weight). Run the 2×2 on the
+mock backend, all 30 episodes. *(Experiment scaffolding — the flag, the
+`bed_slope_load_normalised` flag, `_collapse_bands` — was reverted after
+measurement; only the numbers are kept.)*
+
+### `mock Q2_top1 / Q2_top3`
+
+| | band-specific match | direction-only match |
+|---|---|---|
+| **stale bands (Stage-5)** | **0.334 / 0.507** | 0.243 / 0.422 |
+| **criterion bands (+ load-norm bed)** | 0.173 / 0.313 | 0.240 / 0.378 |
+
+### RCA-01 rank on the four FCV episodes — offline aggregated-signature match, 13-case library
+
+| cell | A01 | A02 | A05 | A06 | live mock T2 top-1 (A01/A02/A05/A06) |
+|---|---|---|---|---|---|
+| stale + band-specific | 3 | 8 | **1** | 7 | 0.21 / 0.13 / 0.16 / 0.23 |
+| stale + direction-only | 9 | 7 | 3 | 7 | 0.02 / 0.09 / 0.00 / 0.13 |
+| **criterion + band-specific** | **1** | **1** | **1** | **1** | 0.30 / 0.55 / 0.13 / 0.74 |
+| criterion + direction-only | 4 | **1** | **1** | **1** | 0.33 / 0.36 / 0.08 / 0.66 |
+
+### Verdict
+
+**Direction-only + criterion bands = `Q2_top1` 0.240 — does not beat 0.334.**
+Per the pre-registered rule, **everything is reverted** (Stage-5 band values,
+raw bed slope, band-specific matcher) and this table is the evidence left for
+the advisor.
+
+What the 2×2 actually shows:
+
+- **The stated hypothesis is not supported.** Direction-only matching *lowers*
+  `Q2_top1` in **both** band regimes (stale 0.334 → 0.243; criterion 0.173 →
+  0.240). Band granularity is therefore **not** pure noise — under the Stale
+  bands it carries real aggregate discriminating signal, and the best of the
+  four cells is the status quo (stale + band-specific).
+- **The hypothesis's mechanism is partly real, though.** Direction-only
+  *rescues* the criterion bands (0.173 → 0.240) — it stops penalising the
+  criterion config for slow faults (B/C/D) landing in `SLOW` when their case
+  label says `MED`/`FAST`. It just does not recover enough to reach the
+  baseline.
+- **RCA-01 (FCV) retrieval is genuinely best under criterion + band-specific:**
+  offline rank **1/1/1/1** (raw 0.15–0.61) vs the status quo's 3/8/1/7, and the
+  highest live per-tick top-1 of any cell (A06 0.74). The criterion bands fix
+  the FCV cluster; what drags their aggregate `Q2_top1` down is families B/C/D
+  losing the *noise-driven* matches the stale bands gave them (documented in
+  *Unresolved* 1).
+- So the advisor question is sharper than "keep or drop bands": the criterion
+  bands **improve the one clean fault family and degrade the mock aggregate**,
+  and no matcher variant tried recovers the aggregate. Resolving it needs a
+  retrieval metric that is not a mock per-tick top-1 count.
+
 ## What landed (kept)
 
 | change | file | why it stays |
@@ -149,11 +223,16 @@ verbatim; provenance is unchanged from the original `l1_symbolize.BAND_EDGES`
    criterion-based derivation (no-fault ≥ 85 % FLAT + every fault family's
    headline tag moving) is defensible and the four numbers above show it works
    on the physics — it fails only the **mock** `Q2_top1`, which is a per-tick
-   count over a backend that does not reason. **Decision needed:** adopt the
-   criterion bands together with a retrieval metric that is not a mock per-tick
-   top-1 (e.g. the aggregated-signature rank, or the Stage-5 recommended
-   cluster-top-1 / discriminator-accuracy), or keep the Stage-5 bands and
-   accept that a healthy plant reads as moving on 4 of 6 tags.
+   count over a backend that does not reason. The 2×2 (above) tested whether the
+   case labels' band granularity is uncalibrated on both sides and should leave
+   the matcher: it should **not** — direction-only matching lowers `Q2_top1` in
+   both band regimes, and no {criterion bands, direction-only} combination beats
+   the status-quo 0.334. **Decision for the advisor:** the criterion bands fix
+   the FCV/RCA-01 cluster (offline rank 1/1/1/1) but degrade the mock aggregate
+   because families B/C/D lose noise-driven matches. Resolving it needs a
+   retrieval metric that is not a mock per-tick top-1 (aggregated-signature
+   rank, or the Stage-5 cluster-top-1 / discriminator-accuracy). Until then the
+   Stage-5 bands stand and a healthy plant reads as moving on 4 of 6 tags.
 
 2. **If the criterion bands are ever adopted, bed must be load-normalised only
    in the rising direction** (DERIVATIONS §9.1). As measured, normalising the
@@ -167,6 +246,9 @@ verbatim; provenance is unchanged from the original `l1_symbolize.BAND_EDGES`
 
 ## Next
 
-Moving to the two orchestrator bugs that block every LLM benchmark
-(`CLAUDE.md` known bugs 1 and 2): the DEGRADED latch in `derive_state` /
-`trusted_tags`, and `_merge` discarding the cross-tick belief accumulator.
+Orchestrator known bugs 1 and 2 are fixed in a separate commit
+(`reports/stage6_orchestrator_bugs.md`). The band edges are left at the
+Stage-5 values pending the advisor decision in *Unresolved* 1; the 2×2 above
+is the evidence for that conversation. No further band iteration —
+experiment scaffolding (`band_specific` / `bed_slope_load_normalised` flags,
+`_collapse_bands`) was reverted after measurement.
