@@ -34,6 +34,11 @@ from fieldmind.runtime.llm_backend import LiteRTBackend   # noqa: E402
 
 DEVICE_DIR = "/data/local/tmp/llm"
 
+# Which accelerator this probe is validating. Missing libraries for the OTHER
+# two are reported but do not fail the probe -- a CPU run is not invalidated by
+# the absence of the HTP stack.
+ACCELERATOR = "cpu"
+
 
 def sh(*args) -> tuple[int, str]:
     try:
@@ -61,18 +66,32 @@ def main():
             print(f"   FAIL: {needed} not found in {DEVICE_DIR}")
             ok = False
 
-    print("\n3. QNN HTP v75 libraries (without these the NPU path is unavailable")
-    print("   and litert_lm_main will QUIETLY USE CPU instead of failing)")
-    rc, out = sh("adb", "shell", f"ls {DEVICE_DIR} | grep -i qnn")
-    print("  ", out.replace("\n", "\n   ") or "(none found)")
-    for lib in ("libQnnHtpV75Skel.so", "libQnnHtpV75Stub.so"):
-        if lib not in out:
-            print(f"   WARN: {lib} missing -> NPU numbers will actually be CPU numbers")
+    print("\n3. accelerator libraries")
+    rc, out = sh("adb", "shell", f"ls {DEVICE_DIR}")
+    missing_npu = [l for l in ("libQnnHtpV75Skel.so", "libQnnHtpV75Stub.so")
+                   if l not in out]
+    missing_gpu = [l for l in ("libLiteRtClGlAccelerator.so",
+                               "libLiteRtVulkanAccelerator.so")
+                   if l not in out]
+    for label, missing in (("NPU", missing_npu), ("GPU", missing_gpu)):
+        if not missing:
+            print(f"   {label}: libraries present")
+            continue
+        # A known-but-unregisterable backend does not error -- litert_lm_main
+        # WARNS and runs on CPU. Confirmed on this board for both NPU and GPU.
+        note = (f"   {label}: UNAVAILABLE (missing {', '.join(missing)}) "
+                f"-> --backend={label} would silently return CPU numbers")
+        print(note)
+        if ACCELERATOR == label.lower():
+            print(f"   FAIL: probing {label} but its libraries are absent.")
             ok = False
 
     print("\n4. flag acceptance")
-    b = LiteRTBackend(mode="adb", device_dir=DEVICE_DIR, accelerator="cpu")
-    print("   command:", b._device_command(f"{DEVICE_DIR}/_probe.txt", 32))
+    b = LiteRTBackend(mode="adb", device_dir=DEVICE_DIR,
+                      accelerator=ACCELERATOR, model_file="model.litertlm")
+    # generate() pushes the prompt to _prompt_<role>.txt, so show that path
+    # rather than a name the probe never actually writes.
+    print("   command:", b._device_command(f"{DEVICE_DIR}/_prompt_probe.txt"))
     reply = b.generate("Reply with the single word: ok", role="probe", max_tokens=32)
     print(f"   status={reply.status} latency={reply.latency_ms:.0f}ms "
           f"ttft={reply.ttft_ms:.0f}ms "
@@ -85,6 +104,10 @@ def main():
         print("   WARN: token counts did not parse. Update "
               "LiteRTBackend._parse_output to match this build's timing format,")
         print("         otherwise the per-stage cost model has no input.")
+        ok = False
+    elif not reply.text.strip():
+        print("   WARN: no generated text survived parsing -- check "
+              "_extract_text against this build's prompt echo.")
         ok = False
 
     print("\n5. thermal baseline (log this with every measurement -- results are")

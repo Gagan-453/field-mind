@@ -351,14 +351,32 @@ class LiteRTBackend(LLMBackend):
 
     name = "litert"
 
+    # Exact strings the binary accepts. Sourced from its own rejection message:
+    #   "Unsupported backend: nonsense. Supported backends are:
+    #    [CPU, GPU, NPU, GPU_ARTISAN, CPU_ARTISAN, GOOGLE_TENSOR_ARTISAN]"
+    # Uppercase because that is the spelling we have direct evidence for.
+    _BACKEND_FLAG = {"cpu": "CPU", "gpu": "GPU", "npu": "NPU"}
+
+    # Warning emitted when a known backend's library is missing (silent CPU
+    # fallback follows). CPU has no entry -- it is the fallback.
+    _REGISTRY_WARN = {
+        "npu": "NPU accelerator could not be loaded and registered",
+        "gpu": "GPU accelerator could not be loaded and registered",
+    }
+
     def __init__(self,
                  mode: str = "adb",
                  device_dir: str = "/data/local/tmp/llm",
                  binary: str = "litert_lm_main",
-                 model_file: str = "Gemma3-1B-IT_q4_ekv1280_sm8650.litertlm",
-                 accelerator: str = "npu",           # cpu | gpu | npu
+                 model_file: str = "model.litertlm",
+                 accelerator: str = "cpu",           # cpu | gpu | npu
                  timeout_s: float = 60.0,
                  adb_serial: str = "", **_):
+        accelerator = str(accelerator).lower()
+        if accelerator not in self._BACKEND_FLAG:
+            raise ValueError(
+                f"accelerator {accelerator!r} is not one of "
+                f"{sorted(self._BACKEND_FLAG)}")
         self.mode = mode
         self.device_dir = device_dir.rstrip("/")
         self.binary = binary
@@ -369,12 +387,34 @@ class LiteRTBackend(LLMBackend):
 
     # ---- command construction -------------------------------------------
 
-    def _device_command(self, prompt_path: str, max_tokens: int) -> str:
+    def _device_command(self, prompt_path: str, max_tokens: int | None = None) -> str:
         """The shell line that runs on the board.
 
-        `LD_LIBRARY_PATH` picks up libQnnHtpV75Skel.so / libQnnHtpV75Stub.so.
-        Without it the HTP backend is unavailable and litert_lm_main will
-        quietly use CPU instead of failing.
+        VERIFIED against this build (2026-09-03, `--helpfull` + `--help=<sub>`):
+        litert_lm_main registers exactly FOUR flags --
+
+            --backend  --model_path  --input_prompt  --input_prompt_file
+
+        There is no --max_decode_steps / --max_decode_tokens / --max_tokens,
+        and no --report_timing / --benchmark.  `--help=decode` and
+        `--help=timing` both return "No flags matched", and --help=<substring>
+        searches every registered flag, not just this module's.  So:
+
+          * `max_tokens` CANNOT be enforced here.  The binary decodes to EOS.
+            The only bounds available are the prompt itself and self.timeout_s.
+            The parameter is kept in the signature so callers do not break.
+          * timing is UNCONDITIONAL -- the BenchmarkInfo block always prints,
+            which is why no flag exists to ask for it.
+
+        Backend names are validated by the binary with a CHECK-fail, so a typo
+        aborts loudly rather than falling back.  A *known* backend that fails
+        to register, however, only WARNS and then runs on CPU -- see
+        _registration_failure().
+
+        LD_LIBRARY_PATH must be absolute and present on every invocation: the
+        Android linker does not search the working directory, so `cd` alone
+        leaves libGemmaModelConstraintProvider.so unresolvable and the
+        executable will not link at all.
         """
         return (
             f"cd {self.device_dir} && "
@@ -382,11 +422,30 @@ class LiteRTBackend(LLMBackend):
             f"ADSP_LIBRARY_PATH={self.device_dir} "
             f"./{self.binary} "
             f"--model_path={self.device_dir}/{self.model_file} "
-            f"--backend={self.accelerator} "
-            f"--max_decode_steps={max_tokens} "
-            f"--input_prompt_file={prompt_path} "
-            f"--report_timing=true"
+            f"--backend={self._BACKEND_FLAG[self.accelerator]} "
+            f"--input_prompt_file={prompt_path}"
         )
+
+    def _registration_failure(self, raw: str) -> str:
+        """Detect the silent-fallback case.
+
+        litert_lm_main CHECK-fails on an unknown backend name, but a KNOWN
+        backend whose accelerator library is absent only produces:
+
+            WARNING: [npu_registry.cc:34] NPU accelerator could not be loaded
+                     and registered: kLiteRtStatusErrorInvalidArgument.
+
+        and then proceeds on CPU.  Observed on this board for BOTH npu and gpu
+        (no libQnnHtp*, no libLiteRtClGl/Vulkan accelerator).  A run that hits
+        this returns real tokens at CPU speed under an NPU label -- exactly the
+        wrong number.  Treat it as an error, never as a result.
+        """
+        marker = self._REGISTRY_WARN.get(self.accelerator)
+        if marker and marker in raw:
+            return (f"{self.accelerator} accelerator failed to register; "
+                    f"litert_lm_main fell back to CPU. Refusing to report this "
+                    f"as a {self.accelerator} measurement.")
+        return ""
 
     def _adb(self, *args: str) -> list[str]:
         cmd = ["adb"]
@@ -435,13 +494,23 @@ class LiteRTBackend(LLMBackend):
                             model=self.model_file, error=f"binary/adb missing: {e}")
 
         latency = (time.perf_counter() - t0) * 1000
-        raw = proc.stdout or ""
+        # litert_lm_main writes its INFO/VERBOSE/WARNING log to stderr and the
+        # generated text plus BenchmarkInfo to stdout, but `adb shell` merges
+        # or splits the two depending on the shell protocol version in use.
+        # Concatenate so parsing does not depend on which side of that we land.
+        raw = (proc.stdout or "") + "\n" + (proc.stderr or "")
         if proc.returncode != 0 and not raw.strip():
             return LLMReply(text="", status="error", backend=self.accelerator,
                             model=self.model_file, latency_ms=latency,
                             error=(proc.stderr or "")[:300])
 
-        text, timing = self._parse_output(raw)
+        fallback = self._registration_failure(raw)
+        if fallback:
+            return LLMReply(text="", status="error", backend=self.accelerator,
+                            model=self.model_file, latency_ms=latency,
+                            error=fallback)
+
+        text, timing = self._parse_output(raw, prompt)
         return LLMReply(
             text=text, backend=self.accelerator, model=self.model_file,
             latency_ms=latency,
@@ -450,31 +519,104 @@ class LiteRTBackend(LLMBackend):
             ttft_ms=timing.get("ttft_ms", 0.0),
         )
 
-    @staticmethod
-    def _parse_output(raw: str) -> tuple[str, dict]:
-        """Separate the generated text from litert_lm_main's own timing report.
+    # ---- BenchmarkInfo parsing ------------------------------------------
+    #
+    # The real format, captured from this build on 2026-09-03:
+    #
+    #     BenchmarkInfo:
+    #       Init Phases (7):
+    #         - Init Executor: 636.38 ms
+    #         - Init Total: 708.34 ms
+    #       Time to first token: 0.50 s
+    #       Prefill Turns (Total 1 turns):
+    #         Prefill Turn 1: Processed 16 tokens in 450.708698ms duration.
+    #           Prefill Speed: 35.50 tokens/sec.
+    #       Decode Turns (Total 1 turns):
+    #         Decode Turn 1: Processed 2 tokens in 90.196615ms duration.
+    #           Decode Speed: 22.17 tokens/sec.
+    #
+    # NOTE the unit on TTFT: it is printed in SECONDS. The previous regex
+    # captured 0.50 and stored it as ttft_ms, a silent 1000x error -- the exact
+    # class of wrong-but-plausible number this backend exists to avoid.
+    _RE_TTFT_S = re.compile(r"Time to first token:\s*([\d.]+)\s*s")
+    _RE_PREFILL_TURN = re.compile(
+        r"Prefill Turn \d+:\s*Processed\s+(\d+)\s+tokens in\s+([\d.]+)\s*ms")
+    _RE_DECODE_TURN = re.compile(
+        r"Decode Turn \d+:\s*Processed\s+(\d+)\s+tokens in\s+([\d.]+)\s*ms")
+    _RE_INIT_TOTAL = re.compile(r"Init Total:\s*([\d.]+)\s*ms")
+    _RE_INIT_EXEC = re.compile(r"Init Executor:\s*([\d.]+)\s*ms")
+
+    @classmethod
+    def _parse_output(cls, raw: str, prompt: str = "") -> tuple[str, dict]:
+        """Separate the generated text from litert_lm_main's timing report.
 
         Anything that does not match is left at zero rather than estimated. A
-        missing number is recoverable; a fabricated one poisons the whole
-        cost model.
+        missing number is recoverable; a fabricated one poisons the cost model.
         """
         timing: dict = {}
-        patterns = {
-            "ttft_ms": r"(?:time to first token|TTFT)[^0-9]*([\d.]+)",
-            "prefill_tokens": r"prefill[^0-9]*(\d+)\s*tokens",
-            "decode_tokens": r"decode[^0-9]*(\d+)\s*tokens",
-        }
-        for key, pat in patterns.items():
-            m = re.search(pat, raw, re.IGNORECASE)
-            if m:
-                timing[key] = float(m.group(1)) if "ms" in key else int(m.group(1))
 
-        # The model's own output is whatever survives after dropping the
-        # binary's log lines. Prefer a JSON object if one is present, since
-        # that is what every agent prompt asks for.
-        m = re.search(r"\{.*\}", raw, re.DOTALL)
-        text = m.group(0) if m else raw
-        return text, timing
+        pre = [(int(n), float(ms)) for n, ms in cls._RE_PREFILL_TURN.findall(raw)]
+        dec = [(int(n), float(ms)) for n, ms in cls._RE_DECODE_TURN.findall(raw)]
+        if pre:
+            timing["prefill_tokens"] = sum(n for n, _ in pre)
+            timing["prefill_ms"] = sum(ms for _, ms in pre)
+        if dec:
+            timing["decode_tokens"] = sum(n for n, _ in dec)
+            timing["decode_ms"] = sum(ms for _, ms in dec)
+
+        m = cls._RE_TTFT_S.search(raw)
+        if m:
+            timing["ttft_ms"] = float(m.group(1)) * 1000.0     # s -> ms
+        m = cls._RE_INIT_TOTAL.search(raw)
+        if m:
+            timing["init_total_ms"] = float(m.group(1))
+        m = cls._RE_INIT_EXEC.search(raw)
+        if m:
+            timing["init_executor_ms"] = float(m.group(1))
+        timing["benchmark_seen"] = "BenchmarkInfo:" in raw
+
+        return cls._extract_text(raw, prompt), timing
+
+    @staticmethod
+    def _extract_text(raw: str, prompt: str = "") -> str:
+        """Pull the model's own output out of the surrounding noise.
+
+        Three things have to be removed, in order:
+
+        1. Everything up to and including the ECHOED PROMPT. litert_lm_main
+           prints `input_prompt: <the entire prompt>` before generating. Every
+           FieldMind prompt contains a JSON evidence packet, so a naive
+           `\\{.*\\}` search over the whole capture matches the PROMPT's JSON,
+           not the model's answer, and the pipeline then happily "parses" its
+           own input back. Cut the echo first.
+        2. Everything from `BenchmarkInfo:` onward.
+        3. The binary's log lines (INFO/WARNING/ERROR/VERBOSE and the absl
+           `I0000`-style prefixes), which are interleaved with the output.
+        """
+        body = raw
+        idx = body.find("input_prompt:")
+        if idx != -1:
+            cut = idx + len("input_prompt:")
+            if prompt.strip():
+                tail = prompt.strip().splitlines()[-1].strip()
+                j = body.find(tail, idx)
+                if j != -1:
+                    cut = j + len(tail)
+            body = body[cut:]
+
+        b = body.find("BenchmarkInfo:")
+        if b != -1:
+            body = body[:b]
+
+        keep = [ln for ln in body.splitlines()
+                if not re.match(r"^\s*(INFO|WARNING|ERROR|VERBOSE|FATAL)\b[:\s]",
+                                ln)
+                and not re.match(r"^\s*[IWEF]\d{4} ", ln)
+                and not ln.startswith("---")]
+        body = "\n".join(keep).strip()
+
+        m = re.search(r"\{.*\}", body, re.DOTALL)
+        return m.group(0) if m else body
 
 
 # =======================================================================

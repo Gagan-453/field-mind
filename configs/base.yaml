@@ -17,7 +17,7 @@
 #     litert  LiteRT-LM on the QIDK. The numbers that go in the writeup.
 # ---------------------------------------------------------------------------
 llm:
-  backend: mock
+  backend: litert
 
   gemini:
     # gemini-2.0-flash was decommissioned (HTTP 404 "no longer available",
@@ -39,8 +39,14 @@ llm:
     mode: adb                       # adb (host drives board) | local (agent on board)
     device_dir: /data/local/tmp/llm
     binary: litert_lm_main
-    model_file: Gemma3-1B-IT_q4_ekv1280_sm8650.litertlm
-    accelerator: npu                # cpu | gpu | npu   <- decision variable b_s
+    # VERIFIED on device 2026-09-03: the sm8650-tagged model is NOT on the
+    # board. What is there is model.litertlm (584 MB, generic, CPU/GPU).
+    model_file: model.litertlm
+    # cpu | gpu | npu  <- decision variable b_s.
+    # On this board only CPU registers: no libQnnHtp* (NPU) and no
+    # libLiteRtClGl/Vulkan accelerator (GPU). Both fail with a WARNING and then
+    # run on CPU, so setting either here yields mislabelled CPU numbers.
+    accelerator: cpu
     timeout_s: 60
     adb_serial: ""                  # set if more than one device is attached
 
