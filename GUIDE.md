@@ -905,14 +905,21 @@ expected = set(cand.get("signature", {}).keys())     # {"drum_level", "bed_temp_
 present_tags = {t for f in facts for t in f.tags if f.severity != "INFO"}
 ```
 
-Direction and band are discarded. Watch what that does at tick 76, where the
-present tags are `{drum_level, bed_temp_avg}`:
+Direction and band are discarded. Watch what that does at tick 56 of `ep_A01`
+(tick 83 is identical), where the present tags are `{drum_level, bed_temp_avg}`
+(the PATTERN fact names the bed, to say it is untouched):
 
-| case | supported | absent | contradiction hit | Δ/tick |
+| case | supported | absent | contradiction hit | Δ/tick (old rule) |
 |---|---|---|---|---|
-| **RCA-01** *(the truth)* | drum_level, bed_temp_avg | 3 | **bed_temp_avg** | **−0.80** |
-| RCA-02 | drum_level | 3 | — | −0.25 |
-| RCA-10 | drum_level, bed_temp_avg | 4 | — | −0.10 |
+| **RCA-01** *(the truth)* | drum_level, bed_temp_avg | 4 | **bed_temp_avg** | **−1.00** |
+| RCA-03 | drum_level, bed_temp_avg | 3 | bed_temp_avg | −0.80 |
+| RCA-16 | drum_level, bed_temp_avg | 4 | — | −0.10 |
+| RCA-04 | drum_level, bed_temp_avg | 3 | — | +0.10 |
+
+(The contradiction term alone is −0.90; the net is −1.00 after +0.70 for two
+supports and −0.80 for four absences. The older text of this guide quoted tick
+76; on the current episodes RCA-01 is not retrieved at tick 76, and ticks 56 and
+83 are the ones where it is retrieved with a flat bed.)
 
 RCA-01's contradicting signature is `bed_temp_avg: ["DOWN", "MED"]` — meaning
 *"if the bed is falling steadily, it is not me."* But the bed is **flat**, which

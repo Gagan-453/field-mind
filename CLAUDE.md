@@ -172,8 +172,9 @@ in the record.
 5. **Tier counts drifted** — 13/10/7 on disk against 12/12/6 intended.
 
 6. **`update_hypotheses` matches on tag name only**, discarding direction and
-   band, while `CaseLibrary.match` compares full triples. At `ep_A01` tick 76
-   this charges the correct hypothesis −0.90 for its own confirming evidence.
+   band, while `CaseLibrary.match` compares full triples. At `ep_A01` ticks 56
+   and 83 this charges the correct hypothesis −0.90 for its own confirming
+   evidence (a flat bed).
 
 ---
 
