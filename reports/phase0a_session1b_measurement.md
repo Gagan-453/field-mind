@@ -5,7 +5,7 @@ results**; the mock re-ranks retrieved cases and does no reasoning. Energy is `n
 
 ## Status
 PARTIAL. Step 1 (dev set) done. Step 2 (bed slope) is a finding only. Step 3 (band calibration) was run and **not adopted**
-(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is built, measured on dev and **KEPT**. The phase-reviewer ran (see "Phase-reviewer findings"); its fixes are committed. Not yet done at the time of this edit: the reporting-set run, `results/baselines/single_v3_summary.json`, the C04 advisor entry.
+(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is built, measured on dev and **KEPT**. The phase-reviewer ran and its fixes are committed ("Phase-reviewer findings"). The one-shot reporting run is done (Step 6 results), `results/baselines/single_v3_summary.json` is written, and the advisor list is added. Remaining: the real-model and NPU runs (Session 2), and the open list.
 
 Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. `e726085` fix (c) pre-registration. `7d1f8c6` fix (c). `b5146d2` report answers. `dce395c` / `ca2814e` / `fc5157f` /
 `6ac94ff` phase-reviewer fixes 1 to 4. Branch `exp/band-edges-p85`
@@ -375,6 +375,91 @@ Allowed differences, and nothing else:
 Also predicted, from the dev result: reporting-set library confident-and-wrong and library ECE (group) both fall against the
 same run read with `--decision-conf`; held-out confident-and-wrong falls. These are reported, not gating (one held-out case;
 the decision on (c) was already taken on dev).
+
+## Step 6 results: the one-shot reporting run (HEAD `cf5203f`, clean tree, mock, 30 episodes, run once)
+**The prediction held.** 1,454 key paths compared against `single_v2_summary.json`, 1,384 identical, **0 unexpected
+differences**. The differences are exactly the pre-registered ones:
+- `low_conf_rate` (held-out): overall 0.225 -> **0.972**; C01 0.256 -> 1.000, C03 0.436 -> 0.945, C05 0.179 -> 1.000, C06 0.029 -> 0.943.
+- `low_conf_rate_decision` (new): equals the v2 `low_conf_rate` exactly on all six held-out rows (0.225 overall; 0.256, 0.436, 0.179, 0.029).
+- wall-clock S1 latency keys (35 paths).
+Direction check P5 (`low_conf_rate` up) held. Reporting-set library confident-and-wrong and ECE both fell, held-out too (below).
+Written: `results/baselines/single_v3_summary.json` (reporting `summary`/`per_episode`, plus `belief_saturation` and a `dev` block).
+Mock numbers only; not agent results.
+
+### Before / after (mock; reporting v2 -> v3, dev before -> after (c))
+| metric | reporting v2 | reporting v3 | dev before (main) | dev after (c) |
+|---|---|---|---|---|
+| Q1 macro-F1 | 0.743 | 0.743 | 0.782 | 0.782 |
+| Q2 top-1 (legacy) | 0.334 | 0.334 | 0.332 | 0.332 |
+| Q2 top-3 (legacy) | 0.523 | 0.523 | 0.453 | 0.453 |
+| Q3 faithfulness | 1.000 | 1.000 | 1.000 | 1.000 |
+| Q4 precision | 0.380 | 0.380 | 0.357 | 0.357 |
+| Q4 recall | 0.926 | 0.926 | 0.882 | 0.882 |
+| Q5 FP/h (mean of per-episode rates) | 0.910 | 0.910 | 0.980 | 0.980 |
+| Q6 lead time min | 31.500 | 31.500 | 32.400 | 32.400 |
+| S4 LLM invocation | 0.450 | 0.450 | 0.337 | 0.337 |
+| S7 deadline miss | 0.000 | 0.000 | 0.000 | 0.000 |
+| library top-1 | 0.436 | 0.436 | 0.434 | 0.434 |
+| library top-3 | 0.684 | 0.684 | 0.593 | 0.593 |
+| library group top-1 | 0.547 | 0.547 | 0.489 | 0.489 |
+| library sep_named | 0.503 | 0.503 | 0.475 | 0.475 |
+| library belief top-1 tie-fair | 0.438 | 0.438 | 0.375 | 0.375 |
+| library belief top-3 | 0.654 | 0.654 | 0.570 | 0.570 |
+| library belief group | 0.574 | 0.574 | 0.502 | 0.502 |
+| library belief tie rate | 0.283 | 0.283 | 0.270 | 0.270 |
+| held-out group top-1 | 0.487 | 0.487 | 0.474 | 0.474 |
+| held-out belief group | 0.545 | 0.545 | 0.709 | 0.709 |
+| held-out belief tie rate | 0.765 | 0.765 | 0.838 | 0.838 |
+| held-out low_conf_rate (shown) | 0.225 | 0.972 | 0.245 | 0.945 |
+| held-out low_conf_rate_decision | n/a | 0.225 | n/a | 0.245 |
+
+| ECE / confident-and-wrong | reporting, decision (v2 view) | reporting, shown (v3) | dev, decision | dev, shown |
+|---|---|---|---|---|
+| library ECE (group) | 0.194 | 0.129 | 0.131 | 0.096 |
+| library confident-and-wrong ticks | 223 | 80 | 233 | 57 |
+| library confident-and-wrong share | 0.155 | 0.055 | 0.176 | 0.043 |
+| library low-confidence share (<= 0.5) | 0.449 | 0.627 | 0.335 | 0.583 |
+| held-out ECE (group) | 0.400 | 0.021 | 0.417 | 0.051 |
+| held-out confident-and-wrong ticks | 101 | 5 | 109 | 15 |
+| held-out confident-and-wrong share | 0.404 | 0.020 | 0.399 | 0.055 |
+| held-out low-confidence share | 0.228 | 0.980 | 0.260 | 0.945 |
+| scored ticks library / held-out | 1442 / 250 | same | 1327 / 273 | same |
+
+Reading the tables:
+- Everything that decides is identical v2 -> v3 and before -> after (the first 21 rows); only the shown-confidence rows move.
+- **Library:** ECE (group) 0.194 -> 0.129 (reporting) and 0.131 -> 0.096 (dev); confident-and-wrong 223 -> 80 and 233 -> 57.
+- **Held-out (one case, RCA-06; reported, not gating):** confident-and-wrong 101 -> 5 and 109 -> 15; ECE 0.400 -> 0.021 and 0.417 -> 0.051.
+  The held-out display now reads low on 98% / 94.5% of ticks, which is what a case the library has never seen should look like;
+  it also means the held-out figures reflect the tie structure of RCA-06 more than any general calibration.
+- **Library bins are still not calibrated** (reporting, shown): 0-0.2: n 485, mean conf 0.094, group-correct 0.318;
+  0.2-0.4: 206, 0.279, 0.524; 0.4-0.6: 270, 0.503, 0.519; 0.6-0.8: 172, 0.684, 0.802; 0.8-1.0: 309, 0.930, 0.922. The top bins are
+  now well calibrated; the low bins are under-confident (group-correct well above mean confidence), consistent with the
+  group-blind tie handling noted above. The same pattern holds on dev.
+- `low_conf_rate` (evaluator, the episode-mean of per-episode rates) is 0.972 and the pooled tick share from the saturation tool is
+  0.980 for the same held-out ticks: different aggregation, same data.
+- Dev is lower than reporting on the library belief rows in both columns (0.375 vs 0.438 tie-fair top-1): unexplained
+  (hypothesis: A2 was selected on the reporting set). Dev A-family lead times are not compared with reporting.
+
+## Advisor questions (consolidated; new items first)
+No single list existed (questions were scattered across the stage reports). New this session:
+1. **C04 ticks 50-57 (physics).** In `ep_C04_feeder_trip_caught` (truth RCA-14; fuel capped at tick 30, restarted at tick 70) the
+   bed temperature **rises 0.8 to 3.5 degC/min while steam falls (-1.15 to -0.08 t/h/min) and drum pressure falls FAST
+   (-0.92 to -0.07 kg/cm2/min)** during a fuel-shortage fault. The load term (2.43 x steam slope) is negative there (-2.8 to -0.2), so
+   load does not explain it. CLAUDE.md's known-correct direction is that capped fuel makes the bed cool. Is a bed rising against
+   falling steam and pressure plausible in an AFBC during a feeder trip, or is this a simulator artifact (the known
+   bed-noise calibration gap)? If it is physical, RCA-14's `bed UP MED` contradicting triple may be wrong for this plant. (Phase 0a
+   open item 4, Check 2.)
+2. **Case-signature band calibration changes case data.** The p85 edges separate families C and D at tag level, but the matcher
+   collapses (library tie-fair belief top-1 0.375 -> 0.098 on dev; the empty-signature cases take 70% of belief rank-1), which points at the
+   SLOW/MED/FAST labels in `case_library.json`. **May we relabel case bands from simulated dev episodes, or must they stay as
+   translated from the RCA text?** (A relabel would make the labels describe our simulator, not the PDF; it needs a
+   pre-registered rule, and it must be tested together with the edges as one unit.)
+
+Carried from earlier reports (still open, not repeated in full): the drum GA / level-transmitter-span and K versus RCA Case 1 question
+(`stage3_submodel1.md`, carried in `stage3_submodel3.md`); family E needs a cumulative drift detector (`stage4_regeneration.md`,
+disagreement 1); ratify the episode-to-case map, the held-out set and the recommended metric change
+(`stage5_case_library.md`); the offline coverage tool versus the live harness disagreement (`stage6_band_edges.md`, Unresolved 2);
+the bed FAST-DOWN share in the A episodes, wander or physics (`phase0a_single_agent_fixes.md`, open item 3).
 
 ## Disagreements recorded, not resolved
 - **Instruction vs history (item 2).** "Restore load normalisation" vs a signature that never had it. Resolved by your
