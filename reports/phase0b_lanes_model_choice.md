@@ -53,6 +53,48 @@ The question: should belief decide rank-1, with the model only breaking ties, or
   only the reporting-set ticks that are in the lowest confidence bin and have a negative margin.
 - Code: `bench/model_choice.py` (`ranking_question`, `verdict`). Tests: `tests/test_model_choice.py`.
 
+### Provenance of the rule: order of events, as it happened
+Sources: git commit times; file mtimes for `results/` (gitignored); and the plan file, which is outside git.
+| time (2026-10-02) | event | evidence |
+|---|---|---|
+| 00:06:29 | Plan file last written. It contains the population, scoring, the 0.10 margin, n ≥ 30 and the per-episode clause | file mtime; **outside git, so git cannot prove it** |
+| (between) | `bench/model_choice.py` written, with the rule in code | not separately recorded |
+| 00:09:21 | **Mock reference first computed** (`results/phase0b/runs_mock_dev3.json`); `model_choice` run on it, giving the 157-tick table | file mtime |
+| (between) | **After seeing the mock result**, `verdict()` changed to round the difference to 3 d.p. The boundary test had failed on 0.50 − 0.40 = 0.0999…. The constants and the population did not change | this session |
+| 00:11:53 | **d6ff743 committed (the rule), AFTER the mock reference was computed.** The commit also contains the mock table | `git log` |
+
+Stated as it is: **the rule was committed after the mock reference, not before.** The rule's text predates the mock
+run only in the plan file, and git cannot vouch for that. One code change, the rounding, was made after the mock
+result was seen. It cannot change the mock verdict: |0.239 − 0.389| = 0.150 is above 0.10 with or without rounding,
+and the verdict is INCONCLUSIVE because of the per-episode clause (C02 goes the other way). The real-model claim still
+holds: d6ff743 predates every real-model run, because none has happened yet.
+
+### Pre-registered follow-up (committed before any real-model run)
+**If the 3-episode verdict is INCONCLUSIVE** for the chosen model, run the same statistic with the **chosen model
+only**, using the same rule, unchanged (same code, `bench/model_choice.py` at d6ff743 plus the rounding fix), on
+**all dev fault episodes whose truth is a library case**:
+- the 13 episodes A01, A02, A03, A05, A06, B01, B02, B03, B05, C02, C04, D01, D03;
+- excluded, because the truth is held-out RCA-06: C01, C03, C05, C06;
+- excluded, because the truth has no case: A04, B04, D02, D04, E01–E03.
+
+The verdict from the 13 episodes replaces the 3-episode verdict, and it is final for this session. The three
+model-choice episodes are **reused**, not rerun, if the commit of every decision path, the config and the model file
+are unchanged (temperature 0, fixed seed). Otherwise all 13 are rerun.
+
+**Board-time estimate (planning, not measured):**
+- Diagnostician calls come from the deterministic triage, so the mock dev run gives the call count for any model: 1,329
+  diagnostician + 151 verifier calls over the 13 episodes, or 1,067 + 119 = 1,186 for the 10 not yet run. Verifier
+  calls depend on the merged order, so their count is approximate.
+- Prompt: about 2,007 tokens per diagnostician call. This is an `est_tokens` (chars / 4) estimate, not a server count.
+- Rates: the plan's NPU planning figures for Llama 3.2 3B Q4_0 (about 909 prefill / about 13.9 decode tok/s,
+  `multi_agent_plan.pdf`, "Rates used for planning").
+- Answer length: unknown for a real model. Bounded by 60 tokens (the plan's diagnostician target) and 256 (the cap).
+- That gives about 2.2 s of prefill plus 4.3–18.4 s of decode, so about 6.5–20.6 s per call.
+- **Total: about 2.1–6.8 h of board time** for the 10 remaining episodes, plus cooling gaps between episodes, plus
+  repair calls (not estimated). Rerunning all 13 is about 2.7–8.5 h.
+- A smaller chosen model would be faster, but its rates are not measured yet. The estimate is recomputed from the
+  measured board-up rates and answer lengths before the run.
+
 ### Mock reference on the same population (not an agent result)
 | mock, dev A01+B01+C02 | n | p_belief | p_model | verdict |
 |---|---|---|---|---|
