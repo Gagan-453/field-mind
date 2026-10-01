@@ -1,7 +1,8 @@
 # --- generated data: regenerate with `python -m data.generator.episode_build`
 data/episodes/
 data/experience/
-results/
+results/*
+!results/baselines/
 
 # --- reference data: large, and not ours to redistribute
 data/reference/*.csv
