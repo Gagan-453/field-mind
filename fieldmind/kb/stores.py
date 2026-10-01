@@ -128,6 +128,22 @@ class CaseLibrary:
                 out[(tag, d, b)] = float(v)
         return out
 
+    @staticmethod
+    def contradiction_hits(case: dict, signature: dict) -> list[tuple]:
+        """The case's contradicting triples that the current signature carries.
+
+        THE single definition of "this evidence contradicts this case". Retrieval
+        (`match`, below) and the belief update (`world_model.update_hypotheses`)
+        both call it, so the two layers cannot disagree about what counts as a
+        contradiction -- known bug 6 was exactly that disagreement (belief
+        compared tag names only, retrieval compared full triples).
+
+        A triple counts when the signature holds it with weight > 0.5, which
+        excludes FLAT observations (weight 0.35): a flat tag never contradicts.
+        """
+        contra = CaseLibrary._to_triples(case.get("contradicting_signature", {}))
+        return [t for t in contra if signature.get(t, 0.0) > 0.5]
+
     def match(self, signature: dict, k: int = 5) -> list[dict]:
         """Weighted Jaccard between the current tick signature and each case.
 
@@ -147,8 +163,7 @@ class CaseLibrary:
 
             # A contradicting signature present in the data kills the case
             # outright rather than merely lowering it.
-            contra = self._to_triples(case.get("contradicting_signature", {}))
-            if any(signature.get(t, 0.0) > 0.5 for t in contra):
+            if self.contradiction_hits(case, signature):
                 score *= 0.15
 
             prov = PROVENANCE_WEIGHT.get(case.get("provenance", "curated_case"), 0.5)

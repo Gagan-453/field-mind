@@ -117,7 +117,7 @@ class Orchestrator:
         # Deterministic belief update runs BEFORE the model. If the LLM never
         # answers, we still have ranked hypotheses from signature matching
         # alone -- that is the phase-3 baseline and it is the safe floor.
-        wmod.update_hypotheses(wm, facts, retrieved["cases"], tick_no)
+        wmod.update_hypotheses(wm, facts, signature, retrieved["cases"], tick_no)
         ranked = wmod.rank_hypotheses(wm, top=3)
         # Telemetry only: the deterministic ranking by log-odds, before any model
         # reply can reorder claims. Does not feed claims or any decision.

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import math
 
+from ..kb.stores import CaseLibrary
 from ..schemas import (Baseline, EquipmentState, Event, Fact, Finding,
                        Hypothesis, WorldModel, TAGS)
 
@@ -121,20 +122,33 @@ def update_baselines(wm: WorldModel, window, tick: int) -> None:
 #  Hypothesis belief update
 # =======================================================================
 
-def update_hypotheses(wm: WorldModel, facts: list[Fact], candidates: list[dict],
-                      tick: int) -> None:
+def _fact_ids(facts: list[Fact], tag: str) -> list[str]:
+    """Non-INFO fact ids that speak about `tag`. The two balance pseudo-tags in
+    the signature (l1_symbolize.build_signature) map to BALANCE facts: water
+    balance is the one naming feed and steam flow, energy balance the rest."""
+    water = {"feed_water_flow", "steam_flow"}
+    if tag == "water_balance":
+        sel = [f for f in facts if f.check == "BALANCE" and water <= set(f.tags)]
+    elif tag == "energy_balance":
+        sel = [f for f in facts if f.check == "BALANCE" and not water <= set(f.tags)]
+    else:
+        sel = [f for f in facts if tag in f.tags]
+    return [f.id for f in sel if f.severity != "INFO"]
+
+
+def update_hypotheses(wm: WorldModel, facts: list[Fact], signature: dict,
+                      candidates: list[dict], tick: int) -> None:
     """candidates: retrieved cases, each with expected/contradicting signatures.
+
+    Evidence is compared as full (tag, direction, band) TRIPLES against the tick
+    `signature`, exactly as CaseLibrary.match does (known bug 6: this used to
+    compare tag names only, so a flat bed -- which RCA-01 PREDICTS -- was charged
+    as a contradiction of RCA-01's "bed falling" signature).
 
     Note that confidences are NOT normalised to sum to 1. Two faults at once is
     a real scenario (Plan §9) and forcing a simplex would make the second one
     impossible to express.
     """
-    present_tags = {t for f in facts for t in f.tags if f.severity != "INFO"}
-    fact_by_tag: dict[str, list[str]] = {}
-    for f in facts:
-        for t in f.tags:
-            fact_by_tag.setdefault(t, []).append(f.id)
-
     for cand in candidates:
         cause = cand.get("root_cause") or cand.get("cause", "unknown")
         h = next((x for x in wm.hypotheses if x.cause == cause), None)
@@ -145,25 +159,25 @@ def update_hypotheses(wm: WorldModel, facts: list[Fact], candidates: list[dict],
             wm.hypotheses.append(h)
         h.retired = False
 
-        expected = set(cand.get("signature", {}).keys())
-        contra = set(cand.get("contradicting_signature", {}).keys())
+        expected = CaseLibrary._to_triples(cand.get("signature", {}))
 
         delta = 0.0
         supports, contradicts = [], []
 
-        # rule 1: expected evidence observed
-        for tag in expected & present_tags:
-            delta += STEP_SUPPORT
-            supports.extend(fact_by_tag.get(tag, []))
+        for triple in expected:
+            if triple in signature:
+                # rule 1: expected evidence observed (a FLAT triple observed
+                # counts: RCA-01 expects a flat bed, and the signature has it)
+                delta += STEP_SUPPORT
+                supports.extend(_fact_ids(facts, triple[0]))
+            else:
+                # rule 2: expected evidence ABSENT -- the part most systems skip
+                delta += STEP_ABSENT
 
-        # rule 2: expected evidence ABSENT -- the part most systems skip
-        for tag in expected - present_tags:
-            delta += STEP_ABSENT
-
-        # rule 3: direct contradiction
-        for tag in contra & present_tags:
+        # rule 3: direct contradiction -- the SAME function retrieval uses
+        for triple in CaseLibrary.contradiction_hits(cand, signature):
             delta += STEP_CONTRA
-            contradicts.extend(fact_by_tag.get(tag, []))
+            contradicts.extend(_fact_ids(facts, triple[0]))
 
         # Bound the per-tick movement regardless of how many tags matched.
         delta = max(-1.2, min(1.2, delta))
