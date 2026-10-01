@@ -460,3 +460,6 @@ bench/harness.py    gains --arch single|multi and --mode lockstep|realtime
 3. Run the phase's check from the plan's build order. Report the numbers in a table next to the previous phase's.
 4. If a number moves and you cannot say why, stop and say so instead of adjusting things until it looks right.
 5. Commit with the phase name in the message. Do not push.
+
+### Python
+- Always run Python as `.venv/bin/python` (tests: `.venv/bin/python -m pytest`), never the system python.

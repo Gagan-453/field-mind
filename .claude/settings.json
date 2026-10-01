@@ -2,16 +2,22 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(python -m pytest *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(.venv/bin/python *)",
       "Bash(pytest *)",
-      "Bash(python bench/*)",
-      "Bash(python run_demo.py *)",
+      "Bash(pip install *)",
+      "Bash(adb *)",
+      "Bash(ls *)",
+      "Bash(grep *)",
+      "Bash(find *)",
       "Bash(git status)",
       "Bash(git diff *)",
       "Bash(git log *)",
-      "Bash(adb devices)",
-      "Bash(adb forward *)",
       "Bash(curl -s http://localhost:*)"
+    ],
+    "ask": [
+      "Bash(rm *)"
     ],
     "deny": [
       "Bash(git push *)",
