@@ -7,12 +7,15 @@ baseline: `results/baselines/single_v1_summary.json` (reproduced exactly at HEAD
 identical, per-episode Q1/Q2 identical, 2164 retrieval rows saved as the identity reference).
 
 ## Status
-**PARTIAL**: items 1–5 built and committed (2 steps for item 1, plus a tie-fair diagnostic). Two of the changes
-(Step B, retirement) move the mock numbers in **mixed** directions and need your decision (see *Blocked / needs a
-decision*). Nothing was run on the NPU or a cloud model, so Phase 0's "mock and NPU" check is half done.
+**PARTIAL**. Items 1–5 were built; a follow-up round (see *Follow-up: keep/revert rule*, below) then applied your keep
+rule: **Step B reverted, retirement switched off by default, Step C built and reverted.** The tree is now **A2 with
+retirement off**. One decision is open: A2 itself fails the held-out clause of the rule (see follow-up). Nothing was run
+on the NPU or a cloud model, so Phase 0's "mock and NPU" check is half done. The sections from *Numbers that changed*
+down describe the first round (B and retirement on); the follow-up section supersedes them where they differ.
 
 Commits (all on `main`, none pushed): `934bf0b` config · `7588d11` groups/metrics/telemetry ·
-`73a4208` tie-fair · `add57e3` A1 · `b6fb8b1` A2 · `d822130` B · `9ce3cba` retirement · docs and this report (next commit).
+`73a4208` tie-fair · `add57e3` A1 · `b6fb8b1` A2 · `d822130` B · `9ce3cba` retirement · `7f836ab` docs/report.
+Follow-up: `1b8f2ce` revert B · `537c572` retirement switch, default off · `04b8bfd` step C · `a11aefc` revert C.
 
 ## Verification
 | step | result |
@@ -186,6 +189,7 @@ unchanged in Q1 and Q5. Outside T2, only two per-episode values moved anywhere: 
   Each costs the true case −0.2 (×weight) per tick. Not changed in this session.
 
 ## Blocked / needs a decision
+**Superseded by the follow-up section for items 1 and 2** (both decided by your keep rule). Original text, kept for the record:
 No stop rule was hit. These are open questions, with options, not actions already taken:
 1. **Keep Step B?** It is its own commit (`d822130`, `git revert` undoes it). It improves B-family top-1 and group
    (+0.078) and Q2 top-1 slightly, but lowers C-family top-3 (0.551 → 0.380 at this step), costs A02 5.5 minutes of lead time, and the new
@@ -217,3 +221,122 @@ No stop rule was hit. These are open questions, with options, not actions alread
 - **Held-out group credit for C03/C05** (0.382 / 0.179) is low; I did not investigate why.
 - `pytest` was not installed in the venv; I installed it (dev-only, added as a comment-delimited line in
   `requirements.txt`). The three `bench/test_*.py` files are scripts and were run as such, not collected by pytest.
+
+
+---
+
+# Follow-up: keep/revert rule
+
+**Rule (set by you):** a step is kept only if, on library episodes, tie-fair belief top-1 and belief group each drop by
+no more than 0.01, and held-out belief group does not drop; otherwise revert and record why. Tie-fair belief top-1 is now
+the headline belief top-1. Deltas are against the preceding kept state, mock backend only.
+Mutation checks in this round ran with `PYTHONDONTWRITEBYTECODE=1` (and `-p no:cacheprovider`). `pytest>=8.0` was already in
+`requirements.txt` from the first round (dev-only line).
+
+## Decision per step
+| step | vs | lib tie-fair top-1 | lib belief group | held-out belief group | verdict | tree |
+|---|---|---|---|---|---|---|
+| A1 exact triples | base | 0.013 → 0.264 (+0.251) | 0.028 → 0.444 (+0.416) | 0.000 → 0.620 (+0.620) | **KEEP** | kept |
+| A2 weight scaling | A1 | 0.264 → 0.438 (+0.174) | 0.444 → 0.574 (+0.130) | 0.620 → 0.545 (**−0.075**) | **FAILS held-out clause: rule says revert**. Not reverted, see below | kept, **needs your decision** |
+| B band rule (contradictions) | A2 | 0.438 → 0.420 (−0.018) | 0.574 → 0.516 (−0.058) | 0.545 → 0.652 (+0.107) | **REVERT** | reverted (`1b8f2ce`) |
+| retirement N=20 | A2 | 0.438 → 0.413 (−0.025) | 0.574 → 0.550 (−0.024) | 0.545 → 0.628 (+0.083) | **REVERT** (default off) | off (`537c572`) |
+| C neutral absence | A2 | 0.438 → 0.346 (**−0.092**) | 0.574 → 0.570 (−0.004) | 0.545 → 0.561 (+0.016) | **REVERT** | reverted (`a11aefc`) |
+| retirement on, at A2+C | A2+C | 0.346 → 0.354 (+0.008) | 0.570 → 0.577 (+0.007) | 0.561 → 0.640 (+0.079) | would KEEP, but moot: C is reverted | n/a |
+
+**A2 is the one open decision.** Applying your rule literally reverts A2, but A2 is the base you specified for steps 2 and
+3 and for the final table, so I built on it and did **not** revert it without asking. The evidence:
+- A2's library gains are large (tie-fair belief top-1 +0.174, belief group +0.130).
+- The held-out drop (0.620 → 0.545) is not a tie artifact: with ties split fairly the held-out belief group still drops
+  0.683 → 0.641. Held-out belief ticks are tie-heavy (tie rate 0.765–0.881), which is why I checked.
+- Options: keep A2 (waive the held-out clause for it); revert A2 and return to A1; or keep A2 and treat held-out belief
+  group as unreliable under ties.
+
+## Final table (library and held-out rows; mock; not agent results)
+Requested columns first; `A2+ret` and `A2+B` are the reverted variants, for completeness.
+
+| row | base | A1 | A2 | A2+C | A2+C+ret | A2+ret | A2+B |
+|---|---|---|---|---|---|---|---|
+| **library (13 episodes)** | | | | | | | |
+| top-1 | 0.436 | 0.436 | 0.436 | 0.436 | 0.436 | 0.436 | 0.455 |
+| top-3 | 0.663 | 0.680 | 0.684 | 0.674 | 0.674 | 0.683 | 0.646 |
+| group top-1 | 0.547 | 0.547 | 0.547 | 0.547 | 0.547 | 0.547 | 0.566 |
+| sep_named | 0.500 | 0.503 | 0.503 | 0.503 | 0.503 | 0.503 | 0.511 |
+| belief top-1 (plain) | 0.012 | 0.429 | 0.515 | 0.477 | 0.482 | 0.490 | 0.480 |
+| **belief top-1 tie-fair** | 0.013 | 0.264 | 0.438 | 0.346 | 0.354 | 0.413 | 0.420 |
+| belief top-3 | 0.031 | 0.630 | 0.654 | 0.702 | 0.699 | 0.641 | 0.604 |
+| **belief group** | 0.028 | 0.444 | 0.574 | 0.570 | 0.577 | 0.550 | 0.516 |
+| belief tie rate | 0.296 | 0.494 | 0.283 | 0.386 | 0.336 | 0.237 | 0.227 |
+| **held-out (4 episodes, RCA-06)** | | | | | | | |
+| group top-1 | 0.487 | 0.487 | 0.487 | 0.487 | 0.487 | 0.487 | 0.470 |
+| **belief group** | 0.000 | 0.620 | 0.545 | 0.561 | 0.640 | 0.628 | 0.652 |
+| **low-conf rate** | 0.912 | 0.189 | 0.225 | 0.227 | 0.127 | 0.144 | 0.240 |
+| belief tie rate | 0.112 | 0.881 | 0.765 | 0.825 | 0.838 | 0.799 | 0.835 |
+| legacy Q2 top-1 / top-3 | 0.334 / 0.507 | 0.334 / 0.520 | 0.334 / 0.523 | 0.334 / 0.516 | 0.334 / 0.516 | 0.334 / 0.522 | 0.348 / 0.494 |
+
+Q1, Q3, Q5, S4, S7 are unchanged at every step (0.743 / 1.0 / 0.91 / 0.45 / 0). The current tree (A2, retirement off)
+reproduces the A2 column exactly (retrieval dump and every per-episode value identical).
+
+## Why Step C failed
+The neutral rule stops charging absence when a rival case expects the same direction at another band. That removes
+penalties that used to separate near-band rivals, so more hypotheses reach the same top log-odds: belief top-of-list tie
+rate 0.283 → 0.386. D01 shows it clearly: tie rate 0.077 → 0.851, plain belief top-1 *up* 0.824 → 0.950, tie-fair *down*
+0.824 → 0.542. The true-case drops in A01 (0.547 → 0.160) and A05 (0.517 → 0.011) I did **not** trace; "rivals no longer
+penalised" is my hypothesis, not verified. Step C's four required unit cases (exact → support, same direction other band →
+neutral, opposite direction → absence, FLAT when movement expected → absence) plus a pseudo-tag case, the converse
+(movement when FLAT expected) and a no-citation case all passed; they were removed with the revert.
+
+Mutation checks on C: neutral ignores direction → 3 tests fail (`test_c3`, `test_c6`, the A2 FLAT-vs-movement test);
+neutral branch charges absence (= A2) → `test_c2`, `test_c6` fail. A third edit, "neutral also covers a FLAT observation",
+**survived, and is an equivalent mutant**: the same-direction check already excludes FLAT (its direction is "FLAT"), so the
+edit changed nothing. Not counted as a catch.
+Retirement switch: orchestrator ignoring the config value (hard-coded 20) → `test_null_in_config_switches_retirement_off_and_20_turns_it_on` fails.
+
+## RCA-09 / RCA-10 tie: does it still occur at A2 with retirement off?
+Your hypothesis is half right. The tie itself **persists**, because the two cases have identical signatures and are updated
+identically whenever both are retrieved. What bug 6 removed is the consequence: they no longer sit at the top.
+| state | ticks with belief | both live | log-odds exactly equal | ...and they are the top two |
+|---|---|---|---|---|
+| base | 2002 | 1220 | 321 | **225** |
+| A1 | 2160 | 993 | 312 | 11 |
+| A2, retirement off | 2164 | 1458 | 269 | 25 |
+| A2, retirement on | 2164 | 1321 | 260 | 27 |
+Retirement barely changes it (25 vs 27), so it was not the tool that fixed this.
+
+## Held-out confidence at every step (item 4)
+`low_conf_rate` is in the final table (0.912 → 0.189 at A1 → 0.225 at A2). **A1 is the step that made the agent confident
+on unseen cases.** Rate alone does not say whether the confidence is deserved, so I also measured it against the true group
+(held-out ticks after onset, model-order rank 1, confident = confidence > 0.5):
+| state | confident | confident AND wrong group | wrong share of confident |
+|---|---|---|---|
+| base | 0.072 | 0.072 | 1.000 |
+| A1 | 0.820 | 0.444 | 0.541 |
+| A2 | 0.772 | 0.404 | 0.523 |
+| A2 + retirement | 0.848 | 0.480 | 0.566 |
+| A2+C+retirement | 0.856 | 0.476 | 0.556 |
+The base agent was almost never confident on these episodes (and when it was, always wrong). Since A1 it is confident on
+~80% of ticks and wrong-group on about half of those. That is a calibration concern for the real-model runs, and retirement
+makes it worse. These are mock numbers on 4 episodes that all share one case (RCA-06).
+
+## Open physics question (Step B revert; case data NOT changed)
+Is a bed falling FAST during a feed-valve fault (A episodes), or in C02/C04 (feeder trip), physically plausible?
+- **If yes:** the contradicting signatures for RCA-01 (`bed DOWN MED`) and RCA-14 (`bed UP MED`) on `bed_temp_avg` are wrong
+  for this plant.
+- **If no:** it is the known bed-noise calibration gap (CLAUDE.md), and the signature bands are being crossed by wander.
+
+Evidence gathered, which does not settle the physics: the share of ticks (10-min bed slope, current band edges) at FAST:
+| group | FAST-UP | FAST-DOWN |
+|---|---|---|
+| normal episodes (6) | 0.070 | **0.247** (N05 0.575, N03 0.327) |
+| A, after onset (6) | 0.079 | 0.168 |
+| B (5) | 0.059 | 0.299 |
+| C, after onset (6) | 0.192 | 0.164 (C04 FAST-UP 0.522) |
+| D (4) | 0.626 | 0.097 |
+FAST bed slopes are common with no fault at all, and A's FAST-DOWN share (0.168) is not above the normal-episode share
+(0.247). That is more consistent with the noise-gap reading than with the signatures being wrong. C04's 0.522 FAST-UP share is
+the exception worth a physics look. Needs a plant engineer or real-noise calibration to answer.
+
+## What I could not verify (this round)
+- The physics question above, and why A01/A05 lose the true case under Step C.
+- Whether held-out confidence is deserved on a real model (mock only; 4 episodes, one case).
+- A2's held-out drop on a reasoning backend; the verdict is mock belief only.
+- The tie-fair figures treat ties as uniform among tied cases; that is a convention I introduced, not a measured quantity.
