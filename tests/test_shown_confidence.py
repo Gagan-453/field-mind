@@ -72,9 +72,9 @@ def test_model_only_hypothesis_keeps_its_confidence():
     assert out == [0.4]
 
 
-def test_retired_hypotheses_are_not_rivals():
-    # the orchestrator passes only live hypotheses; a retired high rival must
-    # not be in `live`, so the rank-1 is judged against the live rest
+def test_only_the_hypotheses_passed_in_are_rivals():
+    # shown_confidences judges against `live` only; excluding retired ones is the
+    # caller's job (the orchestrator passes `not h.retired`)
     a, b = H("A", 2.0), H("B", -1.0)
     assert shown([a, b])[0] == a.confidence
 
@@ -127,3 +127,48 @@ def test_shown_never_exceeds_decision_and_is_carried_on_every_hypothesis(replay)
         if a["hypotheses"]:
             assert a["confidence"] == a["hypotheses"][0]["confidence_shown"]
     assert n > 100
+
+
+# ----------------------------------------------- decision paths (no data needed)
+FIELDMIND = ROOT / "fieldmind"
+
+
+def test_confidence_shown_is_referenced_only_by_the_producer_and_the_assembly_step():
+    """Structural guard for 'nothing that decides reads the shown value': the verifier,
+    diagnostician, retrieval, gate, memory, triage, schemas and runtime never mention it."""
+    allowed = {"world_model.py", "orchestrator.py"}
+    offenders = []
+    for f in FIELDMIND.rglob("*.py"):
+        text = f.read_text()
+        if ("confidence_shown" in text or "shown_confidences" in text) and f.name not in allowed:
+            offenders.append(str(f.relative_to(ROOT)))
+    assert not offenders, offenders
+
+
+def test_orchestrator_computes_the_shown_value_only_after_verifier_and_gate():
+    src = (FIELDMIND / "agent/orchestrator.py").read_text()
+    first_use = min(i for i in (src.find("shown_confidences("), src.find("confidence_shown"))
+                    if i != -1)
+    for decision_call in ("self.ver.should_run(", "self.ver.apply(", "self.gate.approve("):
+        assert decision_call in src
+        assert first_use > src.rfind(decision_call), decision_call
+
+
+def test_prompt_summary_carries_the_decision_confidence_not_the_shown_one():
+    """_wm_summary feeds the Diagnostician prompt. Two tied hypotheses at the clamp
+    have decision 0.98 and shown 0.5; the prompt must say 0.98."""
+    from fieldmind.agent.orchestrator import Orchestrator
+    wm = wmod.new_world_model("t", [])
+    wm.hypotheses = [H("A", 4.0), H("B", 4.0)]
+    text = Orchestrator._wm_summary(wm)
+    assert "(0.98)" in text and "(0.50)" not in text and "(0.5)" not in text
+
+
+def test_verifier_trigger_reads_the_value_it_is_given():
+    """Should_run is a pure band test on its argument; the orchestrator test above
+    pins WHICH value it is given."""
+    from fieldmind.agent.l5_verify import Verifier
+    v = Verifier.__new__(Verifier)
+    v.cfg = {"verifier": "conditional", "verifier_band": [0.35, 0.75]}
+    assert v.should_run("INVESTIGATE", 0.982) is False
+    assert v.should_run("INVESTIGATE", 0.5) is True
