@@ -87,6 +87,17 @@ def test_heldout_episode_only_scores_group_and_low_conf():
     assert t2_root_cause(_run("RCA-06", ["RCA-18"], ["RCA-14"], conf=0.8))["low_conf_rate"] == 0.0
 
 
+def test_tied_belief_top1_is_split_not_awarded_to_insertion_order():
+    run = _run("RCA-14", ["RCA-14"], [])
+    # two cases tied at the top log-odds; the target happens to be listed first
+    run["assessments"][0]["belief_ranking"] = [
+        {"case_ref": "RCA-14", "log_odds": 2.0, "confidence": 0.9},
+        {"case_ref": "RCA-03", "log_odds": 2.0, "confidence": 0.9}]
+    r = t2_root_cause(run)
+    assert r["belief_top1"] == 1.0 and r["belief_top1_tiefair"] == 0.5
+    assert r["belief_top_tie_rate"] == 1.0
+
+
 def test_library_episode_has_no_low_conf_rate():
     assert t2_root_cause(_run("RCA-14", ["RCA-14"], ["RCA-14"]))["low_conf_rate"] is None
 
