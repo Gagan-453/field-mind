@@ -164,15 +164,19 @@ def update_hypotheses(wm: WorldModel, facts: list[Fact], signature: dict,
         delta = 0.0
         supports, contradicts = [], []
 
-        for triple in expected:
+        for triple, w in expected.items():
+            # `w` is the case triple's weight, the same one match() uses: FLAT
+            # 0.35, movement and balance pseudo-triples 1.0. Predicting flatness
+            # is weak evidence, so a FLAT triple moves belief by a third of what
+            # a movement triple does, in both directions.
             if triple in signature:
                 # rule 1: expected evidence observed (a FLAT triple observed
                 # counts: RCA-01 expects a flat bed, and the signature has it)
-                delta += STEP_SUPPORT
+                delta += w * STEP_SUPPORT
                 supports.extend(_fact_ids(facts, triple[0]))
             else:
                 # rule 2: expected evidence ABSENT -- the part most systems skip
-                delta += STEP_ABSENT
+                delta += w * STEP_ABSENT
 
         # rule 3: direct contradiction -- the SAME function retrieval uses
         for triple in CaseLibrary.contradiction_hits(cand, signature):

@@ -125,3 +125,33 @@ def test_a01_rca01_charged_only_when_a_contradicting_triple_is_present(a01):
     for t, r in a01.items():
         if not any(w > 0.5 and k in triples for k, w in r["signature"].items()):
             assert r["contradicts"] == [], t
+
+
+# ------------------------------------------------------- weight scaling (A2)
+def _one_triple_case(direction, band):
+    return {"case_id": "X", "root_cause": "x", "signature": {"drum_level": [direction, band]},
+            "contradicting_signature": {}}
+
+
+def _delta(case, signature):
+    wm = wmod.new_world_model("ep_unit", [])
+    wmod.update_hypotheses(wm, [], signature, [case], tick=0)
+    return wm.hypotheses[0].log_odds
+
+
+def test_flat_evidence_moves_belief_less_than_movement():
+    flat, moving = _one_triple_case("FLAT", "-"), _one_triple_case("DOWN", "FAST")
+    seen_flat = _delta(flat, {("drum_level", "FLAT", "-"): 0.35})
+    seen_move = _delta(moving, {("drum_level", "DOWN", "FAST"): 1.0})
+    assert 0 < seen_flat < seen_move
+    assert seen_flat == pytest.approx(0.35 * seen_move)       # FLAT weight is 0.35
+    # ... and a MISSING flat expectation costs less than a missing movement one
+    miss_flat = _delta(flat, {("drum_level", "UP", "FAST"): 1.0})
+    miss_move = _delta(moving, {("drum_level", "UP", "FAST"): 1.0})
+    assert miss_move < miss_flat < 0
+
+
+def test_contradiction_charge_is_not_scaled():
+    case = {"case_id": "X", "root_cause": "x", "signature": {},
+            "contradicting_signature": {"bed_temp_avg": ["DOWN", "MED"]}}
+    assert _delta(case, {("bed_temp_avg", "DOWN", "MED"): 1.0}) == pytest.approx(wmod.STEP_CONTRA)
