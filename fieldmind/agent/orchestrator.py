@@ -173,12 +173,20 @@ class Orchestrator:
             claims["hypotheses"], facts, retrieved, state)
         hard_ms += (time.perf_counter() - t0) * 1000
 
+        # ---------------- shown confidence (DISPLAY ONLY) ----------------
+        # Computed after the verifier and the gate, from the final list; nothing
+        # below reads it. The decision value stays in h["confidence"].
+        shown = wmod.shown_confidences(
+            claims["hypotheses"], [h for h in wm.hypotheses if not h.retired])
+        for h, v in zip(claims["hypotheses"], shown):
+            h["confidence_shown"] = v
+
         # ---------------- assemble --------------------------------------
         asmt.hypotheses = claims["hypotheses"]
         asmt.actions = [a.__dict__ for a in actions]
         asmt.escalate = escalate
         asmt.unexplained = claims.get("unexplained", []) + unexplained
-        asmt.confidence = top_conf
+        asmt.confidence = shown[0] if shown else 0.0     # display: shown value of rank 1
         asmt.headline = claims.get("headline") or asmt.headline
         asmt.llm_invoked = llm_used
         asmt.envelopes = envelopes

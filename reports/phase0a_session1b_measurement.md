@@ -5,10 +5,10 @@ results**; the mock re-ranks retrieved cases and does no reasoning. Energy is `n
 
 ## Status
 PARTIAL. Step 1 (dev set) done. Step 2 (bed slope) is a finding only. Step 3 (band calibration) was run and **not adopted**
-(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is specified here and being built. Not yet done: the reporting-set run,
+(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is built, measured on dev and **KEPT**. The reporting-set run, `single_v3_summary.json`, the C04 advisor entry and the phase-reviewer are not done. Not yet done: the reporting-set run,
 `results/baselines/single_v3_summary.json`, the C04 advisor entry, phase-reviewer.
 
-Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. Branch `exp/band-edges-p85`
+Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. `e726085` fix (c) pre-registration. The (c) code commit follows it. Branch `exp/band-edges-p85`
 (`dd5d41a`): the p85 edges, preserved, not for main.
 
 ## Verification
@@ -263,6 +263,45 @@ Keep (c) only if **all** hold on dev, mock, against current main:
   It can in principle rise if the ticks moved into the 0.4-0.6 bin are right far less than half the time; the rule decides.
 - **P5:** `low_conf_rate` (held-out) rises from 0.245, and the library low-confidence share from 0.335.
 
+## Step 5 results: fix (c) on dev, mock, against the rule (every clause was fixed before the run)
+Built: `world_model.shown_confidences` (pure function), called in the orchestrator **after the verifier and the gate**; adds
+`confidence_shown` to each shown hypothesis and sets `Assessment.confidence` to the rank-1 shown value. Evaluator
+`low_conf_rate` reads the shown value; `low_conf_rate_decision` keeps the old definition.
+
+| clause | result | verdict |
+|---|---|---|
+| 1. belief metrics bit-identical | the summary differs from current main in 4 keys, all `low_conf_rate*` (below). No `belief_*` key moves, per family or per episode | PASS |
+| 2. decision values bit-identical | 5,850 assessments: `hypotheses` order and every `confidence`, `actions`, `escalate`, `state`, `triage`, `llm_invoked`, `belief_ranking` equal; envelope agent / status / tokens equal (0 differences). Only `confidence_shown`, `Assessment.confidence` and latency fields differ | PASS |
+| 3. Q1/Q2/Q3/Q4/Q5/Q6/S4/S7 unchanged | all equal (S4 0.337, Q5 0.98, Q2 top-1 0.332, ...); per-episode keys differ only in `low_conf_rate` and `low_conf_rate_decision` | PASS |
+| 4a. library ECE (group) falls | **0.1305 -> 0.0963** (-26%) | PASS |
+| 4b. library confident-and-wrong falls | **233 of 1,327 (0.176) -> 57 (0.043)** | PASS |
+| 5. reported, not deciding | held-out ECE 0.4167 -> 0.051; held-out confident-and-wrong 0.399 -> 0.055 (15 of 273); neither got worse, nothing flagged. `low_conf_rate` (held-out, evaluator) **0.245 -> 0.945**; library low-confidence share 0.335 -> 0.583 | reported |
+| 6. tests, mutations, suite | 61 pytest pass; `bench` scripts 20/16/22 pass; 3 mutations caught (below) | PASS |
+
+**Verdict: KEEP (c).**
+
+Shown rank-1 confidence on dev (library): mean 0.685 -> 0.485, median 0.885 -> 0.500, share >= 0.9 0.489 -> 0.151. Held-out
+median 0.980 -> 0.500, share >= 0.9 0.608 -> 0.000.
+
+**Predictions against the result:** P1 held: `dev_N05` RCA-07 still 0.711, 0.881, 0.957, 0.982 on ticks 11-14 and `dev_N09`
+0.711, 0.859 (no live rival with log-odds > 0). P2 held (clauses 1-3). P3 held (0.399 -> 0.055). P4 held: library
+confident-and-wrong fell by 0.133, under the 0.227 tie-share bound, and ECE fell modestly, not collapsed. P5 held.
+
+Library calibration bins after (c) (conf bin: n, mean conf, group-correct): 0-0.2: 385, 0.085, 0.195; 0.2-0.4: 165, 0.286,
+0.376; 0.4-0.6: 281, 0.497, 0.612; 0.6-0.8: 133, 0.711, 0.797; 0.8-1.0: 363, 0.907, 0.981. **The display has swung from
+over-confident to under-confident**: group-correct now exceeds mean confidence in every library bin. Cause (measured): of the
+301 library tied ticks, **83 (27.6%) have a tied set entirely inside the true group** (look-alikes such as RCA-14/18), where 0.5
+throws away real group-level certainty; the margin is pairwise and group-blind. A group-aware margin is a possible
+follow-up, not built.
+
+Verification of this step:
+| step | result |
+|---|---|
+| ran the module | full dev run with (c): 36 episodes, 5,850 assessments; saturation tool on it, and again with `--decision-conf`, which reproduces the baseline table exactly (ECE 0.1305, 233, 0.176, ...) |
+| self-tests | pytest 61 passed / 0 failed; `test_checks` 20/0, `test_envelope_logging` 16/0, `test_orchestrator` 22/0 |
+| independent re-derivation | library ECE (group): tool 0.0963 vs recomputed by separate code from the raw `belief_ranking` log-odds (shown value recomputed per tick, groups from `case_groups.json`) 0.0963; rel. diff 0.04% (the tool's value is printed to 4 d.p.). The recomputed shown value differs from the emitted `confidence_shown` on **0 of 1,327** ticks; confident-and-wrong 57 vs 57 |
+| mutation check | (M1) verifier trigger reads the shown value: caught by `test_verifier_does_not_fire_on_a_tie_the_display_shows_as_half`. (M2) the `min` safeguard dropped: 5 tests fail (never-raises, tie-below-half, both-at-floor, retired-not-rival, shown<=decision). (M3) a hypothesis counted as its own rival: 3 tests fail (single-hypothesis unchanged, never-raises, retired-not-rival). `__pycache__` cleared between runs |
+
 ## Disagreements recorded, not resolved
 - **Instruction vs history (item 2).** "Restore load normalisation" vs a signature that never had it. Resolved by your
   decision to skip, not by me.
@@ -285,11 +324,15 @@ Keep (c) only if **all** hold on dev, mock, against current main:
   alone, +0.90, +2.00, +3.09, +4.00 over ticks 11-14 (shown 0.711 to 0.982) on a healthy plant. Open.
 - **Fix (b), tie-break by this tick's retrieval score: DEFERRED to Session 2** (human decision). It changes rank-1 order, which
   is the open "does belief decide, or only break ties" question, to be decided with real-model numbers.
+- **Group-aware margin.** (c) is pairwise and group-blind: 27.6% of library tied ticks are look-alikes inside the true group and now
+  show 0.5, and the library display is now under-confident in every bin. Not built.
 - **Whether ambiguity (a tie, a small margin) should trigger the verifier.** Separate later change; (c) leaves the
   trigger on the decision confidence.
 
 ## What I could not verify
 - Why dev library belief is lower than reporting (unexplained; hypothesis: A2 selected on the reporting set).
+- (c) on a real model: the shown value is computed from belief only, so the model's own ordering can differ from the belief
+  ordering; `shown` matches by cause/case, not by rank. Not exercised (mock reproduces belief order).
 - Everything beyond mock: a reasoning model may not depend on signature density the way the mock re-rank does.
 - A01, A04 and A06 never reach TRIP_IMMINENT on their dev seeds (reporting twins do: 29.2, 59.8, 30.2 min). Time-to-trip
   differs for A02/A03/D01/D03 too. Dev A-family lead times are reported separately and are not compared with reporting.

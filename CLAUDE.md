@@ -486,6 +486,11 @@ either set (B's real headline, `water_balance`, comes from BALANCE facts and is 
 calibration, tested together with the edges as one unit; it touches case data, so it needs a pre-registered rule and advisor
 sign-off. Glossary: Q5 is the mean of per-episode FP rates (0.98 on dev); the pooled rate is 0.87.
 
+**Shown vs decision confidence (Session 1b, fix (c)).** `confidence` is the decision value (log-odds squashed): the verifier
+trigger, verifier and diagnostician prompts, retirement, ordering and the gate read it. `confidence_shown` (and
+`Assessment.confidence`) is display/reporting only: `min(confidence, sigmoid(own log-odds - best rival's))`, so a tie shows 0.5.
+Never feed `confidence_shown` into a decision; `tests/test_shown_confidence.py` checks the verifier trigger.
+
 Tie-fair belief top-1 is the headline belief top-1 (plain belief top-1 partly credits insertion order under ties).
 A human may override the rule for a step; record the override and its reasons in the report ("Decisions taken").
 

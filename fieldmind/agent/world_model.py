@@ -234,6 +234,36 @@ def belief_ranking(wm: WorldModel) -> list[dict]:
             for h in live]
 
 
+def shown_confidences(hypotheses: list[dict], live: list) -> list[float]:
+    """DISPLAY-ONLY confidence for the shown hypotheses (Session 1b, fix (c)).
+
+    shown_i = min(c_i, sigmoid(l_i - r_i)) where c_i is the hypothesis's
+    decision confidence, l_i its belief log-odds and r_i the best rival's
+    log-odds among the live hypotheses (0 when there is no rival, so a lone
+    hypothesis shows exactly sigmoid(l_i) = c_i). A tie shows 0.5 whatever k
+    is (a pairwise margin, not a probability over the tied set). The `min`
+    means the margin can only lower the shown value. A hypothesis with no
+    belief entry (a model-only idea) keeps its own confidence.
+
+    NOTHING THAT DECIDES MAY READ THE RESULT: the verifier trigger, the
+    verifier and diagnostician prompts, retirement, ordering and the gate all
+    keep `confidence`. See reports/phase0a_session1b_measurement.md, Step 5.
+    """
+    out = []
+    for h in hypotheses:
+        c = float(h.get("confidence", 0.0))
+        own = next((x for x in live if x.cause == h.get("cause")), None)
+        if own is None and h.get("case_ref"):
+            own = next((x for x in live if x.case_ref == h.get("case_ref")), None)
+        if own is None:
+            out.append(round(c, 3))
+            continue
+        rivals = [x.log_odds for x in live if x is not own]
+        rival = max(rivals) if rivals else 0.0
+        out.append(round(min(c, _sigmoid(own.log_odds - rival)), 3))
+    return out
+
+
 # =======================================================================
 #  State machine
 # =======================================================================
