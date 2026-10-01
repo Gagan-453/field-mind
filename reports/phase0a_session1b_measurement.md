@@ -301,10 +301,13 @@ confident-and-wrong fell by 0.133, under the 0.227 tie-share bound, and ECE fell
 
 Library calibration bins after (c) (conf bin: n, mean conf, group-correct): 0-0.2: 385, 0.085, 0.195; 0.2-0.4: 165, 0.286,
 0.376; 0.4-0.6: 281, 0.497, 0.612; 0.6-0.8: 133, 0.711, 0.797; 0.8-1.0: 363, 0.907, 0.981. **The display has swung from
-over-confident to under-confident**: group-correct now exceeds mean confidence in every library bin. Cause (measured): of the
-301 library tied ticks, **83 (27.6%) have a tied set entirely inside the true group** (look-alikes such as RCA-14/18), where 0.5
-throws away real group-level certainty; the margin is pairwise and group-blind. A group-aware margin is a possible
-follow-up, not built.
+over-confident to under-confident**: group-correct now exceeds mean confidence in every library bin. Of the 301 library tied
+ticks, **83 (27.6%) have a tied set entirely inside the true group** (look-alikes such as RCA-14/18), where 0.5 throws away real
+group-level certainty (the margin is pairwise and group-blind). **Corrected at close-out:** I first gave this as the cause of the
+under-confidence in every bin. It cannot be: a tie shows exactly 0.5, so tied ticks sit only in the 0.4-0.6 bin. Even there, the
+contribution of tied ticks to that bin's gap was not measured. The lowest bin was split at close-out and the cause is the
+negative margin, not ties (see "Low-bin under-confidence: measured cause" under Step 6 results). The 0.2-0.4 bin was not split
+(unexplained).
 
 ### Where the low-confidence ticks come from (library; answers a review question)
 Denominator of the low-confidence share: the **1,327 scored library ticks** (post-onset, non-empty hypothesis list). Before:
@@ -433,12 +436,48 @@ Reading the tables:
   it also means the held-out figures reflect the tie structure of RCA-06 more than any general calibration.
 - **Library bins are still not calibrated** (reporting, shown): 0-0.2: n 485, mean conf 0.094, group-correct 0.318;
   0.2-0.4: 206, 0.279, 0.524; 0.4-0.6: 270, 0.503, 0.519; 0.6-0.8: 172, 0.684, 0.802; 0.8-1.0: 309, 0.930, 0.922. The top bins are
-  now well calibrated; the low bins are under-confident (group-correct well above mean confidence), consistent with the
-  group-blind tie handling noted above. The same pattern holds on dev.
+  now well calibrated, and the low bins are under-confident (group-correct well above mean confidence). **Corrected at close-out:**
+  I first wrote that this was "consistent with the group-blind tie handling". That was wrong, because a tie shows exactly 0.5 and
+  the lowest bin contains no ties. The measured cause is below. The 0.2-0.4 bin is unexplained (not split). Dev shows the same
+  direction with a smaller gap (lowest bin 0.085 vs 0.195).
 - `low_conf_rate` (evaluator, the episode-mean of per-episode rates) is 0.972 and the pooled tick share from the saturation tool is
   0.980 for the same held-out ticks: different aggregation, same data.
 - Dev is lower than reporting on the library belief rows in both columns (0.375 vs 0.438 tie-fair top-1): unexplained
   (hypothesis: A2 was selected on the reporting set). Dev A-family lead times are not compared with reporting.
+
+### Low-bin under-confidence: measured cause (close-out; reporting run, library, read-only)
+Method: for each of the 485 lowest-bin ticks (shown rank-1 < 0.2), recompute `shown = min(c, sigmoid(l - r))` from the logged
+`belief_ranking` (`l` is the shown rank-1's own log-odds and `r` is the best live rival's), then record which term binds. The
+recompute matches the logged `confidence_shown` on all 485 ticks (0 mismatches). The bin itself reproduces exactly (n 485, mean
+0.094, group-correct 0.318). It contains **0 ties**. Script: a scratch file, not committed (no code changes).
+
+| lowest-bin ticks (reporting, library) | n | mean shown | group-correct | share of the gap* |
+|---|---|---|---|---|
+| (a) min binds on the rank-1's own confidence `c`, and it is below a rival (l < r) | 71 | 0.160 | 0.493 | 22% |
+| (a) min binds on `c`, and it is the belief leader (l >= r) | 8 | 0.158 | 0.250 | 1% |
+| (b) negative margin binds (l < r and sigmoid(l - r) < c; the _merge/re-rank disagreement) | **300** | **0.056** | **0.340** | **79%** |
+| model-only (no belief entry, so shown = c) | 106 | 0.153 | 0.142 | -1% |
+| all | 485 | 0.094 | 0.318 | 100% |
+
+*Gap = sum over ticks of (group-correct − shown) = 108.2 = 485 × 0.223 (0.318 − 0.094 from rounded bin figures). Each row's share is
+n × (group-correct − mean shown) / 108.2, computed per tick (unrounded).
+
+(b) split by the belief leader's group, i.e. the rival that outranks the shown rank-1:
+
+| (b) ticks | n | mean shown | shown rank-1 group-correct | belief leader group-correct | mean r − l | share of the gap |
+|---|---|---|---|---|---|---|
+| leader in a **different** group | 276 | 0.057 | 0.286 | 0.409 | 3.56 | 58% |
+| leader in the **same** group (group-blind margin) | 24 | 0.047 | 0.958 | 0.958 | 3.35 | 20% |
+
+**Cause (measured):** most of the gap comes from (b), the negative margin. On 300 ticks the shown rank-1 sits on average 3.5
+log-odds below a belief rival, so the margin shows it at about 0.06. Yet it is in the true group 34% of the time. In the larger
+part of (b), where the leader is in another group, the belief leader is right only 41% of the time. A 3.56 log-odds lead
+(sigmoid 0.97) for a leader that is right 41% of the time is belief over-confidence carried into the display through the margin.
+Group-blindness accounts for only the 24 same-group ticks (20% of the gap), and it acts through a negative margin, not through
+ties. The rest of the gap (22%) is (a): the rank-1's own decision confidence is low but it is right 49% of the time.
+**Unexplained:** why belief log-odds gaps are this wide relative to how often the belief leader is right. I believe it is the
+known saturation and clamp behaviour, but that is untested. On dev the same split gives (b) 281 of 385 (shown 0.059, group-correct
+0.164), with only 7 same-group ticks.
 
 ## Advisor questions (consolidated; new items first)
 No single list existed (questions were scattered across the stage reports). New this session:
@@ -479,16 +518,23 @@ the bed FAST-DOWN share in the A episodes, wander or physics (`phase0a_single_ag
 
 - **Overconfidence fix (a), per-tick log-odds decay: DROPPED** (human decision). Recorded: a decay mild enough to be
   derived (half-life = the 20-tick signature window) cannot stop a +1.2/tick climb from reaching the clamp in 4-5 ticks.
-- **Single-hypothesis fast climb.** One live hypothesis has no rival, so nothing in (c) touches it: `dev_N05_normal`, RCA-07
-  alone, +0.90, +2.00, +3.09, +4.00 over ticks 11-14 (shown 0.711 to 0.982) on a healthy plant. Open.
+- **Lone-leader climb: rank-1 far ahead of its best rival, so the margin cannot pull the display down (e.g. dev_N05 RCA-07).**
+  `dev_N05_normal`, RCA-07: +0.90, +2.00, +3.09, +4.00 over ticks 11-14 (shown 0.711, 0.881, 0.950, 0.980) on a healthy plant.
+  4 to 6 hypotheses are live, but every rival sits below 0 (ticks 11-12) or just above it (RCA-15 +0.16 / +0.12 from tick 13), so (c) barely moves it.
+  Open. (Renamed at close-out from "single-hypothesis fast climb", which was inaccurate.)
 - **Fix (b), tie-break by this tick's retrieval score: DEFERRED to Session 2** (human decision). It changes rank-1 order, which
   is the open "does belief decide, or only break ties" question, to be decided with real-model numbers.
 - **Group-aware margin.** (c) is pairwise and group-blind: 27.6% of library tied ticks are look-alikes inside the true group and now
-  show 0.5, and the library display is now under-confident in every bin. Not built.
+  show 0.5. In the lowest bin, group-blindness accounts for only 20% of the under-confidence gap (24 same-group negative-margin
+  ticks); 58% comes from negative margins against a belief leader in another group (close-out split). A group-aware margin
+  would not address the larger part. Not built.
 - **Whether ambiguity (a tie, a small margin) should trigger the verifier.** Separate later change; (c) leaves the
   trigger on the decision confidence.
 
 ## What I could not verify
+- Why belief's lead over a disagreeing shown rank-1 is so wide (mean 3.56 log-odds) when the belief leader is in the true
+  group only 41% of the time (lowest-bin split, close-out). Saturation/clamp is the obvious candidate; not tested. The 0.2-0.4
+  bin's under-confidence (0.279 vs 0.524) was not split.
 - Why dev library belief is lower than reporting (unexplained; hypothesis: A2 selected on the reporting set).
 - (c) on a real model: `shown` is matched to belief by cause (then case_ref), not by rank, so a reordering model changes which
   hypothesis is judged against which rival. On the mock this already happens: **170 of 1,982 dev ticks (8.6%)** with a belief
