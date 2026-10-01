@@ -155,8 +155,9 @@ def trajectories(runs: list[dict], ids: list[str]) -> dict:
         for a in run["assessments"]:
             brk = a.get("belief_ranking") or []
             if brk and a["hypotheses"]:
+                h = a["hypotheses"][0]
                 rows.append((a["tick"], brk[0]["case_ref"], brk[0]["log_odds"],
-                             a["hypotheses"][0].get("confidence")))
+                             h.get("confidence"), conf_of(h)))
         out[run["episode_id"]] = rows
     return out
 
@@ -190,9 +191,9 @@ def main() -> int:
             print(f"  {c} ECE bins [bin, n, mean conf, group-correct]: {s[c]['ece_group_bins']}")
     if args.trajectory:
         for ep, rows in trajectories(runs, args.trajectory.split(",")).items():
-            print(f"\n{ep}: tick, belief rank-1, log-odds, shown conf")
+            print(f"\n{ep}: tick, belief rank-1, log-odds, decision conf, shown conf")
             for r in rows:
-                print(f"  t{r[0]:<4d} {r[1]:8s} {r[2]:+.3f}  {r[3]:.3f}")
+                print(f"  t{r[0]:<4d} {r[1]:8s} {r[2]:+.3f}  {r[3]:.3f}  {r[4]:.3f}")
     if args.json:
         json.dump(s, open(args.json, "w"), indent=2)
     return 0

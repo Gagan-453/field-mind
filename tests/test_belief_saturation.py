@@ -78,3 +78,11 @@ def test_correctness_is_group_level_not_case_level():
     # case-level ECE sees both as wrong; group-level sees one right and one wrong
     assert s["ece_case"] == 0.9          # |0.9 - 0/2|
     assert s["ece_group"] == 0.4         # |0.9 - 1/2|
+
+
+def test_trajectory_rows_carry_both_the_decision_and_the_shown_value():
+    from bench.belief_saturation import trajectories
+    t = _tick(7, (3.0, 0.2), 0.957)
+    t["hypotheses"][0]["confidence_shown"] = 0.95
+    row = trajectories([{"episode_id": "e", "assessments": [t]}], ["e"])["e"][0]
+    assert row[3] == 0.957 and row[4] == 0.95
