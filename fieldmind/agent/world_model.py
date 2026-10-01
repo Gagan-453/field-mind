@@ -36,6 +36,8 @@ STEP_ABSENT = -0.20
 STEP_CONTRA = -0.90
 CLAMP = 4.0            # log-odds ceiling ~= confidence 0.982
 RETIRE_BELOW = 0.08
+# Bands that mean 'moving' (l1_symbolize.BANDS); FLAT's band is '-'.
+MOVEMENT_BANDS = ("SLOW", "MED", "FAST")
 
 
 def new_world_model(episode_id: str, equipment: list[str]) -> WorldModel:
@@ -183,6 +185,15 @@ def update_hypotheses(wm: WorldModel, facts: list[Fact], signature: dict,
                 # counts: RCA-01 expects a flat bed, and the signature has it)
                 delta += w * STEP_SUPPORT
                 supports.extend(_fact_ids(facts, triple[0]))
+            elif triple[2] in MOVEMENT_BANDS and any(
+                    k[0] == triple[0] and k[1] == triple[1] and k[2] in MOVEMENT_BANDS
+                    for k in signature):
+                # Step C: the expected tag IS moving in the expected direction,
+                # just at a different band. The six-tag bands are coarse and the
+                # slopes noisy, so that is neither confirmation nor absence:
+                # charge nothing. (An exact match is support above; the other
+                # direction, or FLAT when movement was expected, is absence below.)
+                continue
             else:
                 # rule 2: expected evidence ABSENT -- the part most systems skip
                 delta += w * STEP_ABSENT

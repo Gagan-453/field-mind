@@ -155,3 +155,46 @@ def test_contradiction_charge_is_not_scaled():
     case = {"case_id": "X", "root_cause": "x", "signature": {},
             "contradicting_signature": {"bed_temp_avg": ["DOWN", "MED"]}}
     assert _delta(case, {("bed_temp_avg", "DOWN", "MED"): 1.0}) == pytest.approx(wmod.STEP_CONTRA)
+
+
+# ------------------------------------------------ absence rule, Step C (neutral)
+def _moving_case(direction="DOWN", band="MED"):
+    return _one_triple_case(direction, band)
+
+
+def test_c1_exact_match_is_support():
+    assert _delta(_moving_case(), {("drum_level", "DOWN", "MED"): 1.0}) == pytest.approx(wmod.STEP_SUPPORT)
+
+
+def test_c2_same_direction_other_band_is_neutral_faster_and_slower():
+    case = _moving_case("DOWN", "MED")
+    assert _delta(case, {("drum_level", "DOWN", "FAST"): 1.0}) == 0.0     # observed faster
+    assert _delta(case, {("drum_level", "DOWN", "SLOW"): 1.0}) == 0.0     # observed slower
+    assert wmod.new_world_model("e", []).hypotheses == []                 # (no side effects)
+
+
+def test_c3_opposite_direction_is_still_absence():
+    assert _delta(_moving_case("DOWN", "MED"), {("drum_level", "UP", "MED"): 1.0}) == pytest.approx(wmod.STEP_ABSENT)
+
+
+def test_c4_flat_when_movement_expected_is_still_absence():
+    assert _delta(_moving_case("DOWN", "MED"), {("drum_level", "FLAT", "-"): 0.35}) == pytest.approx(wmod.STEP_ABSENT)
+
+
+def test_c5_movement_when_flat_expected_is_still_absence():
+    flat = _one_triple_case("FLAT", "-")
+    assert _delta(flat, {("drum_level", "DOWN", "FAST"): 1.0}) == pytest.approx(0.35 * wmod.STEP_ABSENT)
+
+
+def test_c6_balance_pseudo_tag_follows_the_same_rule():
+    case = {"case_id": "X", "root_cause": "x", "signature": {"water_balance|DEFICIT|MED": 1.0},
+            "contradicting_signature": {}}
+    assert _delta(case, {("water_balance", "DEFICIT", "FAST"): 1.0}) == 0.0
+    assert _delta(case, {("water_balance", "SURPLUS", "MED"): 1.0}) == pytest.approx(wmod.STEP_ABSENT)
+
+
+def test_c7_neutral_adds_no_support_citation():
+    wm = wmod.new_world_model("e", [])
+    f = Fact(id="t.F9", check="RATE", tags=["drum_level"], window=(0, 1), value=0.0, detail="d", severity="WATCH")
+    wmod.update_hypotheses(wm, [f], {("drum_level", "DOWN", "FAST"): 1.0}, [_moving_case("DOWN", "MED")], tick=0)
+    assert wm.hypotheses[0].supports == []
