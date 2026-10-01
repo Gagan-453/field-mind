@@ -250,6 +250,45 @@ def catalogue() -> list[EpisodeSpec]:
 
 
 # =======================================================================
+#  DEV SET (Session 1b). Decides keep/revert; the 30 reporting episodes above
+#  only report, once per phase.
+# =======================================================================
+# Same scenario specs as catalogue(), new seeds. Fault seeds are the reporting
+# seed + 1000. The extra no-fault episodes use 1100-1111. None of these overlap
+# the seeds already in use: 0-3 (sim self-tests, validate_data suite), 100-604
+# (reporting), 700-711 / 900-911 / 950-969 (threshold calibration).
+DEV_SEED_OFFSET = 1000
+DEV_NOFAULT_SEEDS = list(range(1100, 1112))      # 12 episodes, two per N spec
+# A spec the gate rejects is retried with seed + 10000, then + 20000. Severities
+# are never touched. Every rejection is printed and goes in the report.
+DEV_RETRY_OFFSETS = (0, 10000, 20000)
+
+
+def dev_catalogue() -> list[EpisodeSpec]:
+    import copy
+    base = catalogue()                       # case map already applied
+    faults = [s for s in base if s.family != "N"]
+    normals = [s for s in base if s.family == "N"]
+    out: list[EpisodeSpec] = []
+
+    def dev_id(eid: str) -> str:
+        return "dev_" + eid[len("ep_"):]
+
+    for s in faults:
+        d = copy.deepcopy(s)
+        d.episode_id = dev_id(s.episode_id)
+        d.seed = s.seed + DEV_SEED_OFFSET
+        d.repeat_of = dev_id(s.repeat_of) if s.repeat_of else None
+        out.append(d)
+    for i, seed in enumerate(DEV_NOFAULT_SEEDS):
+        d = copy.deepcopy(normals[i % len(normals)])
+        d.episode_id = f"dev_N{i+1:02d}_normal"
+        d.seed = seed
+        out.append(d)
+    return out
+
+
+# =======================================================================
 #  Ground truth, derived from the simulation rather than asserted
 # =======================================================================
 
@@ -416,18 +455,32 @@ def build_episode(spec: EpisodeSpec, out_dir: Path,
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="data/episodes")
+    ap.add_argument("--set", dest="which", choices=["report", "dev"],
+                    default="report", help="report: the 30 reporting episodes; "
+                    "dev: the disjoint development set (default out data/episodes_dev)")
+    ap.add_argument("--out", default=None)
     ap.add_argument("--only", default="", help="substring filter on episode id")
     ap.add_argument("--no-validate", action="store_true",
                     help="skip the validation gate (debugging only)")
     args = ap.parse_args()
 
-    out = Path(args.out)
-    specs = [s for s in catalogue() if args.only in s.episode_id]
+    out = Path(args.out or ("data/episodes_dev" if args.which == "dev"
+                            else "data/episodes"))
+    specs = [s for s in (dev_catalogue() if args.which == "dev" else catalogue())
+             if args.only in s.episode_id]
     fams: dict[str, int] = {}
     n_ok = n_fail = 0
     for spec in specs:
         gt = build_episode(spec, out, validate=not args.no_validate)
+        if gt is None and args.which == "dev":
+            # Dev only: retry with a fresh seed, never a changed severity.
+            base_seed = spec.seed
+            for off in DEV_RETRY_OFFSETS[1:]:
+                spec.seed = base_seed + off
+                print(f"  RETRY {spec.episode_id}: seed {base_seed} -> {spec.seed}")
+                gt = build_episode(spec, out, validate=not args.no_validate)
+                if gt is not None:
+                    break
         if gt is None:
             n_fail += 1
             continue

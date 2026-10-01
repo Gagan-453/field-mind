@@ -470,6 +470,12 @@ A belief or retrieval step on the single agent is kept only if, against the prec
 - held-out belief group does not drop, **but this clause gates a step only once at least two held-out cases have
   episodes.** Today only RCA-06 does (4 episodes, tie rates 0.77 to 0.88), so held-out metrics are reported, not gating.
 
+**Dev set rule (Session 1b).** All keep/revert decisions use the dev set (`data/episodes_dev`, built by
+`dev_catalogue()` in `data/generator/episode_build.py`: the same scenario specs as the reporting episodes with new seeds,
+plus 12 extra no-fault episodes). Run it with `run_demo.py --all --episodes-dir data/episodes_dev --tag dev`. The 30
+reporting episodes are run once per phase to report, never to decide. Band edges and thresholds are calibrated on the dev
+no-fault episodes only.
+
 Tie-fair belief top-1 is the headline belief top-1 (plain belief top-1 partly credits insertion order under ties).
 A human may override the rule for a step; record the override and its reasons in the report ("Decisions taken").
 

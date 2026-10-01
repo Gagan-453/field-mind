@@ -1,5 +1,6 @@
 # --- generated data: regenerate with `python -m data.generator.episode_build`
 data/episodes/
+data/episodes_dev/
 data/experience/
 results/*
 !results/baselines/

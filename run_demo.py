@@ -55,11 +55,16 @@ def main():
                     help="comma-separated episode ids to run (subset)")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--out", default="results")
+    ap.add_argument("--episodes-dir", default=None,
+                    help="overrides paths.episodes (e.g. data/episodes_dev)")
+    ap.add_argument("--tag", default="",
+                    help="suffix for the results files, so a dev run never "
+                         "overwrites a reporting run")
     args = ap.parse_args()
 
     cfg = load_config(args.config, args.backend)
     cfg.setdefault("agent", {})["log_prompts"] = args.log_prompts
-    ep_dir = Path(cfg["paths"]["episodes"])
+    ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -107,7 +112,8 @@ def main():
               f"p95={ev['S1_tick_latency_ms_p95']:.0f}ms")
 
     summary = aggregate(evals)
-    tag = f"{cfg['llm']['backend']}{'_ablated' if args.ablate_text else ''}"
+    tag = (f"{cfg['llm']['backend']}{'_ablated' if args.ablate_text else ''}"
+           f"{'_' + args.tag if args.tag else ''}")
     (out_dir / f"summary_{tag}.json").write_text(json.dumps(
         {"config_backend": cfg["llm"]["backend"], "summary": summary,
          "per_episode": evals}, indent=2))

@@ -467,8 +467,9 @@ def _load_disk(ep_dir: Path):
 
 
 def _spec_by_id(ep_id: str) -> EpisodeSpec | None:
-    from data.generator.episode_build import catalogue
-    return next((s for s in catalogue() if s.episode_id == ep_id), None)
+    from data.generator.episode_build import catalogue, dev_catalogue
+    return next((s for s in catalogue() + dev_catalogue()
+                 if s.episode_id == ep_id), None)
 
 
 def _validate_on_disk(root: Path) -> int:
