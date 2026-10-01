@@ -185,6 +185,16 @@ def rank_hypotheses(wm: WorldModel, top: int = 3) -> list[Hypothesis]:
     return sorted(live, key=lambda h: -h.confidence)[:top]
 
 
+def belief_ranking(wm: WorldModel) -> list[dict]:
+    """Live hypotheses by descending log-odds, for telemetry. Python's sort is
+    stable, so ties keep insertion order (the same tiebreak rank_hypotheses has)."""
+    live = sorted((h for h in wm.hypotheses if not h.retired),
+                  key=lambda h: -h.log_odds)
+    return [{"case_ref": h.case_ref, "cause": h.cause,
+             "log_odds": round(h.log_odds, 4), "confidence": h.confidence}
+            for h in live]
+
+
 # =======================================================================
 #  State machine
 # =======================================================================

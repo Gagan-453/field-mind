@@ -261,6 +261,11 @@ class Assessment:
     envelopes: list[dict] = field(default_factory=list)
     tick_latency_ms: float = 0.0
     deadline_miss: bool = False
+    # Deterministic belief ranking (live hypotheses, descending log-odds), logged
+    # BEFORE the model is consulted. `hypotheses` above is re-ordered by the
+    # model via Orchestrator._merge, so it cannot show the effect of belief-update
+    # changes; this field can. Each entry: {case_ref, cause, log_odds, confidence}.
+    belief_ranking: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)

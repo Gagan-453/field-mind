@@ -27,6 +27,13 @@ headline result.
 from __future__ import annotations
 
 from collections import Counter
+from functools import lru_cache
+
+from bench.case_groups import OUT as GROUPS_PATH, heldout_ids, load_group_map
+
+# A held-out episode's top hypothesis counts as "low confidence" at or below
+# this value (user-set in Session 1; not derived).
+LOW_CONF = 0.5
 
 STATES = ["NORMAL", "DEVIATION", "DEGRADED", "ALARM", "TRIP_IMMINENT"]
 
@@ -66,11 +73,33 @@ def t1_state_f1(run: dict, tick_s: float = 30.0) -> dict:
             "confusion": {f"{k[0]}->{k[1]}": v for k, v in conf.items()}}
 
 
+@lru_cache(maxsize=1)
+def _groups():
+    """(case->group, heldout case->group|None, held-out ids). Loaded from the
+    reviewable file data/kb/case_groups.json, never recomputed here, so the
+    scoring and the file a human reviewed cannot drift apart."""
+    gmap, held = load_group_map(GROUPS_PATH)
+    return gmap, held, heldout_ids()
+
+
 def t2_root_cause(run: dict) -> dict:
     """Top-1 and top-3 over the ticks where a fault was actually present.
 
     Scored only from fault onset onward. Crediting a correct cause BEFORE the
     fault exists would reward a lucky prior, not a diagnosis.
+
+    Phase 0a additions, all on the same scored ticks:
+      group_top1  rank-1 case is in the TRUE case's look-alike group
+      sep_named   group_top1 AND the true case is in the top 3 with a non-empty
+                  discriminator, i.e. the separating check is shown
+      belief_*    the same, computed from the deterministic belief ranking
+                  (`belief_ranking`, by log-odds) instead of the model-ordered
+                  `hypotheses`, so belief-update changes are visible on mock
+      low_conf_rate (held-out only) share of ticks with rank-1 confidence <= 0.5
+
+    `top1`/`top3` keep their original definition (held-out episodes score a
+    structural 0) so the Session 0 baseline stays comparable. The NEW split
+    rows in aggregate() use `heldout` to exclude them instead.
     """
     gt = run["ground_truth"]
     target = gt["root_cause_id"]
@@ -79,18 +108,47 @@ def t2_root_cause(run: dict) -> dict:
     # not a structural zero. "NONE" is a normal (no-fault) episode.
     if target in (None, "NONE"):
         return {"applicable": False}
+    gmap, held, held_ids = _groups()
+    heldout = target in held_ids
+    tgroup = held.get(target) if heldout else gmap.get(target, target)
     onset = gt.get("fault_onset_t") or 0
-    hits1 = hits3 = n = 0
+    n = hits1 = hits3 = g1 = sep = b1 = b3 = bg = low = tie = 0
     for a in run["assessments"]:
         if a["tick"] * 30.0 < onset or not a["hypotheses"]:
             continue
-        refs = [h.get("case_ref") for h in a["hypotheses"]]
+        hyps = a["hypotheses"]
+        refs = [h.get("case_ref") for h in hyps]
+        brk = a.get("belief_ranking") or []
+        brefs = [b.get("case_ref") for b in brk]
         n += 1
         hits1 += (refs[0] == target)
         hits3 += (target in refs[:3])
-    return {"applicable": True, "n_scored": n,
-            "top1": round(hits1 / n, 3) if n else 0.0,
-            "top3": round(hits3 / n, 3) if n else 0.0}
+        grp_ok = tgroup is not None and gmap.get(refs[0]) == tgroup
+        g1 += grp_ok
+        disc = {h.get("case_ref"): h.get("discriminator") for h in hyps}
+        sep += bool(grp_ok and target in refs[:3] and disc.get(target))
+        b1 += (brefs[:1] == [target])
+        b3 += (target in brefs[:3])
+        bg += (tgroup is not None and bool(brefs) and gmap.get(brefs[0]) == tgroup)
+        low += (hyps[0].get("confidence", 0.0) <= LOW_CONF)
+        tie += (len(brk) > 1 and brk[0]["log_odds"] == brk[1]["log_odds"])
+
+    def r(x):
+        return round(x / n, 3) if n else 0.0
+    return {"applicable": True, "heldout": heldout, "target": target,
+            "true_group": tgroup,
+            "n_scored": n,
+            "top1": r(hits1), "top3": r(hits3),                  # legacy
+            # held-out: top-1/top-3/sep are not applicable (None), never zero
+            "top1_strict": None if heldout else r(hits1),
+            "top3_strict": None if heldout else r(hits3),
+            "group_top1": r(g1) if tgroup is not None else None,
+            "sep_named": None if heldout else r(sep),
+            "belief_top1": None if heldout else r(b1),
+            "belief_top3": None if heldout else r(b3),
+            "belief_group": r(bg) if tgroup is not None else None,
+            "belief_top_tie_rate": r(tie),
+            "low_conf_rate": r(low) if heldout else None}
 
 
 def t3_faithfulness(run: dict) -> dict:
@@ -210,6 +268,42 @@ def _pct(vals: list[float], p: int) -> float:
     return round(s[min(len(s) - 1, int(len(s) * p / 100))], 2)
 
 
+_Q2_KEYS = ("top1_strict", "top3_strict", "group_top1", "sep_named",
+            "belief_top1", "belief_top3", "belief_group",
+            "belief_top_tie_rate", "low_conf_rate")
+
+
+def _row(eps: list[dict]) -> dict:
+    """Episode-mean of each per-episode Q2 rate; None values are skipped, so a
+    not-applicable metric is never averaged in as a zero. A metric that is None
+    for every episode stays None."""
+    out = {"n_episodes": len(eps)}
+    for k in _Q2_KEYS:
+        vals = [e["T2_root_cause"][k] for e in eps
+                if e["T2_root_cause"].get(k) is not None]
+        out[k.replace("_strict", "")] = (round(sum(vals) / len(vals), 3)
+                                         if vals else None)
+    return out
+
+
+def _q2_split(evals: list[dict]) -> dict:
+    scored = [e for e in evals if e["T2_root_cause"].get("applicable")]
+    lib = [e for e in scored if not e["T2_root_cause"]["heldout"]]
+    held = [e for e in scored if e["T2_root_cause"]["heldout"]]
+    fam = {}
+    for f in "ABCDE":
+        fl = [e for e in lib if e["family"] == f]
+        fh = [e for e in held if e["family"] == f]
+        # Always emitted: a family with no scored episodes (E: all three map to
+        # no case) must show as n_episodes 0, not silently vanish from the table.
+        fam[f] = {"library": _row(fl), "heldout": _row(fh)}
+    all_held = sorted(heldout_ids())
+    with_ep = sorted({e["T2_root_cause"]["target"] for e in held})
+    return {"library": _row(lib), "heldout": _row(held), "by_family": fam,
+            "with_ep": with_ep,
+            "without_ep": [c for c in all_held if c not in with_ep]}
+
+
 def aggregate(evals: list[dict]) -> dict:
     """Roll up across episodes. Reports the constraint checks from Plan §11.3."""
     def mean(key, path):
@@ -232,6 +326,8 @@ def aggregate(evals: list[dict]) -> dict:
     q4_scored = [e["episode_id"] for e in evals
                  if e["T4_actions"].get("applicable")]
 
+    split = _q2_split(evals)
+
     return {
         "n_episodes": len(evals),
         "Q1_macro_f1": round(sum(e["T1_state"]["macro_f1"]
@@ -239,6 +335,13 @@ def aggregate(evals: list[dict]) -> dict:
         "Q2_top1": mean("T2_root_cause", "top1"),
         "Q2_top3": mean("T2_root_cause", "top3"),
         "Q2_n_episodes_scored": len(q2_scored),
+        # Legacy Q2_top1/top3 above average held-out episodes in as structural
+        # zeros (Session 0 definition). The split rows below do not.
+        "Q2_library": split["library"],
+        "Q2_heldout": split["heldout"],
+        "Q2_by_family": split["by_family"],
+        "Q2_heldout_cases_with_episodes": split["with_ep"],
+        "Q2_heldout_cases_without_episodes": split["without_ep"],
         "Q2_episodes_not_applicable":
             sorted(e["episode_id"] for e in evals
                    if e["family"] != "N" and not e["T2_root_cause"].get("applicable")),

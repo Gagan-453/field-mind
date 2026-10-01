@@ -119,6 +119,9 @@ class Orchestrator:
         # alone -- that is the phase-3 baseline and it is the safe floor.
         wmod.update_hypotheses(wm, facts, retrieved["cases"], tick_no)
         ranked = wmod.rank_hypotheses(wm, top=3)
+        # Telemetry only: the deterministic ranking by log-odds, before any model
+        # reply can reorder claims. Does not feed claims or any decision.
+        asmt.belief_ranking = wmod.belief_ranking(wm)
         claims = {"headline": asmt.headline,
                   "hypotheses": [{"rank": i + 1, "cause": h.cause,
                                   "confidence": h.confidence,
