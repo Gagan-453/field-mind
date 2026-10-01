@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 import yaml
@@ -28,6 +29,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 
 from bench.evaluator import aggregate, evaluate          # noqa: E402
+from bench.board import chip_temperature                 # noqa: E402
 from bench.harness import Episode, run_episode           # noqa: E402
 
 
@@ -44,7 +46,7 @@ def main():
     ap.add_argument("--episode", default=None, help="one episode id")
     ap.add_argument("--all", action="store_true", help="run every episode")
     ap.add_argument("--backend", default=None,
-                    choices=["mock", "gemini", "litert"],
+                    choices=["mock", "gemini", "litert", "llamaserver"],
                     help="overrides llm.backend in the config")
     ap.add_argument("--ablate-text", action="store_true",
                     help="remove all notes (T8 modality ablation)")
@@ -53,6 +55,12 @@ def main():
                          "every AgentEnvelope (large output; for debugging)")
     ap.add_argument("--episodes", default=None,
                     help="comma-separated episode ids to run (subset)")
+    ap.add_argument("--url", default=None,
+                    help="overrides llm.llamaserver.url (e.g. the CPU lane, :8081)")
+    ap.add_argument("--lane", default=None,
+                    help="overrides llm.llamaserver.lane (npu|cpu label)")
+    ap.add_argument("--cooldown-s", type=float, default=0.0,
+                    help="board runs: idle gap between episodes (chip cooling)")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--out", default="results")
     ap.add_argument("--episodes-dir", default=None,
@@ -63,6 +71,11 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config, args.backend)
+    ls = cfg["llm"].setdefault("llamaserver", {})
+    if args.url:
+        ls["url"] = args.url
+    if args.lane:
+        ls["lane"] = args.lane
     cfg.setdefault("agent", {})["log_prompts"] = args.log_prompts
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])
     out_dir = Path(args.out)
@@ -96,8 +109,17 @@ def main():
             print(f"--- {ep.id}  ({ep.ground_truth['family']}/"
                   f"tier {ep.ground_truth['tier']}) "
                   f"truth: {ep.ground_truth['root_cause_text']}")
+        on_board = cfg["llm"]["backend"] in ("llamaserver", "litert")
+        if on_board and runs and args.cooldown_s > 0:
+            time.sleep(args.cooldown_s)            # chip cooling between episodes
+        temp0 = chip_temperature() if on_board else None
         run = run_episode(ep, cfg, ablate_text=args.ablate_text,
                           verbose=args.verbose)
+        if on_board:
+            run["chip_temp_start"] = temp0
+            run["chip_temp_end"] = chip_temperature()
+            run["cooldown_s_before"] = args.cooldown_s if len(runs) else 0.0
+            print(f"  chip temp start {temp0}  end {run['chip_temp_end']}")
         ev = evaluate(run)
         runs.append(run)
         evals.append(ev)

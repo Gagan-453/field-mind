@@ -26,6 +26,7 @@ Three implementations, one interface:
     | MockBackend    | no network, instant, canned   | CI / unit tests   |
     | GeminiBackend  | Google AI Studio HTTP API     | development       |
     | LiteRTBackend  | litert_lm_main over adb/local | the QIDK result   |
+    | LlamaServer..  | persistent llama-server, HTTP | QIDK lanes (0b)   |
     +----------------+-------------------------------+-------------------+
 
 Adding a fourth (Qualcomm Genie, llama.cpp, Ollama) means writing one class
@@ -620,6 +621,106 @@ class LiteRTBackend(LLMBackend):
 
 
 # =======================================================================
+#  4. LLAMA-SERVER  --  persistent llama.cpp lanes on the QIDK (Phase 0b)
+# =======================================================================
+
+class LlamaServerBackend(LLMBackend):
+    """Talks HTTP to a persistent `llama-server` (OpenAI-style chat endpoint).
+
+    One instance per lane: the NPU lane (`--device HTP0 -ngl 99`, port 8080)
+    and the CPU lane (no offload, port 8081) differ only in `url` and `lane`.
+    The model stays loaded across calls -- that is the point of this backend
+    (multi-agent plan, design rule 2: no reload per call).
+
+    Every LLMReply field comes from the server's own `timings` block:
+
+        prefill_tokens = timings.prompt_n      tokens actually prefilled
+        decode_tokens  = timings.predicted_n
+        ttft_ms        = timings.prompt_ms     SERVER-SIDE prefill time; it
+                         excludes the HTTP round trip and the adb forward, so
+                         it is a lower bound on client-observed TTFT
+        latency_ms     = client wall clock for the whole request
+
+    A timing field the server did not send is left at 0, never estimated.
+    `cache_prompt` defaults to False so prompt_n counts every prompt token and
+    prefix reuse cannot inflate the prefill rate the scheduler learns from.
+    `json_mode` (response_format json_object) defaults to False so the
+    broken-JSON rate measures the model, not a grammar.
+    """
+
+    name = "llamaserver"
+
+    def __init__(self, url: str = "http://localhost:8080", lane: str = "npu",
+                 model_file: str = "unknown", temperature: float = 0.0,
+                 seed: int = 0, timeout_s: float = 120.0,
+                 json_mode: bool = False, cache_prompt: bool = False, **_):
+        self.url = url.rstrip("/")
+        self.lane = lane
+        self.model_file = model_file
+        self.temperature = temperature
+        self.seed = seed
+        self.timeout_s = timeout_s
+        self.json_mode = json_mode
+        self.cache_prompt = cache_prompt
+
+    def _body(self, prompt: str, max_tokens: int) -> dict:
+        body = {"messages": [{"role": "user", "content": prompt}],
+                "max_tokens": max_tokens,
+                "temperature": self.temperature,
+                "seed": self.seed,
+                "cache_prompt": self.cache_prompt,
+                "stream": False}
+        if self.json_mode:
+            body["response_format"] = {"type": "json_object"}
+        return body
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        import socket
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{self.url}/v1/chat/completions",
+            data=json.dumps(self._body(prompt, max_tokens)).encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        t0 = time.perf_counter()
+
+        def fail(status: str, err: str) -> LLMReply:
+            return LLMReply(text="", status=status, backend=self.lane,
+                            model=self.model_file, error=err[:300],
+                            latency_ms=(time.perf_counter() - t0) * 1000)
+
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                raw = resp.read().decode()
+        except urllib.error.HTTPError as e:
+            return fail("error", f"HTTP {e.code}: {e.read()[:200]!r}")
+        except (TimeoutError, socket.timeout):
+            return fail("timeout", f"llama-server exceeded {self.timeout_s}s")
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, (TimeoutError, socket.timeout)):
+                return fail("timeout", f"llama-server exceeded {self.timeout_s}s")
+            return fail("error", f"connection: {e.reason}")
+        latency = (time.perf_counter() - t0) * 1000
+
+        try:
+            data = json.loads(raw)
+            text = data["choices"][0]["message"]["content"] or ""
+        except (ValueError, KeyError, IndexError, TypeError) as e:
+            return fail("error", f"malformed reply ({e!r}): {raw[:200]}")
+
+        tm = data.get("timings") or {}
+        return LLMReply(
+            text=text, backend=self.lane,
+            model=data.get("model") or self.model_file,
+            latency_ms=latency,
+            prefill_tokens=int(tm.get("prompt_n", 0) or 0),
+            decode_tokens=int(tm.get("predicted_n", 0) or 0),
+            ttft_ms=float(tm.get("prompt_ms", 0.0) or 0.0),
+        )
+
+
+# =======================================================================
 #  FACTORY  --  the single switch point
 # =======================================================================
 
@@ -653,3 +754,6 @@ def register_backend(name: str, cls: type) -> None:
     """Hook for adding Qualcomm Genie, llama.cpp, Ollama, etc. without editing
     this file. Implement LLMBackend.generate and register it at import time."""
     _REGISTRY[name] = cls
+
+
+register_backend("llamaserver", LlamaServerBackend)

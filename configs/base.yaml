@@ -52,6 +52,23 @@ llm:
     timeout_s: 60
     adb_serial: ""                  # set if more than one device is attached
 
+  # Phase 0b: persistent llama-server lanes on the QIDK (started by /board-up),
+  # reached through `adb forward`. NPU lane :8080 (--device HTP0 -ngl 99),
+  # CPU lane :8081 (-ngl 0). Same GGUF on both; Q4_0 or Q8_0 only.
+  llamaserver:
+    url: http://localhost:8080      # --url on run_demo.py overrides (CPU lane: :8081)
+    lane: npu                       # label written to LLMReply.backend
+    model_file: null                # set after the Phase 0b model choice (human decision)
+    # DERIVED: largest context_cap_tokens (3072) + agent.max_tokens (256) = 3328,
+    # rounded up to the next power of two. Used by /board-up for -c on both lanes.
+    ctx_size: 4096
+    cpu_threads: 6                  # CPU lane -t; /board-up starting value, recorded
+    temperature: 0.0                # design choice: greedy, so runs reproduce
+    seed: 0
+    timeout_s: 120                  # 256-token cap at ~12 tok/s decode is ~21 s; margin for prefill
+    json_mode: false                # no grammar: broken-JSON rate measures the model
+    cache_prompt: false             # every prompt token prefilled and counted
+
 # ---------------------------------------------------------------------------
 #  Agent behaviour
 # ---------------------------------------------------------------------------
