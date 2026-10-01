@@ -98,11 +98,6 @@ class AssetModel:
         return out
 
 
-# Magnitude order of the descriptor bands (l1_symbolize.BANDS), for the
-# 'at or above' contradiction rule.
-BAND_RANK = {"SLOW": 1, "MED": 2, "FAST": 3}
-
-
 class CaseLibrary:
     """RCA cases as structured records, matched by SIGNATURE first.
 
@@ -143,28 +138,11 @@ class CaseLibrary:
         contradiction -- known bug 6 was exactly that disagreement (belief
         compared tag names only, retrieval compared full triples).
 
-        A listed triple (tag, direction, band) is hit when the signature holds
-        the SAME tag and direction at an observed band AT OR ABOVE the listed
-        one (SLOW < MED < FAST), carrying weight > 0.5. So a bed falling FAST
-        contradicts "bed DOWN MED": faster than the contradicting rate is
-        stronger evidence against the case, not weaker. FLAT never counts (its
-        weight is 0.35 and it has no band). A listed triple whose band is not
-        SLOW/MED/FAST (the "-" of energy_balance) must match exactly.
-
-        This applies to CONTRADICTIONS only. Expected-evidence matching stays
-        exact (see world_model.update_hypotheses and match below).
+        A triple counts when the signature holds it with weight > 0.5, which
+        excludes FLAT observations (weight 0.35): a flat tag never contradicts.
         """
-        hits = []
-        for (tag, d, b) in CaseLibrary._to_triples(case.get("contradicting_signature", {})):
-            if b in BAND_RANK:
-                ok = any(st == tag and sd == d and sb in BAND_RANK
-                         and BAND_RANK[sb] >= BAND_RANK[b] and w > 0.5
-                         for (st, sd, sb), w in signature.items())
-            else:
-                ok = signature.get((tag, d, b), 0.0) > 0.5
-            if ok:
-                hits.append((tag, d, b))
-        return hits
+        contra = CaseLibrary._to_triples(case.get("contradicting_signature", {}))
+        return [t for t in contra if signature.get(t, 0.0) > 0.5]
 
     def match(self, signature: dict, k: int = 5) -> list[dict]:
         """Weighted Jaccard between the current tick signature and each case.

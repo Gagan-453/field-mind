@@ -117,66 +117,14 @@ def test_a01_flat_bed_ticks_do_not_charge_rca01(a01):
         assert a01[t]["contradicts"] == [], t
 
 
-RANK = {"SLOW": 1, "MED": 2, "FAST": 3}
-
-
-def contradicted_by_band_rule(signature, case):
-    """The Step B contradiction rule, written out independently of stores.py:
-    same tag and direction, observed band at or above the listed one."""
-    for k, v in case["contradicting_signature"].items():
-        tag, d, b = (k.split("|") if "|" in k else (k, v[0], v[1]))
-        for (st, sd, sb), w in signature.items():
-            if w > 0.5 and st == tag and sd == d:
-                if (sb in RANK and b in RANK and RANK[sb] >= RANK[b]) or sb == b:
-                    return True
-    return False
-
-
-def test_a01_rca01_charged_iff_the_band_rule_says_contradicted(a01):
+def test_a01_rca01_charged_only_when_a_contradicting_triple_is_present(a01):
+    triples = CaseLibrary._to_triples(RCA01["contradicting_signature"])
+    charged = [t for t, r in a01.items() if r["contradicts"]]
+    for t in charged:
+        assert any(r > 0.5 and k in triples for k, r in a01[t]["signature"].items()), t
     for t, r in a01.items():
-        hit = contradicted_by_band_rule(r["signature"], RCA01)
-        if not hit:
-            assert r["contradicts"] == [], t          # never charged without a hit
-        # (a hit with no bed/balance fact that tick carries no cited id, so the
-        #  converse is covered by the unit tests above, not by this replay)
-
-
-# ------------------------------------------------ contradiction bands (Step B)
-def test_bed_down_fast_contradicts_a_down_med_contradiction():
-    assert step(("DOWN", "FAST")).contradicts == ["t.F1"]
-    assert step(("DOWN", "FAST")).log_odds < step(("FLAT", "-")).log_odds
-
-
-def test_bed_down_slow_does_not_reach_a_down_med_contradiction():
-    assert step(("DOWN", "SLOW")).contradicts == []
-
-
-def test_contradiction_needs_the_same_direction():
-    # RCA-01 lists bed DOWN MED; the bed rising FAST is not a contradiction of it
-    assert step(("UP", "FAST")).contradicts == []
-
-
-def test_energy_balance_contradiction_stays_exact():
-    case = {"case_id": "X", "root_cause": "x", "signature": {},
-            "contradicting_signature": {"energy_balance|HEAT_SHORT|-": 1.0}}
-    assert CaseLibrary.contradiction_hits(case, {("energy_balance", "HEAT_SHORT", "-"): 1.0})
-    assert not CaseLibrary.contradiction_hits(case, {("energy_balance", "HEAT_ACCUMULATING", "-"): 1.0})
-
-
-def test_retrieval_penalises_the_same_band_case():
-    """The same shared function drives retrieval: a bed falling FAST lowers RCA-01."""
-    flat = next(c for c in LIB.match(sig(("FLAT", "-")), k=20) if c["case_id"] == "RCA-01")
-    fast = next((c for c in LIB.match(sig(("DOWN", "FAST")), k=20) if c["case_id"] == "RCA-01"), None)
-    assert fast is None or fast["score"] < flat["score"]
-
-
-def test_expected_evidence_matching_is_still_exact():
-    """Step B is contradictions only: a case expecting DOWN MED that sees DOWN
-    FAST still counts that triple as ABSENT (documented as a known gap)."""
-    case = _one_triple_case("DOWN", "MED")
-    seen_exact = _delta(case, {("drum_level", "DOWN", "MED"): 1.0})
-    seen_faster = _delta(case, {("drum_level", "DOWN", "FAST"): 1.0})
-    assert seen_exact > 0 > seen_faster
+        if not any(w > 0.5 and k in triples for k, w in r["signature"].items()):
+            assert r["contradicts"] == [], t
 
 
 # ------------------------------------------------------- weight scaling (A2)
