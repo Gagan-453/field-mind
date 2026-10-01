@@ -476,6 +476,16 @@ plus 12 extra no-fault episodes). Run it with `run_demo.py --all --episodes-dir 
 reporting episodes are run once per phase to report, never to decide. Band edges and thresholds are calibrated on the dev
 no-fault episodes only.
 
+**Band edges (Session 1b finding, recorded).** Edges calibrated to the dev no-fault episodes (deadband = max(previous,
+p85 of healthy 10-min |slope|)) separate families C (0.68 of post-onset ticks moving) and D (0.53) from healthy (~0.15), where
+the Stage-5 edges separate almost nothing (healthy reads 0.76-0.95 moving). They still fail the keep rule on dev (library
+tie-fair belief top-1 0.375 -> 0.098, top-1 0.434 -> 0.193; the empty-signature cases RCA-09/10/15 take 70% of belief
+rank-1), so `main` keeps the Stage-5 edges; the fitted edges are on branch `exp/band-edges-p85`. This points at the
+uncalibrated case-signature band labels (Stage 6 Unresolved 1). Family B's `feed_water_flow` slope does not separate under
+either set (B's real headline, `water_balance`, comes from BALANCE facts and is unaffected). Open item: case-signature band
+calibration, tested together with the edges as one unit; it touches case data, so it needs a pre-registered rule and advisor
+sign-off. Glossary: Q5 is the mean of per-episode FP rates (0.98 on dev); the pooled rate is 0.87.
+
 Tie-fair belief top-1 is the headline belief top-1 (plain belief top-1 partly credits insertion order under ties).
 A human may override the rule for a step; record the override and its reasons in the report ("Decisions taken").
 
