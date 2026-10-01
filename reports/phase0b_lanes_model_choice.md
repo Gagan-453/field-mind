@@ -133,6 +133,45 @@ reporting-set prior. C02 disagrees with A01 and B01, so the rule returns INCONCL
   - `board.mean_rates` counts `None` as 0 → `test_board_mean_rates_excludes_none_and_counts_it`;
   - a failed call drops the explicit `None`s → `test_failed_call_reports_no_counts`.
 
+## GGUF tensor-type check (Session 2, part 2): BLOCKED, tooling ready
+**Not done: there is no candidate file to read.**
+- No GGUF exists on the laptop: `device/models/` is empty, and a search of the home directory finds none.
+- No dump tool is installed: no `gguf-dump`, `llama-gguf` or `llama-quantize`, and no `gguf` Python package.
+- The candidate files are, as far as anyone knows, only on the board. **Not even their presence is verified**, because
+  no device is attached.
+
+Ready for the next board session: `bench/gguf_types.py` (stdlib). It reads only the GGUF header, so a prefix of
+each file is enough and multi-GB files need not be pulled:
+
+    adb exec-out "head -c 33554432 <board path>/<model>.gguf" > <scratch>/head.gguf
+    .venv/bin/python -m bench.gguf_types <scratch>/head.gguf
+
+- Output: type counts, the types of `output.weight` and `token_embd.weight`, and every matrix tensor outside
+  Q4_0/Q8_0. 1-D tensors (norms, biases) are listed separately, not flagged; llama-quantize never quantizes them.
+- Tests: `tests/test_gguf_types.py`. Mutations caught:
+  - Q6_K allowed → caught;
+  - the Q6_K id mis-mapped → caught;
+  - every tensor treated as 1-D → caught.
+- **Limit:** the tests check the parser against a writer built from the same reading of the format. The independent
+  check is the first real file: the type counts must match llama-server's own startup log
+  (`llama_model_loader: - type q4_0: N tensors`).
+
+**Expectation, to verify:** llama-quantize's default for Q4_0 keeps `output.weight` at a higher-precision type
+(commonly Q6_K). Published "Q4_0" files are often not pure. Under the plan's K-quant rule, that would put the output
+projection on the CPU. Untested here.
+
+**If any matrix tensor is flagged** (not run; needs an F16/BF16 source GGUF of the same model, because requantizing a
+Q4_0/Q6_K file compounds the error):
+
+    llama-quantize --pure <model>-F16.gguf <model>-Q4_0-pure.gguf Q4_0
+
+Alternative within the rule: keep the two big tensors at Q8_0 instead of forcing them to Q4_0:
+
+    llama-quantize --output-tensor-type q8_0 --token-embedding-type q8_0 <model>-F16.gguf <model>-Q4_0-q8out.gguf Q4_0
+
+Either produces a **different model file**, so it must be re-checked with `bench.gguf_types` and re-run through the
+model-choice table; it does not inherit the original file's numbers.
+
 ## Verification
 | step | result |
 |---|---|
