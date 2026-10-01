@@ -78,8 +78,8 @@ agent:
     # signature is built from the raw 10-minute least-squares slope
     # (orchestrator._slopes), and 10 min / tick_period_s 30 = 20 ticks, so
     # after 20 ticks none of the evidence that retrieved the case is still in
-    # the signature. ASSUMED range [10, 120]: 10 = the 5-min balance window
-    # doubled, 120 = twice the 60-min sensor window. It sets how long a stale
+    # the signature. ASSUMED range [10, 120] ticks: 10 = the 5-min balance
+    # window (5 min / 30 s), 120 = the 60-min sensor window (60 min / 30 s). It sets how long a stale
     # look-alike (e.g. RCA-09 / RCA-10 / RCA-15) can stay ranked after it stops
     # being retrieved. Not tuned on the 30 reporting episodes.
     # `null` switches retirement OFF (hypotheses are then only retired by the

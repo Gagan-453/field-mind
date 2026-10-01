@@ -92,6 +92,7 @@ def t2_root_cause(run: dict) -> dict:
       group_top1  rank-1 case is in the TRUE case's look-alike group
       sep_named   group_top1 AND the true case is in the top 3 with a non-empty
                   discriminator, i.e. the separating check is shown
+      belief_group_tiefair  belief_group with the tied top set share-credited
       belief_top1_tiefair  belief_top1 with ties at the top log-odds split 1/k
                   (rank-1 under a tie is insertion order, i.e. retrieval order)
       belief_*    the same, computed from the deterministic belief ranking
@@ -115,7 +116,7 @@ def t2_root_cause(run: dict) -> dict:
     tgroup = held.get(target) if heldout else gmap.get(target, target)
     onset = gt.get("fault_onset_t") or 0
     n = hits1 = hits3 = g1 = sep = b1 = b3 = bg = low = tie = 0
-    b1fair = 0.0
+    b1fair = bgfair = 0.0
     for a in run["assessments"]:
         if a["tick"] * 30.0 < onset or not a["hypotheses"]:
             continue
@@ -139,6 +140,12 @@ def t2_root_cause(run: dict) -> dict:
             b1fair += (1.0 / len(tied)) if target in tied else 0.0
         b3 += (target in brefs[:3])
         bg += (tgroup is not None and bool(brefs) and gmap.get(brefs[0]) == tgroup)
+        if brk and tgroup is not None:
+            # Tie-fair group: share of the tied top set that lies in the true
+            # group (the plain belief_group credits whichever tied case was
+            # inserted first, which dominates on held-out ticks).
+            top = [b for b in brk if b["log_odds"] == brk[0]["log_odds"]]
+            bgfair += sum(gmap.get(b.get("case_ref")) == tgroup for b in top) / len(top)
         low += (hyps[0].get("confidence", 0.0) <= LOW_CONF)
         tie += (len(brk) > 1 and brk[0]["log_odds"] == brk[1]["log_odds"])
 
@@ -157,6 +164,7 @@ def t2_root_cause(run: dict) -> dict:
             "belief_top3": None if heldout else r(b3),
             "belief_top1_tiefair": None if heldout else r(b1fair),
             "belief_group": r(bg) if tgroup is not None else None,
+            "belief_group_tiefair": r(bgfair) if tgroup is not None else None,
             "belief_top_tie_rate": r(tie),
             "low_conf_rate": r(low) if heldout else None}
 
@@ -279,7 +287,7 @@ def _pct(vals: list[float], p: int) -> float:
 
 
 _Q2_KEYS = ("top1_strict", "top3_strict", "group_top1", "sep_named",
-            "belief_top1", "belief_top1_tiefair", "belief_top3", "belief_group",
+            "belief_top1", "belief_top1_tiefair", "belief_top3", "belief_group", "belief_group_tiefair",
             "belief_top_tie_rate", "low_conf_rate")
 
 

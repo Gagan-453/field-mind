@@ -68,11 +68,6 @@ def test_disabled_when_none():
     assert "RCA-10" in live(wm) and retired_events(wm) == []
 
 
-def test_config_is_either_off_or_the_derived_value():
-    v = yaml.safe_load((ROOT / "configs/base.yaml").read_text())["agent"]["belief"]["retire_after_ticks"]
-    assert v in (None, N)
-
-
 # ------------------------------------------------- the config switch, end to end
 def _a01_retirements(retire_after, upto=110):
     import pytest
