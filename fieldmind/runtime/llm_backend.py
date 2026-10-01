@@ -67,8 +67,19 @@ class LLMReply:
     prefill_tokens: int | None = 0
     decode_tokens: int | None = 0
     ttft_ms: float | None = 0.0     # time to first token, headline metric on device
+    decode_ms: float | None = None  # server-side decode time (llama-server predicted_ms)
     error: str = ""
     retries: int = 0               # transient-failure retries spent on this call
+
+
+def call_record(reply: LLMReply) -> dict:
+    """One backend call as the envelope's `calls` entry: per-call token counts
+    and server-side times, so lane rates and the answer-length distribution are
+    computed per call (a repaired diagnosis makes two calls). Telemetry only."""
+    return {"status": reply.status, "prefill": reply.prefill_tokens,
+            "decode": reply.decode_tokens, "prefill_ms": reply.ttft_ms,
+            "decode_ms": getattr(reply, "decode_ms", None),
+            "latency_ms": reply.latency_ms}
 
 
 class LLMBackend:
@@ -641,6 +652,7 @@ class LlamaServerBackend(LLMBackend):
         ttft_ms        = timings.prompt_ms     SERVER-SIDE prefill time; it
                          excludes the HTTP round trip and the adb forward, so
                          it is a lower bound on client-observed TTFT
+        decode_ms      = timings.predicted_ms
         latency_ms     = client wall clock for the whole request
 
     A timing field the server did not send is None -- not 0, and never
@@ -692,6 +704,7 @@ class LlamaServerBackend(LLMBackend):
             return LLMReply(text="", status=status, backend=self.lane,
                             model=self.model_file, error=err[:300],
                             prefill_tokens=None, decode_tokens=None, ttft_ms=None,
+                            decode_ms=None,
                             latency_ms=(time.perf_counter() - t0) * 1000)
 
         try:
@@ -726,6 +739,7 @@ class LlamaServerBackend(LLMBackend):
             prefill_tokens=num("prompt_n", int),
             decode_tokens=num("predicted_n", int),
             ttft_ms=num("prompt_ms", float),
+            decode_ms=num("predicted_ms", float),
         )
 
 

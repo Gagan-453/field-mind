@@ -133,6 +133,88 @@ reporting-set prior. C02 disagrees with A01 and B01, so the rule returns INCONCL
   - `board.mean_rates` counts `None` as 0 → `test_board_mean_rates_excludes_none_and_counts_it`;
   - a failed call drops the explicit `None`s → `test_failed_call_reports_no_counts`.
 
+## Pre-registered: model-choice rule (human-approved; committed before any real-model run)
+**Candidates, run in this order:**
+1. Llama 3.2 3B Q4_0.
+2. Qwen3 1.7B Q4_0, **with thinking off**. How it is turned off is recorded when it is run: the mechanism (chat-template
+   flag, server option or prompt switch) and evidence from the replies that no `<think>` block was emitted.
+3. Gemma 3 1B QAT Q4_0 (`google/gemma-3-1b-it-qat-q4_0-gguf` on Hugging Face). Gated: the Gemma licence has to be
+   accepted before download.
+4. Qwen2.5 0.5B Q4_0, last.
+
+The same GGUF file runs on both lanes, and runs are separated by cooling gaps.
+
+**Hard constraints.** A model must pass every one. Code: `bench/model_choice.py`, `selection()`.
+| constraint | limit | source of the value |
+|---|---|---|
+| broken JSON, first reply | ≤ 0.10 | human-approved. Each failure costs a whole repair call |
+| broken JSON, after the one repair | ≤ 0.02 | human-approved. Each failure drops that tick to the deterministic answer |
+| **projected** verified-diagnosis time, NPU lane | ≤ 10 s | **human decision, changed from my proposal** (see below) |
+| all layers offloaded to HTP0 | confirmed in the NPU lane's startup log | human-approved |
+| every weight matrix Q4_0 or Q8_0 | `bench.gguf_types` verdict OK | human-approved |
+
+A check with no evidence counts as **UNVERIFIED and fails**. The board-up and GGUF results enter through
+`--checks <json>`.
+
+**Projection (labelled a projection everywhere):**
+projected = (700 / prefill_rate + 60 / decode_rate) + (350 / prefill_rate + 30 / decode_rate) seconds.
+- The rates are this model's **measured server rates from its own dev runs**, pooled over the ok calls on the lane:
+  Σ tokens / Σ server ms.
+- They come from the new per-call record `envelope.calls`, which holds token counts, `prompt_ms` and `predicted_ms`.
+- Caveat: the rates are measured at the single-agent prompt size (about 2,000 tokens), and the prefill rate at 700
+  tokens may differ.
+
+**Ranking among the models that pass:**
+1. Library group top-1 on dev, with a tie band of 0.05.
+2. Then model citation faithfulness (raw, before the gate), with a band of 0.02.
+3. Then mean diagnostician call time, labelled **"stand-in for energy, not measured energy"**.
+
+**If no model passes: stop and ask.** No limit is relaxed.
+
+**Reported, not gating:** single-agent diagnostician call time (mean, p95), tick deadline misses (count and rate), and
+answer tokens per call (mean, p95, share at the 256 cap).
+
+**Flags in the table:**
+- A model whose library group top-1 is **below the deterministic floor**. The floor is the mock run of the same 3 dev
+  episodes, 0.501. Such a model is also noted as evidence for the ranking question: its order loses to the
+  no-reasoning order.
+- **A lead that comes from one episode.** Any pair ranked apart by more than the tie band where the higher model is
+  ahead on at most one of the three episodes. The table also shows group top-1 per episode for every model.
+
+### Decision record: the call-time limit was changed by human decision
+My proposal was "single-agent diagnostician call p95 ≤ 20 s at the ~2,000-token prompt". **The human replaced it**
+with the projected verified-diagnosis limit above (≤ 10 s). Their reason: this model runs on both lanes for every
+multi-agent session. That design targets prompts under 1,280 tokens, 60-token answers and a verified diagnosis in
+about 10 s. The single-agent call shape (about 2,000 tokens in, up to 256 out) is dominated by decode time, so it would
+select for the baseline, not for the target design. The single-agent p95 is kept as a reported row.
+
+### Telemetry added for this rule (no decision path changed)
+- `LLMReply.decode_ms` (llama-server `predicted_ms`; `None` when not sent).
+- `AgentEnvelope.calls`: one record per backend call (`runtime.llm_backend.call_record`). The diagnostician writes 1
+  or 2 records (with repair) and the verifier 1.
+- The mock dev run is identical with these fields added: 400 assessments, 0 decision-field and 0 token differences, 294
+  call records (262 diagnostician + 32 verifier).
+- On mock, the rate, projection and answer-length rows are nulled, because the mock's timings and token counts are
+  synthetic.
+- Tests: `tests/test_model_choice.py`, which covers:
+  - the projection formula (worked value 8.67 s at 900 / 12 tok/s);
+  - each hard constraint, including the exact limits and UNVERIFIED;
+  - both tie bands and the call-time tiebreak;
+  - stop-and-ask;
+  - both flags, and the floor taken from the mock column.
+
+  Also `tests/test_missing_timings.py` (each repair call recorded separately) and the backend test (`decode_ms`).
+  `pytest`: 98 passed.
+- Mutation checks, all caught:
+  - verifier shape (350, 30) → (350, 60);
+  - limit 10 → 20 s;
+  - tie band 0.05 → 0.02;
+  - offload check passes when unverified;
+  - one-episode flag `<= 1` → `< 1`;
+  - call-time tiebreak reversed;
+  - repair call record dropped;
+  - `decode_ms` read from `prompt_ms`.
+
 ## GGUF tensor-type check (Session 2, part 2): BLOCKED, tooling ready
 **Not done: there is no candidate file to read.**
 - No GGUF exists on the laptop: `device/models/` is empty, and a search of the home directory finds none.

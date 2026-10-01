@@ -76,6 +76,7 @@ def test_every_field_comes_from_server_timings(server):
     assert r.prefill_tokens == 1234
     assert r.decode_tokens == 37
     assert r.ttft_ms == pytest.approx(1357.5)        # ms, server-side prefill time
+    assert r.decode_ms == pytest.approx(2661.9)      # ms, server-side decode time
     assert r.backend == "npu"
     assert r.model == "fake-model-Q4_0.gguf"          # server-reported wins
     assert r.latency_ms > 0
@@ -96,7 +97,7 @@ def test_missing_timings_are_none_not_zero_or_estimated(server):
     _Handler.mode = "no_timings"
     r = _backend(server).generate("a long prompt " * 50)
     assert r.status == "ok"
-    assert (r.prefill_tokens, r.decode_tokens, r.ttft_ms) == (None, None, None)
+    assert (r.prefill_tokens, r.decode_tokens, r.ttft_ms, r.decode_ms) == (None,) * 4
     _Handler.mode = "ok"
 
 

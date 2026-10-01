@@ -77,3 +77,65 @@ def test_verdict_rule_boundaries():
     assert verdict(_res(60, 0.6, 0.4, [(30, 0.8, 0.2), (12, 0.3, 0.5)])) == "INCONCLUSIVE"
     # an episode under 10 ticks does not join the consistency clause
     assert verdict(_res(60, 0.6, 0.4, [(30, 0.8, 0.2), (9, 0.3, 0.5)])) == "BELIEF_DECIDES"
+
+
+# ---- model-choice rule (human-approved; projected time is a PROJECTION) ------
+from bench.model_choice import FLOOR_DEFAULT, projected_s, selection  # noqa: E402
+
+
+def test_projection_is_the_approved_formula_at_measured_rates():
+    # (700/900 + 60/12) + (350/900 + 30/12) = 0.7778 + 5 + 0.3889 + 2.5 = 8.667 s
+    assert projected_s(900.0, 12.0) == 8.67
+    assert projected_s(None, 12.0) is None and projected_s(900.0, None) is None
+
+
+def _col(g, faith=0.9, lat=5000.0, eps=(0.5, 0.5, 0.5), bf=0.0, ba=0.0, proj=8.0):
+    return {"library_group_top1": g, "model_citation_faithfulness_raw": faith,
+            "diag_latency_ms_mean": lat, "broken_json_first_reply": bf,
+            "broken_json_after_repair": ba, "projected_verified_s": proj,
+            "group_top1_by_episode": dict(zip(("A", "B", "C"), eps)), "is_mock": False}
+
+
+OK = {"htp0_all_layers": True, "gguf_all_q4_0_q8_0": True}
+
+
+def test_hard_constraints_each_exclude():
+    cols = {"good": _col(0.6), "json1": _col(0.9, bf=0.11), "json2": _col(0.9, ba=0.03),
+            "slow": _col(0.9, proj=10.01), "nohtp": _col(0.9), "noggufcheck": _col(0.9)}
+    checks = {n: OK for n in cols if n not in ("nohtp", "noggufcheck")}
+    checks["nohtp"] = {"htp0_all_layers": False, "gguf_all_q4_0_q8_0": True}
+    sel = selection(cols, checks)                         # noggufcheck: no entry = UNVERIFIED
+    assert sel["passing"] == ["good"] and sel["pick"] == "good"
+    assert sel["gates"]["noggufcheck"]["htp0_all_layers"] == "UNVERIFIED"
+    # exactly at the limits passes
+    sel = selection({"edge": _col(0.6, bf=0.10, ba=0.02, proj=10.0)}, {"edge": OK})
+    assert sel["pick"] == "edge"
+
+
+def test_tie_bands_then_call_time():
+    cols = {"a": _col(0.70, faith=0.90, lat=9000), "b": _col(0.66, faith=0.89, lat=4000),
+            "c": _col(0.64, faith=0.99, lat=1000)}                # c is outside the 0.05 band
+    sel = selection(cols, {n: OK for n in cols})
+    assert set(sel["group_tied"]) == {"a", "b"}
+    assert sel["pick"] == "b"                                       # faith within 0.02 -> faster
+    cols["b"]["model_citation_faithfulness_raw"] = 0.87            # now outside the 0.02 band
+    assert selection(cols, {n: OK for n in cols})["pick"] == "a"
+
+
+def test_no_model_passes_means_stop_and_ask():
+    sel = selection({"x": _col(0.9, bf=0.5)}, {"x": OK})
+    assert sel["pick"] is None and "stop and ask" in sel["pick_reason"]
+
+
+def test_flags_below_floor_and_single_episode_lead():
+    cols = {"lead": _col(0.70, eps=(0.95, 0.60, 0.55)),          # ahead on A only
+            "other": _col(0.60, eps=(0.25, 0.75, 0.80)),
+            "low": _col(FLOOR_DEFAULT - 0.001, eps=(0.5, 0.5, 0.5))}
+    flags = selection(cols, {n: OK for n in cols})["flags"]
+    assert any(f.startswith("low:") and "BELOW" in f for f in flags)
+    assert not any(f.startswith("lead:") or f.startswith("other:") for f in flags)
+    assert any(f.startswith("lead over other") and "one episode A" in f for f in flags)
+    # a mock column, when present, supplies the floor
+    cols["mock"] = dict(_col(0.80), is_mock=True)
+    flags = selection(cols, {n: OK for n in cols})["flags"]
+    assert any(f.startswith("lead:") and "BELOW" in f for f in flags)

@@ -33,6 +33,23 @@ from bench.belief_saturation import summarise as saturation
 from bench.evaluator import _groups, aggregate, evaluate
 
 MIN_FAITH = 0.5          # configs/base.yaml agent.min_faithfulness (the gate's rule)
+ANSWER_CAP = 256         # configs/base.yaml agent.max_tokens (share of answers AT the cap)
+
+# MODEL-CHOICE RULE (human-approved, reports/phase0b_lanes_model_choice.md). Hard
+# constraints, then rank. All constants below are human decisions, not derived.
+MAX_BROKEN_FIRST = 0.10  # first reply unparseable
+MAX_BROKEN_AFTER = 0.02  # still invalid after the one repair
+MAX_PROJECTED_S = 10.0   # projected verified-diagnosis time on the NPU lane (PROJECTION)
+GROUP_TIE = 0.05         # library group top-1 tie band
+FAITH_TIE = 0.02         # model citation faithfulness tie band
+# Deterministic floor: library group top-1 of the MOCK run of the same 3 dev
+# episodes (results/phase0b/runs_mock_dev3.json, Session 2). Used only when no
+# mock column is in the table; a mock column, if given, supplies it.
+FLOOR_DEFAULT = 0.501
+# Target multi-agent call shape (multi_agent_plan.pdf: prompts < 1280 tokens,
+# 60-token diagnostician answers, 30-token verifier answers, ~10 s verified diagnosis)
+PROJ_DIAG = (700, 60)    # (prompt tokens, answer tokens)
+PROJ_VER = (350, 30)
 RULE_MARGIN = 0.10       # pre-registered decision constant (design choice)
 RULE_MIN_N = 30          # pre-registered
 RULE_EP_MIN = 10         # an episode joins the consistency clause at >= 10 ticks
@@ -135,6 +152,17 @@ def _known(envs: list[dict], key: str) -> list:
             if (e.get("tokens") or {}).get(key) is not None]
 
 
+def projected_s(prefill_rate: float | None, decode_rate: float | None) -> float | None:
+    """PROJECTION, not a measurement: the target multi-agent shape (diagnostician
+    700 in / 60 out, then verifier 350 in / 30 out) at this lane's measured
+    server rates. Rates measured at the single-agent prompt size (~2,000 tokens);
+    prefill rate at 700 tokens may differ."""
+    if not prefill_rate or not decode_rate:
+        return None
+    t = sum(p / prefill_rate + a / decode_rate for p, a in (PROJ_DIAG, PROJ_VER))
+    return round(t, 2)
+
+
 def call_stats(runs: list[dict]) -> dict:
     envs = [e for r in runs for a in r["assessments"] for e in a.get("envelopes", []) or []]
     diag = [e for e in envs if e.get("agent") == "diagnostician"]
@@ -156,7 +184,33 @@ def call_stats(runs: list[dict]) -> dict:
 
     def mean(xs):
         return round(statistics.mean(xs), 1) if xs else None
+
+    def p95(xs):
+        xs = sorted(xs)
+        return xs[int(0.95 * (len(xs) - 1))] if xs else None
+
+    # per backend call (envelope `calls`): server rates and answer lengths
+    calls_ok = [c for e in envs for c in (e.get("calls") or []) if c.get("status") == "ok"]
+    pre = [c for c in calls_ok if c.get("prefill") is not None and c.get("prefill_ms")]
+    dec = [c for c in calls_ok if c.get("decode") is not None and c.get("decode_ms")]
+    pr = (sum(c["prefill"] for c in pre) / (sum(c["prefill_ms"] for c in pre) / 1000)
+          if pre else None)
+    dr = (sum(c["decode"] for c in dec) / (sum(c["decode_ms"] for c in dec) / 1000)
+          if dec else None)
+    diag_calls_ok = [c for e in diag for c in (e.get("calls") or []) if c.get("status") == "ok"]
+    ans = [c["decode"] for c in diag_calls_ok if c.get("decode") is not None]
+    ticks = [a for r in runs for a in r["assessments"]]
     return {
+        "server_prefill_tok_s": round(pr, 1) if pr else None,
+        "server_decode_tok_s": round(dr, 2) if dr else None,
+        "rate_calls_missing": len(calls_ok) - min(len(pre), len(dec)),
+        "projected_verified_s": projected_s(pr, dr),
+        "answer_tokens_per_call_mean": mean(ans),
+        "answer_tokens_per_call_p95": p95(ans),
+        "answer_share_at_cap": round(sum(a >= ANSWER_CAP for a in ans) / len(ans), 3) if ans else None,
+        "tick_deadline_misses": sum(bool(a.get("deadline_miss")) for a in ticks),
+        "tick_deadline_miss_rate": round(sum(bool(a.get("deadline_miss")) for a in ticks)
+                                         / len(ticks), 4) if ticks else None,
         "diag_calls": calls,
         "broken_json_first_reply": round(first_fail / calls, 3) if calls else None,
         "broken_json_after_repair": (round(sum(e["status"] == "invalid_schema" for e in diag)
@@ -202,9 +256,79 @@ def column(path: str) -> dict:
     col.update(call_stats(runs))
     col["chip_temp"] = {r["episode_id"]: [r.get("chip_temp_start"), r.get("chip_temp_end")]
                         for r in runs if "chip_temp_start" in r}
+    col["group_top1_by_episode"] = {
+        e["episode_id"]: e["T2_root_cause"].get("group_top1")
+        for e in (evaluate(r) for r in runs)
+        if e["T2_root_cause"].get("applicable") and not e["T2_root_cause"].get("heldout")}
+    col["is_mock"] = col["lanes"] == ["mock"]
+    if col["is_mock"]:     # mock timings are synthetic: no lane rate, no projection
+        for k in ("server_prefill_tok_s", "server_decode_tok_s", "projected_verified_s",
+                  "answer_tokens_per_call_mean", "answer_tokens_per_call_p95",
+                  "answer_share_at_cap"):
+            col[k] = None
     col["ranking_model_rank1"] = ranking_question(runs)
     col["ranking_shown_rank1"] = ranking_question(runs, use_shown=True)
     return col
+
+
+def selection(cols: dict, checks: dict) -> dict:
+    """Apply the human-approved model-choice rule. `cols`: name -> column();
+    `checks`: name -> {"htp0_all_layers": bool, "gguf_all_q4_0_q8_0": bool} from
+    the board-up log and bench.gguf_types (a missing entry is UNVERIFIED = fail).
+    Returns per-model gate results, the order, the pick (or None = stop and ask),
+    and flags (below floor; a lead that comes from one episode)."""
+    mock = [c for c in cols.values() if c.get("is_mock")]
+    floor = mock[0]["library_group_top1"] if mock else FLOOR_DEFAULT
+    gates, flags = {}, []
+    for name, c in cols.items():
+        if c.get("is_mock"):
+            continue
+        ck = checks.get(name, {})
+        g = {"broken_json_first_reply": _le(c.get("broken_json_first_reply"), MAX_BROKEN_FIRST),
+             "broken_json_after_repair": _le(c.get("broken_json_after_repair"), MAX_BROKEN_AFTER),
+             "projected_verified_s": _le(c.get("projected_verified_s"), MAX_PROJECTED_S),
+             "htp0_all_layers": ck.get("htp0_all_layers") is True or "UNVERIFIED",
+             "gguf_all_q4_0_q8_0": ck.get("gguf_all_q4_0_q8_0") is True or "UNVERIFIED"}
+        g["pass"] = all(v is True for v in g.values())
+        gates[name] = g
+        gt = c.get("library_group_top1")
+        if gt is not None and gt < floor:
+            flags.append(f"{name}: library group top-1 {gt} is BELOW the deterministic floor "
+                         f"{floor} (evidence for the ranking question: the model's order "
+                         f"loses to the no-reasoning order)")
+    ok = [n for n, g in gates.items() if g["pass"]]
+    # lead from one episode: any pair ranked apart by more than the tie band where
+    # the higher model is ahead on at most one episode
+    for a in gates:
+        for b in gates:
+            ga, gb = cols[a].get("library_group_top1"), cols[b].get("library_group_top1")
+            if a == b or ga is None or gb is None or ga - gb <= GROUP_TIE:
+                continue
+            ea, eb = cols[a]["group_top1_by_episode"], cols[b]["group_top1_by_episode"]
+            ahead = [e for e in ea if ea[e] is not None and eb.get(e) is not None and ea[e] > eb[e]]
+            if len(ahead) <= 1:
+                flags.append(f"{a} over {b}: lead of {round(ga - gb, 3)} comes from "
+                             f"{'one episode ' + ahead[0] if ahead else 'no episode'}")
+    pick, order = None, []
+    if ok:
+        best = max(cols[n]["library_group_top1"] or 0.0 for n in ok)
+        tied = [n for n in ok if (cols[n]["library_group_top1"] or 0.0) >= round(best - GROUP_TIE, 3)]
+        fbest = max(cols[n].get("model_citation_faithfulness_raw") or 0.0 for n in tied)
+        tied2 = [n for n in tied
+                 if (cols[n].get("model_citation_faithfulness_raw") or 0.0) >= round(fbest - FAITH_TIE, 3)]
+        order = sorted(tied2, key=lambda n: cols[n].get("diag_latency_ms_mean") or float("inf"))
+        pick = order[0]
+    return {"floor": floor, "gates": gates, "passing": ok,
+            "group_tied": tied if ok else [], "faith_tied": tied2 if ok else [],
+            "pick": pick, "pick_reason": (
+                "mean call time (stand-in for energy, not measured energy)" if len(order) > 1 else
+                "faithfulness" if ok and len(tied) > 1 else
+                "library group top-1" if ok else "NO MODEL PASSES: stop and ask"),
+            "flags": flags}
+
+
+def _le(v, limit):
+    return "MISSING" if v is None else v <= limit
 
 
 ROWS = ["n_episodes", "library_top1", "library_group_top1", "library_sep_named",
@@ -216,16 +340,23 @@ ROWS = ["n_episodes", "library_top1", "library_group_top1", "library_sep_named",
         "low_conf_share_decision", "low_conf_share_shown", "scored_library_ticks",
         "Q1_macro_f1", "Q4_precision", "Q4_recall", "S4_llm_invocation",
         "prompt_tokens_mean", "prompt_tokens_missing", "answer_tokens_mean",
-        "answer_tokens_missing", "diag_latency_ms_mean", "diag_latency_ms_p95"]
+        "answer_tokens_missing", "answer_tokens_per_call_mean", "answer_tokens_per_call_p95",
+        "answer_share_at_cap", "diag_latency_ms_mean", "diag_latency_ms_p95",
+        "tick_deadline_misses", "tick_deadline_miss_rate", "server_prefill_tok_s",
+        "server_decode_tok_s", "rate_calls_missing", "projected_verified_s"]
 
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--json", default="")
+    ap.add_argument("--checks", default="",
+                    help="JSON: name -> {htp0_all_layers, gguf_all_q4_0_q8_0}, from the "
+                         "board-up log and bench.gguf_types")
     args = ap.parse_args()
     cols = [column(p) for p in args.runs]
     names = [Path(p).stem.replace("runs_", "") for p in args.runs]
+    checks = json.load(open(args.checks)) if args.checks else {}
     print(f"{'':34s}" + "".join(f"{n[:22]:>24s}" for n in names))
     for k in ROWS:
         print(f"{k:34s}" + "".join(f"{str(c.get(k)):>24s}" for c in cols))
@@ -238,8 +369,21 @@ def main() -> int:
                 print(f"      {e:24s} {d}")
         if c["chip_temp"]:
             print(f"  chip temp [start, end]: {c['chip_temp']}")
+        print(f"  group top-1 by episode: {c['group_top1_by_episode']}")
+    sel = selection(dict(zip(names, cols)), checks)
+    print("\nMODEL-CHOICE RULE (projected time is a PROJECTION; call time is a stand-in for "
+          "energy, not measured energy)")
+    print(f"  floor (deterministic, mock): {sel['floor']}")
+    for n, g in sel["gates"].items():
+        print(f"  {n:30s} {g}")
+    print(f"  passing: {sel['passing']}  group-tied: {sel['group_tied']}  "
+          f"faith-tied: {sel['faith_tied']}")
+    print(f"  pick: {sel['pick']}  (decided by {sel['pick_reason']})")
+    for f in sel["flags"]:
+        print(f"  FLAG: {f}")
     if args.json:
-        json.dump(dict(zip(names, cols)), open(args.json, "w"), indent=2)
+        json.dump({"columns": dict(zip(names, cols)), "selection": sel},
+                  open(args.json, "w"), indent=2)
     return 0
 
 

@@ -61,3 +61,13 @@ def test_board_mean_rates_excludes_none_and_counts_it():
     assert r["prefill_tok_s"] == 800.0 and r["prefill_tok_s_missing"] == 0
     assert r["decode_tok_s"] == 12.0 and r["decode_tok_s_missing"] == 1
     assert r["ttft_ms_server"] is None and r["ttft_ms_server_missing"] == 2
+
+
+def test_each_backend_call_is_recorded_separately():
+    env = _diag([LLMReply(text="not json", prefill_tokens=50, decode_tokens=256,
+                          ttft_ms=60.0, decode_ms=20000.0),
+                 LLMReply(text=GOOD, prefill_tokens=100, decode_tokens=20,
+                          ttft_ms=110.0, decode_ms=1500.0)])
+    assert [c["decode"] for c in env.calls] == [256, 20]          # not one summed 276
+    assert [c["prefill_ms"] for c in env.calls] == [60.0, 110.0]
+    assert [c["decode_ms"] for c in env.calls] == [20000.0, 1500.0]

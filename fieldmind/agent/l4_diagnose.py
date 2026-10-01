@@ -23,7 +23,7 @@ import json
 import re
 from pathlib import Path
 
-from ..runtime.llm_backend import LLMBackend
+from ..runtime.llm_backend import LLMBackend, call_record
 from ..schemas import AgentEnvelope, Fact
 
 PROMPT_DIR = Path(__file__).parent / "prompts"
@@ -168,6 +168,7 @@ class Diagnostician:
                                     "decode": reply.decode_tokens})
         env.retries = getattr(reply, "retries", 0)
         self.retries += env.retries
+        env.calls.append(call_record(reply))
         env.prompt_tokens = reply.prefill_tokens or est_tokens(prompt)
         env.retrieved_cases = [c.get("case_id") for c in retrieved.get("cases", [])]
         if self.log_prompts:
@@ -190,6 +191,7 @@ class Diagnostician:
             reply2 = self.backend.generate(repair_prompt, role="diagnostician",
                                            max_tokens=self.cfg["max_tokens"],
                                            mock_hint=hint)
+            env.calls.append(call_record(reply2))
             payload = extract_json(reply2.text)
             ok, why = validate(payload) if payload else (False, "no JSON after repair")
             env.latency_ms += reply2.latency_ms

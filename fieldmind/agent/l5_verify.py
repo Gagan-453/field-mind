@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..runtime.llm_backend import LLMBackend
+from ..runtime.llm_backend import LLMBackend, call_record
 from ..schemas import AgentEnvelope, Fact
 from .l4_diagnose import extract_json, est_tokens
 
@@ -79,6 +79,7 @@ class Verifier:
                                     "decode": reply.decode_tokens})
         env.retries = getattr(reply, "retries", 0)
         self.retries += env.retries
+        env.calls.append(call_record(reply))
         env.prompt_tokens = reply.prefill_tokens or est_tokens(prompt)
         if self.log_prompts:
             env.prompt = prompt

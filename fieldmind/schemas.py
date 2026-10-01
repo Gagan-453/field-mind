@@ -220,6 +220,9 @@ class AgentEnvelope:
     # because the full rendered prompt is ~1-3 kB and would bloat every
     # runs_*.json by an order of magnitude on a normal run.
     prompt_tokens: int = 0
+    # One entry per backend call (runtime.llm_backend.call_record): tokens and
+    # server-side prefill/decode ms. Phase 0b lane-rate telemetry; no decision reads it.
+    calls: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     prompt: str = ""                          # rendered prompt, --log-prompts only
     raw_reply: str = ""                       # unparsed model text, --log-prompts only
