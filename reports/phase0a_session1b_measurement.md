@@ -5,7 +5,7 @@ results**; the mock re-ranks retrieved cases and does no reasoning. Energy is `n
 
 ## Status
 PARTIAL. Step 1 (dev set) done. Step 2 (bed slope) is a finding only. Step 3 (band calibration) was run and **not adopted**
-(human decision, below). Step 4 (belief saturation on the old edges) is in progress. Not yet done: the reporting-set run,
+(human decision, below). Step 4 (belief saturation on the old edges) is measured and fix options are proposed; waiting for the human's choice. Not yet done: the reporting-set run,
 `results/baselines/single_v3_summary.json`, the C04 advisor entry, phase-reviewer.
 
 Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. Branch `exp/band-edges-p85`
@@ -120,6 +120,50 @@ family's headline tag reads as moving (healthy ≈ 0.15 under the new edges; 0.7
 - **Q5** (`Q5_fp_per_hour`) is the **mean of per-episode rates** (0.98 on dev). The pooled rate (all FP ticks over all
   hours) is 0.87. Both are correct; the difference is weighting by episode length.
 
+## Step 4: belief saturation on dev, main (Stage-5) edges
+Tool: `bench/belief_saturation.py` (read-only). Validated first on the reporting-set runs: it reproduces the Phase 0a
+Check 1 figures (library 729 ticks at the clamp, 388 ties, 247 ties at the clamp = 63.7%, mean shown conf 0.619, 45.6%
+at >= 0.9; held-out 203 ties, 168 at the clamp, 40.4% confident-and-wrong; median 0.728 vs 0.729, rounding). Test:
+`tests/test_belief_saturation.py`; mutation `>=` -> `>` on the clamp test was caught by both of its tests.
+
+| dev, mock, main edges | library (1,327 ticks) | held-out (273) | no-fault (10, 5 episodes) |
+|---|---|---|---|
+| belief rank-1 at the +4.0 clamp | 621 (46.8%) | 160 (58.6%) | 0 |
+| top-of-belief ties | 301 (22.7%) | 229 (83.9%) | 1 |
+| ...ties at the clamp, share of ties | 215 (71.4%) | 155 (67.7%) | 0 |
+| shown rank-1 conf: mean / median | 0.685 / 0.885 | 0.765 / 0.980 | 0.775 / 0.711 |
+| shown conf >= 0.9 | 48.9% | 60.8% | 20% |
+| confident (>0.5) and wrong group | 233 (17.6%) | 109 (39.9%) | n/a |
+| shown conf deciles 0.0-1.0 | 0, 208, 142, 46, 43, 45, 51, 58, 85, **649** | 0, 21, 21, 12, 7, 16, 7, 8, 15, **166** | 0,0,0,0,0,1,2,3,2,2 |
+
+Additional, from the same logs: of the library ticks at the clamp, **29.0% have a rank-1 case in the wrong group** (180 of
+621); held-out **49.4%** (79 of 160). The clamp is reached a median of 7 ticks after the first post-onset hypothesis
+(library, 9 of 13 episodes reach it; min 2, max 39) and 7.5 ticks on held-out (4 of 4). The largest per-tick step for a
+steady rank-1 is +1.20 (library) and +0.77 (held-out).
+
+**N03-type fast climb.** `dev_N03_normal` itself is quiet (no hypotheses at all). The same climb shows on `dev_N05_normal`:
+RCA-07 rank-1 with log-odds +0.90, +2.00, +3.09, +4.00 over ticks 11-14 (shown conf 0.711, 0.881, 0.957, 0.982), i.e. the
+clamp in four ticks on a healthy plant; `dev_N09_normal` (the other N03-spec copy) shows RCA-07 at +0.90, +1.81 (0.711,
+0.859) before its hypotheses disappear. No-fault coverage is thin: 10 ticks in 5 of 12 episodes, so these rows are
+anecdotes, not rates. The reporting `ep_N03` table will come only from the end-of-session reporting run.
+
+### Overconfidence fixes proposed (belief is NOT changed; the human chooses)
+Common to every option, **fixed now, before any measurement of the fix**: measured on dev, mock, against the current
+`main` as the preceding kept state. Gate G: library tie-fair belief top-1 and belief group each drop by no more than 0.01
+(standing keep rule); Q1, Q3, Q5, S7 unchanged; legacy Q2 top-1 does not drop by more than 0.01; held-out reported, not
+gating (one held-out case). Calibration metric defined now: **ECE** over 5 equal-width bins of shown rank-1 confidence
+against whether the shown rank-1 case lies in the true case's group, on library + held-out scored ticks. Its baseline is
+measured on the unchanged tree at the start of the chosen fix, before any code change.
+
+| | what it does | constants | predicted effect (not measured) | keep rule, in addition to G |
+|---|---|---|---|---|
+| **(a) Decay** | multiply log-odds by (1 - lambda) each tick before the update | lambda from a half-life; DERIVED start: the 10-min signature window = 20 ticks, lambda = 0.034; ASSUMED range of half-life [10, 120] ticks (same bounds as the retirement setting) | **Weak.** A steady +1.2/tick step against a 3.4% decay still reaches +4.0 in about the same 4-5 ticks, so saturation under continuing evidence is untouched; it only shortens how long a stale hypothesis lingers. Retirement had the same character and failed the keep rule (library tie-fair -0.025), and a decay strong enough to bite would need a tuned value | library share of ticks at the clamp falls by at least 0.10 (0.468 to <= 0.368) AND confident-and-wrong share does not rise. I expect it to fail both |
+| **(b) Tie-break by this tick's retrieval score** | among exactly tied log-odds, order by the current tick's retrieval score | none | Ties stop being arbitrary insertion order: library tie share (0.227) should fall toward the cases that are genuinely identical (RCA-09/10/15, RCA-14/18). **Does not touch shown confidence**: tied hypotheses still show 0.982. The tie-fair metric assumes ties are uniform, so it will not register the gain; plain belief top-1 will | plain library belief top-1 does not drop AND exact-tie share (equal log-odds and equal score) falls to at most half of 0.227 AND shown confidence values bit-identical. Fixes ties only, not overconfidence |
+| **(c) Confidence from the rank-1 vs rank-2 margin** | shown conf = sigmoid(log-odds rank-1 - log-odds rank-2); sigmoid(log-odds) if only one live hypothesis | none (no free constant: it is the two-way odds ratio) | **Strongest on the measured cause.** A tie (including a clamp-vs-clamp tie) shows exactly 0.5, so the 83.9% tied held-out ticks stop being "confident" (conf > 0.5) and its confident-and-wrong share (0.399) should collapse; library should fall by the part that sits on ties (magnitude unverified; untied clamp ticks with a wide margin stay confident, e.g. 4.0 vs 1.0 shows 0.95). Belief ranking is unchanged, so belief metrics should be bit-identical. **Side effect to flag:** the verifier fires inside conf [0.35, 0.75], so ties at 0.5 enter that band and S4 (LLM invocation rate) will rise on mock | hypothesis order and belief metrics bit-identical (display only, applied after sorting); ECE strictly lower; confident-and-wrong share lower on library AND held-out; the S4 change reported with its cause (needs your OK, it changes a cost metric) |
+
+My recommendation, for you to overrule: (c) first (lowest risk, no constants, addresses the measured shared cause), then
+(b) as a separate step for the tie arbitrariness; (a) last or not at all.
+
 ## Disagreements recorded, not resolved
 - **Instruction vs history (item 2).** "Restore load normalisation" vs a signature that never had it. Resolved by your
   decision to skip, not by me.
@@ -128,7 +172,7 @@ family's headline tag reads as moving (healthy ≈ 0.15 under the new edges; 0.7
 - **Dev below reporting** on library belief metrics (0.375 vs 0.438 tie-fair top-1). Not explained.
 
 ## Blocked / needs a decision
-- **Choose the overconfidence fix** (step 4, below). I am waiting on that.
+- **Choose the overconfidence fix** (options (a)/(b)/(c) in Step 4). Waiting on that. For (c), also whether the S4 rise on mock is acceptable.
 
 ## Open list (added)
 - **Case-signature band calibration, tested together with the edges as one unit.** Tag-level separation is good under the
