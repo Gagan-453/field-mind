@@ -5,7 +5,7 @@ results**; the mock re-ranks retrieved cases and does no reasoning. Energy is `n
 
 ## Status
 PARTIAL. Step 1 (dev set) done. Step 2 (bed slope) is a finding only. Step 3 (band calibration) was run and **not adopted**
-(human decision, below). Step 4 (belief saturation on the old edges) is measured and fix options are proposed; waiting for the human's choice. Not yet done: the reporting-set run,
+(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is specified here and being built. Not yet done: the reporting-set run,
 `results/baselines/single_v3_summary.json`, the C04 advisor entry, phase-reviewer.
 
 Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. Branch `exp/band-edges-p85`
@@ -78,8 +78,9 @@ explanation.
 | RCA-14 | 12.5% → 0.0% | 9.5% → 3.1% |
 
 The ∅ trio (RCA-09/10/15, empty signatures) goes from 17.1% to 70.0% of belief rank-1 ticks: with most tags reading FLAT,
-FLAT-heavy cases win. On the normal-episode ticks that have hypotheses (10), rank-1 moves from RCA-07 to RCA-13. I did not
-check whether RCA-13's signature is also FLAT-heavy.
+FLAT-heavy cases win. On the normal-episode ticks that have hypotheses (10), rank-1 moves from RCA-07 to RCA-13. RCA-13's
+signature has **5 FLAT triples out of 6** (the only movement is `bed_temp_avg UP SLOW`), so it is FLAT-heavy like the
+∅ cases; that is consistent with the takeover, but I have not tested it beyond the count.
 
 ## Findings
 ### Item 2: bed slope history
@@ -136,8 +137,10 @@ at >= 0.9; held-out 203 ties, 168 at the clamp, 40.4% confident-and-wrong; media
 | confident (>0.5) and wrong group | 233 (17.6%) | 109 (39.9%) | n/a |
 | shown conf deciles 0.0-1.0 | 0, 208, 142, 46, 43, 45, 51, 58, 85, **649** | 0, 21, 21, 12, 7, 16, 7, 8, 15, **166** | 0,0,0,0,0,1,2,3,2,2 |
 
-Additional, from the same logs: of the library ticks at the clamp, **29.0% have a rank-1 case in the wrong group** (180 of
-621); held-out **49.4%** (79 of 160). The clamp is reached a median of 7 ticks after the first post-onset hypothesis
+Additional, from the same logs. Of the ticks that sit AT the clamp (denominator: library 621, held-out 160; **not** all
+scored ticks), **29.0% (180 of 621) of library and 49.4% (79 of 160) of held-out have a rank-1 case in the wrong group**.
+As a share of all scored ticks (1,327 and 273) that is 13.6% and 28.9%, which is why it is below the confident-and-wrong
+rows above (17.6% and 39.9%): that row counts any shown conf > 0.5, not only the clamp. The clamp is reached a median of 7 ticks after the first post-onset hypothesis
 (library, 9 of 13 episodes reach it; min 2, max 39) and 7.5 ticks on held-out (4 of 4). The largest per-tick step for a
 steady rank-1 is +1.20 (library) and +0.77 (held-out).
 
@@ -164,24 +167,129 @@ measured on the unchanged tree at the start of the chosen fix, before any code c
 My recommendation, for you to overrule: (c) first (lowest risk, no constants, addresses the measured shared cause), then
 (b) as a separate step for the tie arbitrariness; (a) last or not at all.
 
+## Step 5: fix (c), shown confidence from the margin: specification (written before any code)
+Human choice: **(c) only, strictly display-only; the verifier trigger and every decision path keep the existing value.**
+
+### 1. Every consumer of confidence (grep of `fieldmind/` and `bench/`)
+| consumer | reads | kind | after (c) |
+|---|---|---|---|
+| `world_model.update_hypotheses`: `h.confidence = sigmoid(log_odds)` | log-odds | producer | unchanged |
+| `world_model` retire floor: `h.confidence < RETIRE_BELOW (0.08)` | decision value | decision (retirement) | unchanged |
+| `world_model.rank_hypotheses`: sort by confidence | decision value | decision (order) | unchanged |
+| `world_model.belief_ranking` (telemetry): carries `confidence` | decision value | telemetry | unchanged |
+| `orchestrator` claims: `"confidence": h.confidence` into `_merge` | decision value | decision (deterministic wins confidence) | unchanged |
+| `orchestrator` `top_conf` -> `Verifier.should_run` band `[0.35, 0.75]` | decision value | **decision (S4)** | **unchanged** |
+| `Verifier.run` prompt `conf={h['confidence']}`; `Verifier.apply` caps (<= 0.35) or revises `h["confidence"]` | decision value | decision (model input and output) | unchanged |
+| `orchestrator._wm_summary` ("current hypotheses: cause(0.98)") into the Diagnostician prompt | decision value | decision (model input) | unchanged |
+| `l4_diagnose` validation of the model's own `confidence` number | the model's number | validation | n/a |
+| `l6_gate.approve` (actions, escalation) | none (escalation is from STATE; verified by grep: no confidence) | decision | n/a |
+| `l7_memory.promote` | none | n/a | n/a |
+| `Assessment.confidence` | was `top_conf` (a pre-verifier copy of the decision value); no reader in the code base | display | **switches to the shown value of rank 1** |
+| `asmt.hypotheses[i]["confidence"]` | decision value (also what the evaluator read) | output | **unchanged; new field `confidence_shown` added beside it** |
+| `bench/evaluator.py` `low_conf_rate` (<= 0.5) | `hyps[0]["confidence"]` | reporting | switches to `confidence_shown` (falls back to `confidence` on old runs); the old definition is kept as `low_conf_rate_decision` |
+| `bench/belief_saturation.py` | confidence | reporting | reads `confidence_shown` if present; `--decision-conf` forces the old value |
+
+Rule: only the **display** (`confidence_shown`, `Assessment.confidence`) and **reporting** consumers switch. The
+`confidence_shown` field is computed in the orchestrator **after** the verifier and the gate, from the final hypothesis list,
+and nothing reads it afterwards, so no decision can depend on it.
+
+### 2. Exact formula
+For each hypothesis `i` in the final shown list, with decision confidence `c_i` (its final value, after any verifier cap) and
+the live belief ranking `B = wm.hypotheses not retired` (log-odds `l_j`):
+
+- if `i` has no belief entry (a model-only idea): `shown_i = c_i`.
+- otherwise let `l_i` be its log-odds, and `r_i = max(l_j for j in B, j != i)`; **if `i` is the only live hypothesis, `r_i = 0`**.
+- `shown_i = min(c_i, sigmoid(l_i - r_i))`, rounded to 3 decimals like `confidence`.
+
+Consequences, each of which gets a unit test:
+- **No rank-2 hypothesis** (single live hypothesis): `sigmoid(l_i - 0) = sigmoid(l_i) = c_i`, so `shown = c`. The single-hypothesis
+  climb is unchanged by construction.
+- **Rank-1 ahead by margin d > 0** (rival `l_2 >= 0`): `shown = min(c_1, sigmoid(d))`; e.g. +4.0 vs +1.0 shows 0.953 (not 0.982).
+  If the rival is negative, `sigmoid(l_1 - l_2) >= sigmoid(l_1) = c_1`, so `shown = c_1` (the margin never raises confidence).
+- **Non-leaders** have `l_i <= r_i`, so `shown <= 0.5`.
+- **Two-way tie** (equal log-odds): each shows 0.5 if its `c_i >= 0.5`, else its own `c_i` (the `min`).
+- **k-way tie, k >= 3** (e.g. the empty-signature trio RCA-09/10/15 at the +4.0 clamp): every tied hypothesis has an equal rival,
+  so each shows **0.5, not 1/3**. The formula is a pairwise margin, not a probability over the tied set; reading ties as
+  uniform (1/k) would need a softmax over all live hypotheses (the dropped option (d)). Recorded as a known simplification.
+- **Both ranks at -4.0** (`l_1 = l_2 = -4.0`, `c = 0.018`): the margin is 0, `sigmoid(0) = 0.5`, but the `min` keeps
+  `shown = 0.018`. The `min` is a safeguard I added to the approved formula: without it a disbelieved hypothesis would show
+  50%. It cannot occur among live hypotheses today (anything under confidence 0.08 is retired), and is handled anyway.
+  **Decision taken (rule 6, conservative):** the margin can only lower the shown value, never raise it.
+
+### 3. ECE definition and baseline (dev, current main, measured before any code change)
+- Scored ticks: post-onset ticks with a non-empty hypothesis list (same as the saturation table). **Decided on library
+  ticks**; held-out and the pooled figure are reported.
+- 5 equal-width bins of the shown rank-1 confidence on [0, 1], the last closed at 1.0. `ECE = sum_b (n_b / N) * |mean conf_b -
+  fraction correct_b|`.
+- **Correct = the shown rank-1 case lies in the TRUE case's group** (`case_groups.json`). Group, not case: look-alike cases
+  (RCA-14/18, RCA-09/10/15) cannot be told apart by any confidence, and the confident-and-wrong measure is group-level too.
+  The case-level ECE is reported as a secondary diagnostic only.
+
+| dev, current main (decision confidence) | library | held-out |
+|---|---|---|
+| ECE (group), **decided** | **0.1305** | 0.4167 |
+| ECE (case), secondary | 0.1391 | 0.7647 (trivial: the held-out case is never in the library) |
+| confident (> 0.5) and wrong group | **233 of 1,327 = 0.176** | 109 of 273 = 0.399 |
+| low-confidence share (shown conf <= 0.5) | 0.335 | 0.260 |
+| library+held-out pooled ECE (group / case) | 0.1679 / 0.2459 (1,600 ticks) | |
+
+Library bins (conf bin: n, mean conf, group-correct): 0-0.2: 208, 0.155, 0.212; 0.2-0.4: 188, 0.266, 0.298; 0.4-0.6: 88,
+0.493, 0.420; 0.6-0.8: 109, 0.709, 0.413; 0.8-1.0: 734, 0.961, 0.802. The top bin carries most of the error (0.961 vs 0.802).
+A fresh dev run at current main reproduces the earlier "before" run exactly except wall-clock latency fields
+(`tick_latency_ms`, envelope latencies, S1 p50/p95).
+
+### 4. Keep/revert rule for (c): fixed now; decided on LIBRARY only
+Keep (c) only if **all** hold on dev, mock, against current main:
+1. **Belief metrics bit-identical**: every `belief_*` key (library, held-out, per family) and every per-episode `belief_*`.
+2. **Decision values bit-identical**: in every assessment the `hypotheses` order, each `confidence`, `actions`, `escalate`,
+   `state`, `triage`, `llm_invoked` and `belief_ranking` equal the current-main run (only `confidence_shown` is new and
+   `Assessment.confidence` differs by design).
+3. **Q1, Q2 (legacy top-1/top-3, library top-1/top-3/group/sep), Q3, Q4, Q5, Q6, S4, S7 unchanged** (exact; S1 latency excluded).
+   `low_conf_rate` is exempt by design (see 5).
+4. **Library ECE (group) < 0.1305 AND library confident-and-wrong-group share < 0.176** (both must fall, strictly).
+5. **Reported, not used to decide:** held-out ECE, held-out confident-and-wrong share (**flagged if either gets worse**),
+   `low_conf_rate` (held-out, evaluator) and the library low-confidence share. `low_conf_rate` is **expected to rise**,
+   because ties at exactly 0.5 count as <= 0.5. Held-out is not gating: only RCA-06 has episodes (standing rule).
+6. Unit tests for every formula case above and mutation checks pass; the whole suite is green.
+
+### 5. Predictions, written before measuring
+- **P1 (single-hypothesis climb):** (c) does not change it. `dev_N05` RCA-07 still shows ~0.711, 0.881, 0.957, 0.982 on
+  ticks 11-14. The condition is exact: shown changes only if a live rival has log-odds **> 0** at that tick.
+- **P2:** belief metrics, hypothesis order, decision confidences, S4 and every other Q/S key are bit-identical (by construction:
+  nothing that decides reads the new field).
+- **P3:** held-out confident-and-wrong falls sharply (83.9% of held-out ticks are ties, which now show <= 0.5).
+- **P4 (library):** confident-and-wrong falls, but by **at most the tie share of 0.227** (a tie is the only thing that
+  lowers a rank-1 to 0.5; wide-margin untied clamp ticks stay at ~0.95-0.98). I expect a modest ECE fall, **not** a collapse.
+  It can in principle rise if the ticks moved into the 0.4-0.6 bin are right far less than half the time; the rule decides.
+- **P5:** `low_conf_rate` (held-out) rises from 0.245, and the library low-confidence share from 0.335.
+
 ## Disagreements recorded, not resolved
 - **Instruction vs history (item 2).** "Restore load normalisation" vs a signature that never had it. Resolved by your
   decision to skip, not by me.
 - **Pooled vs per-episode FLAT.** The criterion is pooled. Per-episode FLAT at the p85 edges ranges 0.52–1.00 (load swings
   differ), so a single episode can read far more movement than 15%. Not investigated.
-- **Dev below reporting** on library belief metrics (0.375 vs 0.438 tie-fair top-1). Not explained.
+- **Dev below reporting** on library belief metrics (0.375 vs 0.438 tie-fair top-1; belief group 0.502 vs 0.574).
+  **Unexplained (hypothesis: A2 was selected on the reporting set).** Not tested.
 
 ## Blocked / needs a decision
-- **Choose the overconfidence fix** (options (a)/(b)/(c) in Step 4). Waiting on that. For (c), also whether the S4 rise on mock is acceptable.
+- None. Human choice made: (c) only, display-only, S4 must not move (see Step 5).
 
 ## Open list (added)
 - **Case-signature band calibration, tested together with the edges as one unit.** Tag-level separation is good under the
   p85 edges and the matcher still collapses, so edges and case band labels must be judged together. It touches
   `data/kb/case_library.json`, so it needs a **pre-registered rule and advisor sign-off**. Not done in this session.
 
+- **Overconfidence fix (a), per-tick log-odds decay: DROPPED** (human decision). Recorded: a decay mild enough to be
+  derived (half-life = the 20-tick signature window) cannot stop a +1.2/tick climb from reaching the clamp in 4-5 ticks.
+- **Single-hypothesis fast climb.** One live hypothesis has no rival, so nothing in (c) touches it: `dev_N05_normal`, RCA-07
+  alone, +0.90, +2.00, +3.09, +4.00 over ticks 11-14 (shown 0.711 to 0.982) on a healthy plant. Open.
+- **Fix (b), tie-break by this tick's retrieval score: DEFERRED to Session 2** (human decision). It changes rank-1 order, which
+  is the open "does belief decide, or only break ties" question, to be decided with real-model numbers.
+- **Whether ambiguity (a tie, a small margin) should trigger the verifier.** Separate later change; (c) leaves the
+  trigger on the decision confidence.
+
 ## What I could not verify
-- Why dev library belief is lower than reporting.
-- Whether RCA-13's signature is FLAT-heavy (it doubles under the p85 edges).
+- Why dev library belief is lower than reporting (unexplained; hypothesis: A2 selected on the reporting set).
 - Everything beyond mock: a reasoning model may not depend on signature density the way the mock re-rank does.
 - A01, A04 and A06 never reach TRIP_IMMINENT on their dev seeds (reporting twins do: 29.2, 59.8, 30.2 min). Time-to-trip
-  differs for A02/A03/D01/D03 too. Dev A-family lead-time metrics are therefore not comparable with reporting.
+  differs for A02/A03/D01/D03 too. Dev A-family lead times are reported separately and are not compared with reporting.

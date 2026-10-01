@@ -98,7 +98,9 @@ def t2_root_cause(run: dict) -> dict:
       belief_*    the same, computed from the deterministic belief ranking
                   (`belief_ranking`, by log-odds) instead of the model-ordered
                   `hypotheses`, so belief-update changes are visible on mock
-      low_conf_rate (held-out only) share of ticks with rank-1 confidence <= 0.5
+      low_conf_rate (held-out only) share of ticks with rank-1 SHOWN confidence <= 0.5
+                  (`confidence_shown` when the run carries it, else `confidence`)
+      low_conf_rate_decision  the same on the decision `confidence`
 
     `top1`/`top3` keep their original definition (held-out episodes score a
     structural 0) so the Session 0 baseline stays comparable. The NEW split
@@ -115,7 +117,7 @@ def t2_root_cause(run: dict) -> dict:
     heldout = target in held_ids
     tgroup = held.get(target) if heldout else gmap.get(target, target)
     onset = gt.get("fault_onset_t") or 0
-    n = hits1 = hits3 = g1 = sep = b1 = b3 = bg = low = tie = 0
+    n = hits1 = hits3 = g1 = sep = b1 = b3 = bg = low = low_dec = tie = 0
     b1fair = bgfair = 0.0
     for a in run["assessments"]:
         if a["tick"] * 30.0 < onset or not a["hypotheses"]:
@@ -146,7 +148,10 @@ def t2_root_cause(run: dict) -> dict:
             # inserted first, which dominates on held-out ticks).
             top = [b for b in brk if b["log_odds"] == brk[0]["log_odds"]]
             bgfair += sum(gmap.get(b.get("case_ref")) == tgroup for b in top) / len(top)
-        low += (hyps[0].get("confidence", 0.0) <= LOW_CONF)
+        # reporting reads the SHOWN confidence when the run carries one; the decision
+        # value is kept as low_conf_rate_decision so before/after stay comparable
+        low += (hyps[0].get("confidence_shown", hyps[0].get("confidence", 0.0)) <= LOW_CONF)
+        low_dec += (hyps[0].get("confidence", 0.0) <= LOW_CONF)
         tie += (len(brk) > 1 and brk[0]["log_odds"] == brk[1]["log_odds"])
 
     def r(x):
@@ -166,7 +171,8 @@ def t2_root_cause(run: dict) -> dict:
             "belief_group": r(bg) if tgroup is not None else None,
             "belief_group_tiefair": r(bgfair) if tgroup is not None else None,
             "belief_top_tie_rate": r(tie),
-            "low_conf_rate": r(low) if heldout else None}
+            "low_conf_rate": r(low) if heldout else None,
+            "low_conf_rate_decision": r(low_dec) if heldout else None}
 
 
 def t3_faithfulness(run: dict) -> dict:
@@ -288,7 +294,7 @@ def _pct(vals: list[float], p: int) -> float:
 
 _Q2_KEYS = ("top1_strict", "top3_strict", "group_top1", "sep_named",
             "belief_top1", "belief_top1_tiefair", "belief_top3", "belief_group", "belief_group_tiefair",
-            "belief_top_tie_rate", "low_conf_rate")
+            "belief_top_tie_rate", "low_conf_rate", "low_conf_rate_decision")
 
 
 def _row(eps: list[dict]) -> dict:

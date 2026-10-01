@@ -38,3 +38,23 @@ def test_no_fault_class_counts_every_tick_with_belief():
                            {"tick": 2, "belief_ranking": [], "hypotheses": []}]}
     s = summarise([run])["no-fault"]
     assert s["ticks"] == 1 and s["rank1_at_clamp"] == 1
+
+
+def test_ece_known_values():
+    from bench.belief_saturation import ece
+    # 4 ticks in the top bin, mean conf 0.9, 2 of 4 correct -> |0.9-0.5| = 0.4
+    assert ece([(0.9, True), (0.9, True), (0.9, False), (0.9, False)])["ece"] == 0.4
+    # perfectly calibrated bins -> 0
+    assert ece([(0.1, False)] * 9 + [(0.1, True)])["ece"] == 0.0
+    # confidence exactly 1.0 lands in the last bin, not off the end
+    assert ece([(1.0, True)])["bins"][-1][1] == 1
+    # two bins weighted by size: (0.1, wrong) x1 -> 0.1 err; (0.9, right) x3 -> 0.1 err
+    r = ece([(0.1, False), (0.9, True), (0.9, True), (0.9, True)])
+    assert abs(r["ece"] - (0.25 * 0.1 + 0.75 * 0.1)) < 1e-4
+
+
+def test_shown_field_is_read_but_decision_flag_overrides():
+    from bench.belief_saturation import conf_of
+    h = {"confidence": 0.98, "confidence_shown": 0.5}
+    assert conf_of(h) == 0.5 and conf_of(h, decision=True) == 0.98
+    assert conf_of({"confidence": 0.7}) == 0.7
