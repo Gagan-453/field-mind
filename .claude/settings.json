@@ -16,13 +16,12 @@
       "Bash(git log *)",
       "Bash(curl -s http://localhost:*)"
     ],
-    "ask": [
-      "Bash(rm *)"
-    ],
+    
     "deny": [
       "Bash(git push *)",
       "Bash(adb shell rm *)",
       "Read(./.env)",
+      "Bash(rm -rf *)",
       "Read(./.env.*)"
     ]
   }

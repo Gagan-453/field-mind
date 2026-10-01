@@ -461,6 +461,18 @@ bench/harness.py    gains --arch single|multi and --mode lockstep|realtime
 3. Run the phase's check from the plan's build order. Report the numbers in a table next to the previous phase's.
 4. If a number moves and you cannot say why, stop and say so instead of adjusting things until it looks right.
 5. Commit with the phase name in the message. Do not push.
+6. Work through every step without stopping to ask me. When a decision is needed, choose the more conservative option (the one that changes less, or keeps the old behaviour), record it under "Decisions taken" in the report with your reasoning, and continue. Only stop if a step would delete data, push, or change files outside this repo.
+
+### Keep/revert rule for single-agent belief steps (Phase 0a)
+
+A belief or retrieval step on the single agent is kept only if, against the preceding kept state and on the mock backend:
+- on library episodes, tie-fair belief top-1 and belief group each drop by no more than 0.01; and
+- held-out belief group does not drop, **but this clause gates a step only once at least two held-out cases have
+  episodes.** Today only RCA-06 does (4 episodes, tie rates 0.77 to 0.88), so held-out metrics are reported, not gating.
+
+Tie-fair belief top-1 is the headline belief top-1 (plain belief top-1 partly credits insertion order under ties).
+A human may override the rule for a step; record the override and its reasons in the report ("Decisions taken").
 
 ### Python
 - Always run Python as `.venv/bin/python` (tests: `.venv/bin/python -m pytest`), never the system python.
+

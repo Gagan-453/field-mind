@@ -1,5 +1,12 @@
 # Phase 0a: single-agent correctness fixes: report
 
+> **Current state (read this first).** The tree is **A1 + A2 with Step B reverted, retirement OFF, Step C reverted**
+> (code commit `0c11513`; baseline `results/baselines/single_v2_summary.json`). Current mock numbers are the **A2 column** of
+> the final table in *Follow-up: keep/revert rule*. The tables further down in the first-round sections ("Numbers that
+> changed", per-family, per-episode) describe the **first round, with B and retirement on**, and are superseded.
+> Library: top-1 0.436 · tie-fair belief top-1 0.438 · belief group 0.574 (tie-fair 0.541). Held-out (RCA-06 only):
+> belief group 0.545 (tie-fair 0.641) · low-confidence rate 0.225. All mock, not agent results.
+
 All numbers below are from the **mock backend**. They measure the deterministic and retrieval layers only. They are
 **not agent results**; the mock re-ranks retrieved cases and does no reasoning. Energy fields are `null` (no device).
 `/bench` was run as `run_demo.py --all --backend mock` because `--arch` and `--mode` do not exist yet. Reference
@@ -74,7 +81,7 @@ These are all unit-level and on one episode replay. Nothing here depends on not-
 | symbol | value | provenance | range | affects |
 |---|---|---|---|---|
 | `agent.max_tokens` | 256 | **user decision**, Phase 0a (was 384 default, 256 verifier fallback) | plan targets 60/30/50/120 later | decode budget on gemini/litert; mock ignores it |
-| `agent.belief.retire_after_ticks` | 20 | **DERIVED**: 10-min signature slope window (`orchestrator._slopes`) ÷ 30 s tick | ASSUMED [10, 120]: 5-min balance window ×2 … 2× the 60-min sensor window | how long a stale look-alike stays ranked. **Not tuned on the 30 episodes** |
+| `agent.belief.retire_after_ticks` | 20 when on (**default null = off**) | **DERIVED**: 10-min signature slope window (`orchestrator._slopes`) ÷ 30 s tick | ASSUMED [10, 120] ticks: the 5-min balance window (10 ticks) to the 60-min sensor window (120 ticks). The first version of this row and of the config comment said "doubled"; the review caught that the endpoints are the un-doubled windows | how long a stale look-alike stays ranked. **Not tuned on the 30 episodes** |
 | group threshold | 0.5 | "at least half the moving pairs shared"; result stable on (0.286, 0.5] | stable interval recorded in `case_groups.json` | which cases count as look-alikes |
 | `LOW_CONF` | 0.5 | **user-set** ("at or below 0.5") | n/a | held-out `low_conf_rate` only |
 | `BAND_RANK` | SLOW 1 < MED 2 < FAST 3 | order of `l1_symbolize.BANDS` | n/a | Step B contradiction rule |
@@ -340,3 +347,143 @@ the exception worth a physics look. Needs a plant engineer or real-noise calibra
 - Whether held-out confidence is deserved on a real model (mock only; 4 episodes, one case).
 - A2's held-out drop on a reasoning backend; the verdict is mock belief only.
 - The tie-fair figures treat ties as uniform among tied cases; that is a convention I introduced, not a measured quantity.
+
+
+---
+
+# Closing round (Phase 0a complete)
+
+## Decisions taken
+Human decisions are marked **[human]**; the rest were taken under CLAUDE.md rule 6 (the more conservative option).
+1. **[human] Keep A2 (weight scaling), overriding the keep rule.** A2 failed the held-out clause (held-out belief group
+   0.620 → 0.545). Reasons given: the held-out set is a single case (RCA-06, 4 episodes) with tie rates of 0.77 to 0.88, so a
+   0.042 tie-fair drop there is evidence about RCA-06, not about unseen cases in general; A2's library gains are +0.174
+   tie-fair top-1 and +0.130 group over 13 episodes; and A2 was designed from retrieval's existing weighting (FLAT 0.35)
+   before any results, not tuned. (The review could not verify the last reason from commit timestamps: A1 and A2 were
+   committed 29 seconds apart. The evidence is the approved plan, written before any run, which specified A2 as "scale
+   support/absence by the case triple weight, FLAT 0.35, mirroring match", the weight coming from
+   `CaseLibrary._to_triples`. Commit times are not evidence either way.)
+2. **[human] Rule change for future steps (now in CLAUDE.md):** the held-out clause only gates a step once at least two
+   held-out cases have episodes. Until then held-out metrics are reported, not gating.
+3. Step B reverted, retirement off by default, Step C reverted: each failed the rule's library clauses (follow-up section).
+4. The post-fix baseline `results/baselines/single_v2_summary.json` is **A2, B reverted, retirement off, C reverted**, run on the clean code commit `0c11513` and carrying that hash.
+5. The uncommitted edits to `CLAUDE.md` (rule 6) and `.claude/settings.json` (an `ask` rule for `rm *` removed, `rm -rf *`
+   denied) were yours; they are committed with this phase because you asked to commit everything. I did not review the
+   `settings.json` change beyond reading the diff.
+
+## Check 1: are the ties and the overconfidence the same cause? (A2, retirement off, report only)
+**Yes, largely: both are the +4.0 log-odds clamp.** Scored ticks (after onset, with hypotheses):
+
+| | library (1,442 ticks) | held-out (250 ticks) |
+|---|---|---|
+| top-of-belief ties | 388 (26.9% of ticks) | 203 (81.2%) |
+| ...of those AT the +4.0 clamp | **247 (63.7%)** | **168 (82.8%)** |
+| next most common tied value | 1.545: 51 ticks | 0.1175: 2 ticks |
+| belief rank-1 sits AT the clamp (confidence 0.982) | **729 (50.6%)** | **203 (81.2%)** |
+| belief rank-1 confidence ≥ 0.9 | 1,017 | 230 |
+| ...of those, tied | 267 (26.3%) | 188 (81.7%) |
+| shown rank-1 confidence: mean / median | 0.619 / 0.729 | 0.784 / 0.982 |
+| shown rank-1 confidence ≥ 0.9 | 45.6% | 64.4% |
+
+Shown rank-1 confidence, deciles (library): 0.1–0.2: 286 · 0.2–0.3: 202 · 0.3–0.4: 93 · 0.4–0.5: 49 · 0.5–0.6: 45 ·
+0.6–0.7: 36 · 0.7–0.8: 33 · 0.8–0.9: 40 · **0.9–1.0: 657**. Held-out: 0.1–0.2: 29 · 0.2–0.5: 17 · 0.5–0.9: 43 ·
+**0.9–1.0: 161**. The distribution is bimodal: either low (~0.1–0.3) or pinned at the ceiling.
+
+Reading (mine; the counts are measured, the causal story is an inference): any hypothesis whose evidence keeps matching gains
+up to +1.2 per tick and reaches the +4.0 ceiling within a few ticks. Nothing pulls a saturated hypothesis back down, and
+hypotheses are not normalised against each other, so every well-supported candidate piles up at the same ceiling. That makes
+them tie (indistinguishable) and makes the shown confidence 0.982 (overconfident) at once. On held-out ticks it is almost the
+whole story (82.8% of ties are at the clamp). On library ticks it is only part: 63.7% of ties are at the clamp, and the rest
+include genuine identical-signature look-alikes (RCA-14/18, RCA-09/10/15) that tie at any log-odds. Also, 729 library ticks
+sit at the clamp but only 247 of them are ties, so saturation overconfidence is wider than the ties.
+
+## Check 2: bed slope and the FLAT fraction (report only)
+- **Which slope:** the signature uses the **raw** 10-minute least-squares slope (`Orchestrator._slopes`, passed to
+  `direction_and_band` with `checks.bands`), not the load-normalised one. The load-normalised slope is used only inside L1
+  checks. So load swings go straight into the signature bands.
+- **The "≥ 85% FLAT on no-fault ticks" figure does not describe the current bands.** It was the target and result of the
+  Stage 6 *criterion-based* band set, which was **reverted** to the Stage 5 values (config comment and
+  `reports/stage6_band_edges.md`) because mock Q2 top-1 fell 0.334 → 0.173. Recomputed with the current code path and bands on
+  the 6 normal episodes:
+
+| tag | deadband | no-fault FLAT fraction, mean [min–max] |
+|---|---|---|
+| drum_level | 0.03 | 0.999 [0.993–1.000] |
+| feed_water_flow | 0.05 | 0.204 [0.025–0.314] |
+| steam_flow | 0.05 | 0.191 [0.025–0.273] |
+| drum_pressure | 0.004 | 0.237 [0.175–0.345] |
+| **bed_temp_avg** | 0.03 | **0.047 [0.018–0.079]** |
+| ms_temperature | 0.04 | 0.235 [0.087–0.435] |
+
+  So five of six tags are non-FLAT on roughly 76–95% of healthy ticks, and the bed is FLAT on under 5%. That reconciles the
+  24.7% FAST-DOWN: the bed is almost never FLAT without a fault, so the signature carries mostly noise-band triples.
+- **C04 (feeder trip, caught; truth RCA-14), 47 post-onset ticks read bed FAST-UP** (ticks 29–97). Three phases:
+  - ticks 29–31 (onset): bed +0.65 to +0.83 °C/min with steam +0.23 to +0.29 t/h/min and pressure falling slowly. The load
+    term (2.43 × steam slope) is +0.56 to +0.71, so this is mostly load-explained.
+  - **ticks 50–57: bed +0.8 → +3.5 °C/min while steam falls (−1.15 → −0.08 t/h/min) and pressure falls FAST** (−0.92 → −0.07).
+    The load term is *negative* (−2.8 → −0.2). The bed rises against load as the plant loses steam. This is the part I cannot
+    explain and flag for the physics question.
+  - ticks 72–92: steam and pressure both rise FAST (steam up to +1.57 t/h/min, pressure up to +2.27 kg/cm2/min) and the bed
+    rises to +3.7 °C/min. The load term reaches +3.8, so this phase is mostly load-explained, consistent with the feeder
+    being restarted ("caught") and the plant recovering. Steam UP in 24 of the 47 ticks, DOWN in 14, FLAT in 9; pressure UP in
+    22, DOWN in 25.
+
+## Open list (added)
+1. **Belief overconfidence. Fix before reporting any confidence numbers.** Check 1: the +4.0 clamp is the shared cause of ties
+   and of confidence pinned at 0.982 (81% of held-out ticks have belief rank-1 at the clamp). Confident-and-wrong-group on
+   held-out ticks is ~40% of ticks at A2.
+2. **Band-mismatch absence problem.** Exact expected-evidence matching charges absence on 13.7% of absence charges (634 on the
+   true case). Step C (full neutral) was too blunt: it raised the tie rate 0.283 → 0.386 and cost tie-fair top-1 0.092. A
+   partial penalty (charge a fraction, not zero) may work; not tried.
+3. **Physics: bed slope in the A episodes.** Is a bed falling FAST during a feed-valve fault plausible, or is it wander
+   (A's FAST-DOWN share 0.168 is below the normal-episode share 0.247)?
+4. **Physics: C04 bed against load.** Why does the bed rise +0.8 to +3.5 °C/min while steam and pressure fall (ticks 50–57)?
+5. **Band calibration.** The current Stage 5 bands leave the bed FLAT on 4.7% of healthy ticks. The criterion-based bands that
+   fix this regress mock Q2 top-1; the metric that decided that revert (mock per-tick top-1) is itself in question
+   (see the group and belief metrics).
+6. Phase 0 is still missing its NPU run (Session 2) and the persistent-server work.
+
+
+## Phase-reviewer findings and what was done
+Independent review (`phase-reviewer`, start commit `bad68dd`). It reproduced the A2 column exactly, ran 27 single-edit
+mutations in a scratch copy, and confirmed no thresholds or band edges in `checks.*` were changed. Disposition:
+
+| finding | disposition |
+|---|---|
+| Item 1: behaviour changed vs `single_v1` (shown confidence on 1,384 ticks, ranks 2-3 on hundreds); not disclosed | **Verified and disclosed below.** Rank-1 `case_ref` changed on **0** of 5,160 ticks; state, headline, actions, escalate, triage and `llm_invoked` changed on **0**; shown rank-1 confidence changed on **1,384** and the hypothesis list on **1,996** |
+| Item 8: `retire_after_ticks` ASSUMED-range comment arithmetically wrong | **Fixed** (config comment and constants table). The 20-tick derivation itself holds |
+| Item 8: keep/revert decisions were made on the 30 reporting episodes; the rule was changed after A2 failed it | **Accepted as a limitation, recorded below.** It is a human decision, already marked |
+| Item 9: 13 mutants survived (contradiction threshold, balance-fact ids, INFO filter, per-tick bound, `CLAMP`, `supports[:6]`, evaluator onset / `low_conf` / `belief_top3` / tie rate, `belief_ranking` wiring, config defaults, `max_tokens` wiring) | **Guards added** (`tests/test_phase0a_guards.py`). Re-ran the reviewer's mutants plus a tie-fair-group one: **16 of 16 caught**. Still uncovered: the `supports[:6]` truncation (low value) |
+| Item 9: A01 replay tests skip when `data/episodes` is absent (gitignored) | **Noted.** On a clean checkout the end-to-end bug 6 regressions do not run until the episodes are generated; the unit tests for the same rules do |
+| Item 10: the `single_v2` baseline named in the report did not exist; edits reported as committed were not | **Done** in this commit |
+| Item 10: first-round tables left standing could be quoted as current | **Added** the "Current state" box at the top |
+| Evaluator: held-out belief group is mostly insertion-order credit; no tie-fair group metric emitted | **Added** `belief_group_tiefair` (additive; `belief_group` unchanged). A2 held-out: plain 0.545, tie-fair 0.641 |
+| Minor: a FLAT-observed triple cites any non-INFO fact naming that tag, even one from a different window | **Not fixed**, noted. Untested |
+
+## Disclosure: what changed in the agent's shown output vs `single_v1` (A2, retirement off)
+Over 5,160 ticks: rank-1 case unchanged on all, state/actions/escalation unchanged on all, but **shown rank-1 confidence
+differs on 1,384 ticks** and the hypothesis list differs on 1,996. Confidence is now bimodal and often pinned at the 0.982
+ceiling (Check 1). Worked example, **ep_N03_normal** (a *normal* episode; the agent reports DEVIATION in both versions, so
+this is an existing false-positive episode, not a new one): RCA-07 is rank 1 on all 5 ticks, with confidence
+0.389 to 0.711, 0.289 to 0.859, 0.206 to 0.937, 0.142 to 0.974, 0.430 to 0.982 (baseline to now). The ranking is the same;
+the confidence it carries is not. Anything that reads confidence downstream (the verifier's `[0.35, 0.75]` band, an
+engineer's trust) will behave differently from the baseline; S4 matched in aggregate (0.45) on mock, which proves little.
+**Verified on mock only.** Open item 1 (overconfidence) is the remedy.
+
+## Limitation: selection on the reporting episodes
+There is no development set. Every keep/revert decision (B, C, retirement) and the A2 override were made by reading metrics
+on the same 30 episodes that are the reporting set, so the final tree is the product of selection on them, and the rule
+that would have reverted A2 was changed after A2 failed it (a recorded human decision). The "never tune against the 30
+episodes" rule is about thresholds and band edges, which were not touched; these were structural choices among three code
+variants. Still, the held-out clause was the only guard and it is waived. Before further belief changes, generate a
+disjoint development episode set (fresh seeds, as Stage 4 did) and decide steps there.
+
+## Open list (consolidated; supersedes the earlier list where they differ)
+1. **Belief overconfidence. Fix before reporting any confidence numbers.** Shared cause with the ties: the +4.0 clamp.
+2. **Band-mismatch absence.** Step C (full neutral) was too blunt (tie rate 0.283 to 0.386, tie-fair top-1 -0.092). A partial
+   penalty may work; not tried.
+3. **Physics: bed slope in the A episodes** (is FAST-DOWN plausible during a feed-valve fault, or wander).
+4. **Physics: C04, bed rising +0.8 to +3.5 degC/min while steam and pressure fall (ticks 50-57).**
+5. **Band calibration:** the current bands leave the bed FLAT on 4.7% of healthy ticks.
+6. **Development episode set** for deciding steps (limitation above).
+7. **Phase 0 NPU run and persistent servers** (Session 2) are not done.
