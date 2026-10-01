@@ -5,10 +5,10 @@ results**; the mock re-ranks retrieved cases and does no reasoning. Energy is `n
 
 ## Status
 PARTIAL. Step 1 (dev set) done. Step 2 (bed slope) is a finding only. Step 3 (band calibration) was run and **not adopted**
-(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is built, measured on dev and **KEPT**. The reporting-set run, `single_v3_summary.json`, the C04 advisor entry and the phase-reviewer are not done. Not yet done: the reporting-set run,
-`results/baselines/single_v3_summary.json`, the C04 advisor entry, phase-reviewer.
+(human decision, below). Step 4 (belief saturation on the old edges) is measured. Step 5 (fix (c), display-only) is built, measured on dev and **KEPT**. The phase-reviewer ran (see "Phase-reviewer findings"); its fixes are committed. Not yet done at the time of this edit: the reporting-set run, `results/baselines/single_v3_summary.json`, the C04 advisor entry.
 
-Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. `e726085` fix (c) pre-registration. The (c) code commit follows it. Branch `exp/band-edges-p85`
+Commits (main, none pushed): `f2f9f5d` dev set. `232e08c` calibration + sanity scripts. `e726085` fix (c) pre-registration. `7d1f8c6` fix (c). `b5146d2` report answers. `dce395c` / `ca2814e` / `fc5157f` /
+`6ac94ff` phase-reviewer fixes 1 to 4. Branch `exp/band-edges-p85`
 (`dd5d41a`): the p85 edges, preserved, not for main.
 
 ## Verification
@@ -43,8 +43,11 @@ None: no physical response was added or changed. Band edges are a descriptor voc
 | p85 band edges | see branch | **FITTED** to dev no-fault, method in the script | **not adopted** | nothing on main |
 
 ## Numbers that changed
-`main`'s agent behaviour is unchanged by this session (no agent code or config edit survives). The reporting set at HEAD
-reproduces `single_v2_summary.json` with no differing keys.
+**Decision behaviour on `main` is unchanged by this session** (no threshold, band edge or case data touched; fix (c) is
+display-only). What differs by design: new field `confidence_shown` on each hypothesis, `Assessment.confidence` (now the shown
+value of rank 1), and the evaluator `low_conf_rate` (reads the shown value; the old definition is `low_conf_rate_decision`).
+On dev the decision fields are identical across 5,850 assessments. That the 30 reporting episodes still reproduce
+`single_v2_summary.json` on every other key is a **prediction** (Step 6 below) until the one-shot reporting run.
 
 ### Dev set: before and with the p85 edges (dev, mock; the edges are NOT in `main`)
 | metric | dev, main edges | dev, p85 edges | delta |
@@ -287,8 +290,13 @@ Built: `world_model.shown_confidences` (pure function), called in the orchestrat
 Shown rank-1 confidence on dev (library): mean 0.685 -> 0.485, median 0.885 -> 0.500, share >= 0.9 0.489 -> 0.151. Held-out
 median 0.980 -> 0.500, share >= 0.9 0.608 -> 0.000.
 
-**Predictions against the result:** P1 held: `dev_N05` RCA-07 still 0.711, 0.881, 0.957, 0.982 on ticks 11-14 and `dev_N09`
-0.711, 0.859 (no live rival with log-odds > 0). P2 held (clauses 1-3). P3 held (0.399 -> 0.055). P4 held: library
+**Predictions against the result:** P1 held **in substance, not bit-for-bit, and my first write-up of it was wrong.** I first
+reported "still 0.711, 0.881, 0.957, 0.982", but that table printed the *decision* confidence under a "shown" header (fixed in
+review fix 4). The shown values on `dev_N05` ticks 11-14 are 0.711, 0.881, **0.950, 0.980**: from tick 13 a second live
+hypothesis (RCA-15) has log-odds +0.16 / +0.12 > 0, which is exactly the condition P1 named, so shown = min(0.957,
+sigmoid(3.09 - 0.16)) = 0.950. `dev_N09` (ticks 10-11) is unchanged: 0.711, 0.859. Also, N05 is not a single *live*
+hypothesis (4 to 6 are live; the others sit below 0 at ticks 11-12), so "single-hypothesis climb" means "one supported
+hypothesis". The climb itself (0.71 to 0.98 in four ticks on a healthy plant) is not changed by (c). P2 held (clauses 1-3). P3 held (0.399 -> 0.055). P4 held: library
 confident-and-wrong fell by 0.133, under the 0.227 tie-share bound, and ECE fell modestly, not collapsed. P5 held.
 
 Library calibration bins after (c) (conf bin: n, mean conf, group-correct): 0-0.2: 385, 0.085, 0.195; 0.2-0.4: 165, 0.286,
@@ -325,6 +333,29 @@ Verification of this step:
 | independent re-derivation | library ECE (group): tool 0.0963 vs recomputed by separate code from the raw `belief_ranking` log-odds (shown value recomputed per tick, groups from `case_groups.json`) 0.0963; rel. diff 0.04% (the tool's value is printed to 4 d.p.). The recomputed shown value differs from the emitted `confidence_shown` on **0 of 1,327** ticks; confident-and-wrong 57 vs 57 |
 | mutation check | (M1) verifier trigger reads the shown value: caught by `test_verifier_does_not_fire_on_a_tie_the_display_shows_as_half`. (M2) the `min` safeguard dropped: 5 tests fail (never-raises, tie-below-half, both-at-floor, retired-not-rival, shown<=decision). (M3) a hypothesis counted as its own rival: 3 tests fail (single-hypothesis unchanged, never-raises, retired-not-rival). `__pycache__` cleared between runs |
 
+## Phase-reviewer findings and what was done
+Independent review (`phase-reviewer`, range `2212031..HEAD`). No blockers. It re-ran the suite (61 passed at the time),
+re-derived the dev decision-identity claim (0 differences over 5,850 assessments), the ECE / confident-and-wrong figures
+(0.1305 -> 0.0963, 233 -> 57 of 1,327) and the 330 crossings (149 ties + 181 l < r + 0 other) by separate code, and ran 11
+mutations in a scratch copy. Four survived; each fix is its own commit:
+
+| finding | disposition |
+|---|---|
+| 1. The "nothing that decides reads `confidence_shown`" rule was tested only by one verifier test that skips without dev data; a verifier trigger reading the shown value and a `_wm_summary` change both survived | **Fixed** (`dce395c`): data-free structural test (only `world_model.py` / `orchestrator.py` mention it), an ordering test (the shown value is computed after `ver.should_run`, `ver.apply`, `gate.approve`), a prompt-summary test, a verifier-band test. Both mutations now caught with dev data absent. Still true: the grep and these tests cover decision paths by reference, so a new consumer in a new file is caught only if it names the field or function |
+| 2. The evaluator change that moves held-out `low_conf_rate` 0.245 -> 0.945 had no test (a mutation reading only `confidence` survived) | **Fixed** (`ca2814e`): shown value, fallback to the decision value on old runs, `low_conf_rate_decision`, `<= 0.5` boundary; mutation and boundary mutation caught |
+| 3. `belief_saturation`: `>` vs `>=` at exactly 0.5 and group-level vs case-level correctness untested | **Fixed** (`fc5157f`): both caught by new tests; stale docstring corrected |
+| 4. Stale report sentence ("behaviour unchanged / reporting reproduces v2") and duplicated Status | **Fixed** (this commit) |
+| 5. 170 of 1,982 dev ticks have a shown rank-1 not in `belief_ranking` (model-only / dropped) | **Verified by me and documented** (What I could not verify) |
+| 6. Cause-first matching of the belief entry | **Documented**; not changed (safe on the current library) |
+| 7. Misnamed test `test_retired_hypotheses_are_not_rivals` | **Renamed** to `test_only_the_hypotheses_passed_in_are_rivals` (`dce395c`) |
+| 8. `band_calibration.py` hard-codes `sample_period_s=5.0` and reads the private `win._t` | **Noted, not changed**: it matches the config value and the harness today; a change in the sample period would need the script updated |
+| (mine, found while fixing) `trajectories()` printed the decision confidence under a "shown" header, so my P1 check read the wrong field | **Fixed** (`6ac94ff`), P1 re-checked and corrected above |
+
+Could not be verified by the reviewer: that the 30 reporting episodes still reproduce v2 (it was not allowed to run them);
+"first seed, no retries" for 35 of 36 dev episodes (seeds are not stored in `ground_truth.json`; `dev_C01` regenerated
+byte-identical from its spec seed); that the human approved the `min` safeguard and set `TARGET_FLAT` (asserted in the report;
+both are recorded as human decisions in this conversation).
+
 ## Disagreements recorded, not resolved
 - **Instruction vs history (item 2).** "Restore load normalisation" vs a signature that never had it. Resolved by your
   decision to skip, not by me.
@@ -354,8 +385,13 @@ Verification of this step:
 
 ## What I could not verify
 - Why dev library belief is lower than reporting (unexplained; hypothesis: A2 selected on the reporting set).
-- (c) on a real model: the shown value is computed from belief only, so the model's own ordering can differ from the belief
-  ordering; `shown` matches by cause/case, not by rank. Not exercised (mock reproduces belief order).
+- (c) on a real model: `shown` is matched to belief by cause (then case_ref), not by rank, so a reordering model changes which
+  hypothesis is judged against which rival. On the mock this already happens: **170 of 1,982 dev ticks (8.6%)** with a belief
+  ranking have a shown rank-1 whose case is not in `belief_ranking` (a model-only idea belief has dropped, e.g. dev_A01 ticks 50-51,
+  RCA-01); those keep the undiscounted decision confidence (the model-only rule) and cannot cross to <= 0.5. So the mock does
+  **not** simply reproduce belief order. Real-model behaviour not exercised.
+- Matching by `cause` first is safe today (no two of the 13 library cases share a cause string, checked by the reviewer) but
+  would mis-attribute silently if two cases ever did.
 - Everything beyond mock: a reasoning model may not depend on signature density the way the mock re-rank does.
 - A01, A04 and A06 never reach TRIP_IMMINENT on their dev seeds (reporting twins do: 29.2, 59.8, 30.2 min). Time-to-trip
   differs for A02/A03/D01/D03 too. Dev A-family lead times are reported separately and are not compared with reporting.
