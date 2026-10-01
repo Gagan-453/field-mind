@@ -58,3 +58,23 @@ def test_shown_field_is_read_but_decision_flag_overrides():
     h = {"confidence": 0.98, "confidence_shown": 0.5}
     assert conf_of(h) == 0.5 and conf_of(h, decision=True) == 0.98
     assert conf_of({"confidence": 0.7}) == 0.7
+
+
+def test_confident_boundary_is_strictly_above_half():
+    # a tie shows exactly 0.5, which must NOT count as confident
+    ticks = [_tick(1, (1.0, 0.0), 0.5, refs=("RCA-11", "RCA-14")),     # 0.5: not confident
+             _tick(2, (1.0, 0.0), 0.51, refs=("RCA-11", "RCA-14"))]    # 0.51: confident, wrong
+    s = summarise([_run(ticks)])["library"]
+    assert s["confident_and_wrong_group"] == 1
+    assert s["low_conf_share"] == 0.5
+
+
+def test_correctness_is_group_level_not_case_level():
+    # truth RCA-14; the shown rank-1 is RCA-18, a different case in the SAME group
+    same_group = _tick(1, (1.0, 0.0), 0.9, refs=("RCA-18", "RCA-14"))
+    other_group = _tick(2, (1.0, 0.0), 0.9, refs=("RCA-11", "RCA-14"))
+    s = summarise([_run([same_group, other_group])])["library"]
+    assert s["confident_and_wrong_group"] == 1          # only RCA-11 is wrong
+    # case-level ECE sees both as wrong; group-level sees one right and one wrong
+    assert s["ece_case"] == 0.9          # |0.9 - 0/2|
+    assert s["ece_group"] == 0.4         # |0.9 - 1/2|

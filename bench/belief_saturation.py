@@ -8,7 +8,8 @@ Definitions follow the Phase 0a Check 1 table (reports/phase0a_single_agent_fixe
                  no-fault episodes, every tick with a non-empty belief ranking
   at clamp     = belief rank-1 log-odds >= world_model.CLAMP (+4.0, conf 0.982)
   tie          = belief rank-1 and rank-2 have exactly equal log-odds
-  shown conf   = hypotheses[0].confidence (what the engineer sees)
+  shown conf   = hypotheses[0].confidence_shown when the run carries it (what the engineer
+                 sees; fix (c)), else hypotheses[0].confidence; --decision-conf forces the latter
   confident-and-wrong-group = shown conf > 0.5 and the shown rank-1 case is not in
                  the true case's group (fault classes only)
 
