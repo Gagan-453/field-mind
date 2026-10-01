@@ -62,9 +62,11 @@ class LLMReply:
     latency_ms: float = 0.0
     backend: str = "unknown"        # npu | gpu | cpu | cloud | mock
     model: str = "unknown"
-    prefill_tokens: int = 0
-    decode_tokens: int = 0
-    ttft_ms: float = 0.0            # time to first token, headline metric on device
+    # None = the runtime did not report it (LlamaServerBackend). Never filled
+    # with a guess; consumers must skip None, not treat it as 0.
+    prefill_tokens: int | None = 0
+    decode_tokens: int | None = 0
+    ttft_ms: float | None = 0.0     # time to first token, headline metric on device
     error: str = ""
     retries: int = 0               # transient-failure retries spent on this call
 
@@ -641,7 +643,8 @@ class LlamaServerBackend(LLMBackend):
                          it is a lower bound on client-observed TTFT
         latency_ms     = client wall clock for the whole request
 
-    A timing field the server did not send is left at 0, never estimated.
+    A timing field the server did not send is None -- not 0, and never
+    estimated -- so an aggregate can tell "missing" from "zero" and skip it.
     `cache_prompt` defaults to False so prompt_n counts every prompt token and
     prefix reuse cannot inflate the prefill rate the scheduler learns from.
     `json_mode` (response_format json_object) defaults to False so the
@@ -688,6 +691,7 @@ class LlamaServerBackend(LLMBackend):
         def fail(status: str, err: str) -> LLMReply:
             return LLMReply(text="", status=status, backend=self.lane,
                             model=self.model_file, error=err[:300],
+                            prefill_tokens=None, decode_tokens=None, ttft_ms=None,
                             latency_ms=(time.perf_counter() - t0) * 1000)
 
         try:
@@ -710,13 +714,18 @@ class LlamaServerBackend(LLMBackend):
             return fail("error", f"malformed reply ({e!r}): {raw[:200]}")
 
         tm = data.get("timings") or {}
+
+        def num(key, cast):
+            v = tm.get(key)
+            return cast(v) if isinstance(v, (int, float)) else None
+
         return LLMReply(
             text=text, backend=self.lane,
             model=data.get("model") or self.model_file,
             latency_ms=latency,
-            prefill_tokens=int(tm.get("prompt_n", 0) or 0),
-            decode_tokens=int(tm.get("predicted_n", 0) or 0),
-            ttft_ms=float(tm.get("prompt_ms", 0.0) or 0.0),
+            prefill_tokens=num("prompt_n", int),
+            decode_tokens=num("predicted_n", int),
+            ttft_ms=num("prompt_ms", float),
         )
 
 

@@ -65,6 +65,32 @@ On the mock, the model's rank-1 and the shown rank-1 give identical figures, bec
 invoked tick and the gate never drops it. Pooled, these three dev episodes go the **opposite** way to the
 reporting-set prior. C02 disagrees with A01 and B01, so the rule returns INCONCLUSIVE.
 
+## Follow-up (Session 2, part 2): missing timings are None
+- `LlamaServerBackend` now returns `None`, not 0, for any timing field the server does not send:
+  `prefill_tokens` ← `prompt_n`, `decode_tokens` ← `predicted_n`, `ttft_ms` ← `prompt_ms`. A failed call also
+  carries `None`. The other backends are unchanged. **LiteRT still writes 0 for anything it cannot parse.** That is
+  not changed here; it is noted only.
+- **One agent change, telemetry only:** the diagnostician's repair path (`l4_diagnose.py`) used to add the two calls'
+  token counts, and adding `None` would crash. A count that either call did not report now stays `None`. No decision
+  reads these counts. The mock run of the 3 dev episodes is identical before and after: 400 assessments, 0
+  decision-field differences, 0 token differences.
+- `env.prompt_tokens` still falls back to `est_tokens(prompt)` when the server sends no count. That is existing,
+  documented behaviour. `bench/model_choice.py` therefore uses the server count `tokens.prefill` for prompt tokens,
+  not `prompt_tokens`.
+- Aggregations skip `None` and report the count of missing values per field:
+  - `bench/board.py`: `lane_speed()["missing"]`, `mean_rates()` with `<field>_missing`, and `decode_rate_wallclock()`
+    gives `None` if a count is missing;
+  - `bench/model_choice.py`: `prompt_tokens_missing` and `answer_tokens_missing` rows.
+  - TTFT is not stored in the envelope, so it is not aggregated in the table.
+- Tests: `tests/test_llamaserver_backend.py` (no timings, partial timings, failed call) and
+  `tests/test_missing_timings.py` (repair path, both aggregations). `pytest`: 89 passed / 0 failed.
+- Mutation checks, run on scratch copies; all caught:
+  - backend fills 0 for missing → 2 tests;
+  - repair sum treats `None` as 0 → `test_repair_path_keeps_unknown_counts_unknown`;
+  - `model_choice` counts `None` as 0 → `test_model_choice_excludes_none_and_counts_it`;
+  - `board.mean_rates` counts `None` as 0 → `test_board_mean_rates_excludes_none_and_counts_it`;
+  - a failed call drops the explicit `None`s → `test_failed_call_reports_no_counts`.
+
 ## Verification
 | step | result |
 |---|---|

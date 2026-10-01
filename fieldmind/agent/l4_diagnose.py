@@ -193,8 +193,11 @@ class Diagnostician:
             payload = extract_json(reply2.text)
             ok, why = validate(payload) if payload else (False, "no JSON after repair")
             env.latency_ms += reply2.latency_ms
-            env.tokens["prefill"] += reply2.prefill_tokens
-            env.tokens["decode"] += reply2.decode_tokens
+            # a count either call did not report stays None (unknown), never 0
+            for k, v in (("prefill", reply2.prefill_tokens),
+                         ("decode", reply2.decode_tokens)):
+                env.tokens[k] = (None if env.tokens[k] is None or v is None
+                                 else env.tokens[k] + v)
             env.retries += getattr(reply2, "retries", 0)
             self.retries += getattr(reply2, "retries", 0)
             if self.log_prompts:

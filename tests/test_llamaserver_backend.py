@@ -40,9 +40,11 @@ class _Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"boom")
             return
-        body = (b"not json{" if mode == "malformed"
-                else json.dumps({k: v for k, v in CANNED.items()
-                                 if not (mode == "no_timings" and k == "timings")}).encode())
+        reply = {k: v for k, v in CANNED.items()
+                 if not (mode == "no_timings" and k == "timings")}
+        if mode == "partial_timings":       # server sends prompt_n only
+            reply["timings"] = {"prompt_n": 1234}
+        body = b"not json{" if mode == "malformed" else json.dumps(reply).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -90,11 +92,26 @@ def test_request_carries_config(server):
     assert _Handler.last_body["response_format"] == {"type": "json_object"}
 
 
-def test_missing_timings_are_zero_not_estimated(server):
+def test_missing_timings_are_none_not_zero_or_estimated(server):
     _Handler.mode = "no_timings"
     r = _backend(server).generate("a long prompt " * 50)
     assert r.status == "ok"
-    assert (r.prefill_tokens, r.decode_tokens, r.ttft_ms) == (0, 0, 0.0)
+    assert (r.prefill_tokens, r.decode_tokens, r.ttft_ms) == (None, None, None)
+    _Handler.mode = "ok"
+
+
+def test_partially_missing_timings_keep_what_was_sent(server):
+    _Handler.mode = "partial_timings"
+    r = _backend(server).generate("x")
+    assert (r.prefill_tokens, r.decode_tokens, r.ttft_ms) == (1234, None, None)
+    _Handler.mode = "ok"
+
+
+def test_failed_call_reports_no_counts(server):
+    _Handler.mode = "http500"
+    r = _backend(server).generate("x")
+    assert (r.prefill_tokens, r.decode_tokens, r.ttft_ms) == (None, None, None)
+    _Handler.mode = "ok"
 
 
 def test_timeout(server):

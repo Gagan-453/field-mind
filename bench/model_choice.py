@@ -130,6 +130,11 @@ def verdict(r: dict) -> str:
     return "INCONCLUSIVE"
 
 
+def _known(envs: list[dict], key: str) -> list:
+    return [e["tokens"][key] for e in envs
+            if (e.get("tokens") or {}).get(key) is not None]
+
+
 def call_stats(runs: list[dict]) -> dict:
     envs = [e for r in runs for a in r["assessments"] for e in a.get("envelopes", []) or []]
     diag = [e for e in envs if e.get("agent") == "diagnostician"]
@@ -138,7 +143,8 @@ def call_stats(runs: list[dict]) -> dict:
     status = {}
     for e in envs:
         status[f"{e['agent']}:{e['status']}"] = status.get(f"{e['agent']}:{e['status']}", 0) + 1
-    lat = sorted(e["latency_ms"] for e in diag if e.get("status") == "ok")
+    ok_diag = [e for e in diag if e.get("status") == "ok"]
+    lat = sorted(e["latency_ms"] for e in ok_diag if e.get("latency_ms") is not None)
     raw_c = raw_v = 0
     for r in runs:
         for a in r["assessments"]:
@@ -158,8 +164,12 @@ def call_stats(runs: list[dict]) -> dict:
         "envelope_status": status,
         "model_citation_faithfulness_raw": round(raw_v / raw_c, 3) if raw_c else None,
         "n_model_citations": raw_c,
-        "prompt_tokens_mean": mean([e.get("prompt_tokens", 0) for e in diag]),
-        "answer_tokens_mean": mean([e["tokens"]["decode"] for e in diag if e.get("status") == "ok"]),
+        # server-reported counts only; None (not reported) is excluded and counted.
+        # (envelope prompt_tokens falls back to an est_tokens estimate, so it is not used)
+        "prompt_tokens_mean": mean(_known(diag, "prefill")),
+        "prompt_tokens_missing": len(diag) - len(_known(diag, "prefill")),
+        "answer_tokens_mean": mean(_known(ok_diag, "decode")),
+        "answer_tokens_missing": len(ok_diag) - len(_known(ok_diag, "decode")),
         "diag_latency_ms_mean": mean(lat),
         "diag_latency_ms_p95": round(lat[int(0.95 * (len(lat) - 1))], 1) if lat else None,
         "models": sorted({e.get("model") for e in diag}),
@@ -205,7 +215,8 @@ ROWS = ["n_episodes", "library_top1", "library_group_top1", "library_sep_named",
         "confident_wrong_shown", "confident_wrong_share_decision", "confident_wrong_share_shown",
         "low_conf_share_decision", "low_conf_share_shown", "scored_library_ticks",
         "Q1_macro_f1", "Q4_precision", "Q4_recall", "S4_llm_invocation",
-        "prompt_tokens_mean", "answer_tokens_mean", "diag_latency_ms_mean", "diag_latency_ms_p95"]
+        "prompt_tokens_mean", "prompt_tokens_missing", "answer_tokens_mean",
+        "answer_tokens_missing", "diag_latency_ms_mean", "diag_latency_ms_p95"]
 
 
 def main() -> int:

@@ -98,11 +98,27 @@ def _chat(url: str, prompt: str, max_tokens: int, timeout: float = 300) -> tuple
 def lane_speed(url: str, prompt: str, max_tokens: int = 64) -> dict:
     data, wall = _chat(url, prompt, max_tokens)
     tm = data.get("timings") or {}
-    return {"url": url, "model": data.get("model"),
-            "prompt_tokens": tm.get("prompt_n"), "decode_tokens": tm.get("predicted_n"),
-            "prefill_tok_s": tm.get("prompt_per_second"),
-            "decode_tok_s": tm.get("predicted_per_second"),
-            "ttft_ms_server": tm.get("prompt_ms"), "wall_ms": round(wall, 1)}
+    out = {"url": url, "model": data.get("model"),
+           "prompt_tokens": tm.get("prompt_n"), "decode_tokens": tm.get("predicted_n"),
+           "prefill_tok_s": tm.get("prompt_per_second"),
+           "decode_tok_s": tm.get("predicted_per_second"),
+           "ttft_ms_server": tm.get("prompt_ms"), "wall_ms": round(wall, 1)}
+    # a field the server did not send stays None and is listed, never filled
+    out["missing"] = [k for k, v in out.items() if v is None]
+    return out
+
+
+def mean_rates(samples: list[dict]) -> dict:
+    """Mean of each lane_speed() rate field over several calls, skipping None;
+    reports how many samples were missing each field."""
+    out = {}
+    for k in ("prompt_tokens", "decode_tokens", "prefill_tok_s", "decode_tok_s",
+              "ttft_ms_server"):
+        vals = [s[k] for s in samples if s.get(k) is not None]
+        out[k] = round(sum(vals) / len(vals), 2) if vals else None
+        out[f"{k}_missing"] = len(samples) - len(vals)
+    out["n"] = len(samples)
+    return out
 
 
 def decode_rate_wallclock(url: str, prompt: str, n1: int = 16, n2: int = 80) -> dict:
@@ -112,9 +128,10 @@ def decode_rate_wallclock(url: str, prompt: str, n1: int = 16, n2: int = 80) -> 
     can stop early at EOS), not the server's timing."""
     d1, w1 = _chat(url, prompt, n1)
     d2, w2 = _chat(url, prompt, n2)
-    k1 = (d1.get("timings") or {}).get("predicted_n", 0)
-    k2 = (d2.get("timings") or {}).get("predicted_n", 0)
-    rate = (k2 - k1) / ((w2 - w1) / 1000) if k2 > k1 and w2 > w1 else None
+    k1 = (d1.get("timings") or {}).get("predicted_n")
+    k2 = (d2.get("timings") or {}).get("predicted_n")
+    ok = k1 is not None and k2 is not None and k2 > k1 and w2 > w1
+    rate = (k2 - k1) / ((w2 - w1) / 1000) if ok else None   # None if a count is missing
     return {"decoded": [k1, k2], "wall_ms": [round(w1, 1), round(w2, 1)],
             "decode_tok_s_wallclock": round(rate, 2) if rate else None,
             "decode_tok_s_server": (d2.get("timings") or {}).get("predicted_per_second")}
