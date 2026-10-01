@@ -356,6 +356,26 @@ Could not be verified by the reviewer: that the 30 reporting episodes still repr
 byte-identical from its spec seed); that the human approved the `min` safeguard and set `TARGET_FLAT` (asserted in the report;
 both are recorded as human decisions in this conversation).
 
+## Step 6: the one-shot reporting run: prediction (written and committed BEFORE the run)
+**Prediction.** Running the 30 reporting episodes once at HEAD (mock, `--out results/v3_report`) reproduces
+`results/baselines/single_v2_summary.json` on **every key except** the ones listed here. Any other differing key is a **failure**:
+stop, report it, write no baseline.
+
+Comparison (fixed now): flatten `summary` and `per_episode` of v2 and of the new run to key paths and compare values exactly.
+Allowed differences, and nothing else:
+1. Any path ending in `low_conf_rate` (held-out only: `Q2_heldout`, `Q2_by_family.C.heldout`, and `T2_root_cause` of the four
+   held-out episodes C01, C03, C05, C06). Predicted direction: **up** from the v2 held-out value 0.225.
+2. Any path ending in `low_conf_rate_decision` (a **new key**; its value on the held-out rows must equal the v2 `low_conf_rate`
+   exactly, which is a second check).
+3. `per_episode[*].S1_tick_latency_ms_p50` / `_p95`: wall-clock, never reproducible (the dev reruns differ in them too).
+4. Run metadata (`commit`, `state`, `note`, ...), which differ by design. ECE and saturation are **not** part of the evaluator
+   summary: they are computed by `bench/belief_saturation.py` from the run log and stored in the v3 file under a separate
+   `belief_saturation` block (new).
+
+Also predicted, from the dev result: reporting-set library confident-and-wrong and library ECE (group) both fall against the
+same run read with `--decision-conf`; held-out confident-and-wrong falls. These are reported, not gating (one held-out case;
+the decision on (c) was already taken on dev).
+
 ## Disagreements recorded, not resolved
 - **Instruction vs history (item 2).** "Restore load normalisation" vs a signature that never had it. Resolved by your
   decision to skip, not by me.
