@@ -17,7 +17,9 @@
 #     litert  LiteRT-LM on the QIDK. The numbers that go in the writeup.
 # ---------------------------------------------------------------------------
 llm:
-  backend: litert
+  # Phase 0a: defaults to mock so the board is only used when --backend is
+  # passed explicitly (or this line is changed on purpose).
+  backend: mock
 
   gemini:
     # gemini-2.0-flash was decommissioned (HTTP 404 "no longer available",
@@ -58,7 +60,10 @@ agent:
   policy: sequential                # decision variable pi: sequential|pipelined|conditional
   verifier: conditional             # decision variable v: always|conditional|never
   verifier_band: [0.35, 0.75]       # conditional mode fires inside this band
-  max_tokens: 384
+  # Answer cap. Phase 0a: set to 256 by the user (provenance: user decision, not
+  # derived). The multi-agent plan's per-agent targets are 60/30/50/120; this
+  # is the interim single-agent value. Read by Diagnostician and Verifier.
+  max_tokens: 256
   max_actions: 3
   min_faithfulness: 0.5             # below this the model's ranking is discarded
   hard_stage_deadline_ms: 200       # constraint C1 -- miss rate must be zero

@@ -69,7 +69,7 @@ class Verifier:
 
         prompt = self.template.format(facts=fact_block, claims=claim_block)
         reply = self.backend.generate(prompt, role="verifier",
-                                      max_tokens=self.cfg.get("max_tokens", 256),
+                                      max_tokens=self.cfg["max_tokens"],
                                       mock_hint={"claims": claims})
 
         env = AgentEnvelope(agent="verifier", tick=tick,

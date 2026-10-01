@@ -158,7 +158,7 @@ class Diagnostician:
                 "headline": ""}
 
         reply = self.backend.generate(prompt, role="diagnostician",
-                                      max_tokens=self.cfg.get("max_tokens", 384),
+                                      max_tokens=self.cfg["max_tokens"],
                                       mock_hint=hint)
 
         env = AgentEnvelope(agent="diagnostician", tick=tick,
@@ -188,7 +188,7 @@ class Diagnostician:
             self.parse_failures += 1
             repair_prompt = self.repair.format(bad_output=reply.text[:800], reason=why)
             reply2 = self.backend.generate(repair_prompt, role="diagnostician",
-                                           max_tokens=self.cfg.get("max_tokens", 384),
+                                           max_tokens=self.cfg["max_tokens"],
                                            mock_hint=hint)
             payload = extract_json(reply2.text)
             ok, why = validate(payload) if payload else (False, "no JSON after repair")

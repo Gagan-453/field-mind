@@ -11,3 +11,6 @@ PyYAML>=6.0
 # --- optional ---
 # The Gemini backend uses urllib from the stdlib, not the Google SDK, so there
 # is nothing extra to install for cloud development either.
+
+# --- dev only: tests/ (run as .venv/bin/python -m pytest tests) ---
+pytest>=8.0
