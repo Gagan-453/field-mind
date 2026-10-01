@@ -82,7 +82,12 @@ agent:
     # doubled, 120 = twice the 60-min sensor window. It sets how long a stale
     # look-alike (e.g. RCA-09 / RCA-10 / RCA-15) can stay ranked after it stops
     # being retrieved. Not tuned on the 30 reporting episodes.
-    retire_after_ticks: 20
+    # `null` switches retirement OFF (hypotheses are then only retired by the
+    # confidence floor). DEFAULT OFF: Phase 0a measured it on and off at A2 and
+    # it failed the keep rule (library tie-fair belief top-1 -0.025, belief
+    # group -0.024); see reports/phase0a_single_agent_fixes.md. Set to 20 to
+    # turn it on.
+    retire_after_ticks: null
 
   retrieval:                        # decision variable k
     k_cases: 4

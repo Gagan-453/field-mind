@@ -9,7 +9,7 @@ from fieldmind.kb.stores import CaseLibrary
 ROOT = Path(__file__).resolve().parent.parent
 LIB = CaseLibrary(ROOT / "data/kb/case_library.json")
 CASE = {c["case_id"]: c for c in LIB.cases}
-N = yaml.safe_load((ROOT / "configs/base.yaml").read_text())["agent"]["belief"]["retire_after_ticks"]
+N = 20   # DERIVED: 10-min signature slope window / 30 s tick. The config value may be null (off).
 
 # an all-FLAT signature: nothing the six tags carry (the RCA-09/10/15 situation)
 FLAT = {(t, "FLAT", "-"): 0.35 for t in ("steam_flow", "drum_pressure", "bed_temp_avg",
@@ -68,6 +68,34 @@ def test_disabled_when_none():
     assert "RCA-10" in live(wm) and retired_events(wm) == []
 
 
-def test_n_comes_from_config_and_is_the_derived_value():
-    # 10-min signature slope window / 30 s tick (config comment: DERIVED)
-    assert N == 20
+def test_config_is_either_off_or_the_derived_value():
+    v = yaml.safe_load((ROOT / "configs/base.yaml").read_text())["agent"]["belief"]["retire_after_ticks"]
+    assert v in (None, N)
+
+
+# ------------------------------------------------- the config switch, end to end
+def _a01_retirements(retire_after, upto=110):
+    import pytest
+    from fieldmind.agent import world_model as wm_
+    from bench.harness import Episode, SensorWindow, build_agent
+    ep_dir = ROOT / "data/episodes/ep_A01_fcv_seize"
+    if not ep_dir.exists():
+        pytest.skip("data/episodes is generated and gitignored")
+    cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    cfg["llm"]["backend"] = "mock"
+    cfg["agent"]["belief"]["retire_after_ticks"] = retire_after
+    ep = Episode(ep_dir)
+    orch, asset, *_ = build_agent(cfg, ep.notes, ep.records)
+    win = SensorWindow(window_min=60.0, sample_period_s=cfg["checks"]["sample_period_s"])
+    wm = wm_.new_world_model(ep.id, asset.equipment)
+    for k in range(upto):
+        for r in ep.samples_between(k * 30, (k + 1) * 30):
+            win.append(r["t"], r)
+        if win.ready(min_minutes=5.0):
+            orch.tick(wm, win, k, "x", now_s=(k + 1) * 30)
+    return [e for e in wm.timeline if e.kind == "HYP_RETIRED" and "not retrieved" in e.detail]
+
+
+def test_null_in_config_switches_retirement_off_and_20_turns_it_on():
+    assert _a01_retirements(None) == []
+    assert len(_a01_retirements(20)) > 0
