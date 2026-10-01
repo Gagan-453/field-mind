@@ -137,13 +137,21 @@ def _fact_ids(facts: list[Fact], tag: str) -> list[str]:
 
 
 def update_hypotheses(wm: WorldModel, facts: list[Fact], signature: dict,
-                      candidates: list[dict], tick: int) -> None:
+                      candidates: list[dict], tick: int,
+                      retire_after: int | None = None) -> None:
     """candidates: retrieved cases, each with expected/contradicting signatures.
 
     Evidence is compared as full (tag, direction, band) TRIPLES against the tick
     `signature`, exactly as CaseLibrary.match does (known bug 6: this used to
     compare tag names only, so a flat bed -- which RCA-01 PREDICTS -- was charged
     as a contradiction of RCA-01's "bed falling" signature).
+
+    `retire_after` (agent.belief.retire_after_ticks): a live hypothesis that no
+    retrieved case has carried for this many ticks is retired and the retirement
+    logged as an Event. Without it a hypothesis that was retrieved once keeps
+    its log-odds for the rest of the episode, and look-alike cases that tie
+    (RCA-09 / RCA-10 / RCA-15 on an all-FLAT signature) stay ranked forever.
+    None disables it (unit tests only).
 
     Note that confidences are NOT normalised to sum to 1. Two faults at once is
     a real scenario (Plan §9) and forcing a simplex would make the second one
@@ -158,6 +166,7 @@ def update_hypotheses(wm: WorldModel, facts: list[Fact], signature: dict,
                            discriminator=cand.get("discriminating_evidence", ""))
             wm.hypotheses.append(h)
         h.retired = False
+        h.last_retrieved_tick = tick
 
         expected = CaseLibrary._to_triples(cand.get("signature", {}))
 
@@ -189,6 +198,18 @@ def update_hypotheses(wm: WorldModel, facts: list[Fact], signature: dict,
         h.confidence = round(_sigmoid(h.log_odds), 3)
         h.supports = sorted(set(supports))[:6]
         h.contradicts = sorted(set(contradicts))[:4]
+
+    # rule 5: retire the stale, but record it. Ticks are counted on the episode
+    # clock, so QUIET ticks (where this function is not called) still age a
+    # hypothesis; the retirement lands on the next tick that runs the update.
+    if retire_after is not None:
+        for h in wm.hypotheses:
+            if not h.retired and tick - h.last_retrieved_tick >= retire_after:
+                h.retired = True
+                wm.timeline.append(Event(
+                    tick, "HYP_RETIRED",
+                    f"{h.case_ref or h.cause} not retrieved for "
+                    f"{tick - h.last_retrieved_tick} ticks"))
 
     # rule 4: retire the dead, but record it
     for h in wm.hypotheses:

@@ -124,6 +124,7 @@ class Hypothesis:
     contradicts: list[str] = field(default_factory=list)
     discriminator: str = ""
     first_tick: int = 0
+    last_retrieved_tick: int = 0   # last tick a retrieved case carried this hypothesis
     retired: bool = False
 
 

@@ -72,6 +72,18 @@ agent:
   triage:
     trip_horizon_min: 5.0
 
+  belief:
+    # Retire a hypothesis no retrieved case has carried for this many
+    # consecutive ticks (an Event is logged for each). DERIVED: the
+    # signature is built from the raw 10-minute least-squares slope
+    # (orchestrator._slopes), and 10 min / tick_period_s 30 = 20 ticks, so
+    # after 20 ticks none of the evidence that retrieved the case is still in
+    # the signature. ASSUMED range [10, 120]: 10 = the 5-min balance window
+    # doubled, 120 = twice the 60-min sensor window. It sets how long a stale
+    # look-alike (e.g. RCA-09 / RCA-10 / RCA-15) can stay ranked after it stops
+    # being retrieved. Not tuned on the 30 reporting episodes.
+    retire_after_ticks: 20
+
   retrieval:                        # decision variable k
     k_cases: 4
     k_notes: 5

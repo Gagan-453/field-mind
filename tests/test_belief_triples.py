@@ -82,8 +82,8 @@ def replay_a01(upto):
     seen = {}
     real = wmod.update_hypotheses
 
-    def spy(wm_, facts, signature, cands, tick):
-        real(wm_, facts, signature, cands, tick)
+    def spy(wm_, facts, signature, cands, tick, **kw):
+        real(wm_, facts, signature, cands, tick, **kw)
         if any(c["case_id"] == "RCA-01" for c in cands):
             h = next(x for x in wm_.hypotheses if x.case_ref == "RCA-01")
             seen[tick] = {"signature": dict(signature), "contradicts": list(h.contradicts)}
