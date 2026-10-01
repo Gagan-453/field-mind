@@ -1,18 +1,23 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
-      "Bash(python3:*)",
-      "Bash(python:*)",
-      "Bash(pytest:*)",
-      "Bash(pip install:*)",
-      "Bash(adb:*)",
-      "Bash(ls:*)",
-      "Bash(grep:*)",
-      "Bash(find:*)"
+      "Bash(python -m pytest *)",
+      "Bash(pytest *)",
+      "Bash(python bench/*)",
+      "Bash(python run_demo.py *)",
+      "Bash(git status)",
+      "Bash(git diff *)",
+      "Bash(git log *)",
+      "Bash(adb devices)",
+      "Bash(adb forward *)",
+      "Bash(curl -s http://localhost:*)"
     ],
-    "ask": [
-      "Bash(rm:*)",
-      "Bash(git push:*)"
+    "deny": [
+      "Bash(git push *)",
+      "Bash(adb shell rm *)",
+      "Read(./.env)",
+      "Read(./.env.*)"
     ]
   }
 }

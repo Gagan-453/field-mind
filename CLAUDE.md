@@ -403,3 +403,60 @@ Precedent: a ρ_g difference was attributed to the atmospheric constant in the
 gauge→absolute conversion. Both sides used 101325, and the proposed alternative
 would have moved the value *further* apart. The correct entry was "unexplained,
 immaterial against the 15× G_sw band".
+## Multi-agent rebuild
+
+The plan is `docs/multi_agent_plan.pdf`. Before changing anything under `fieldmind/multi/`, read its sections
+"Design rules", "The agents", "Scheduler", "Blackboard and messages" and "Build order".
+
+Work happens in phases (0 to 5, from the plan's build order). Phase 0 lands on `main`; phases 1 onward land on the
+`multi-agent` branch.
+
+### Rules that must not be broken
+
+- The single agent in `fieldmind/agent/` is the baseline every multi-agent number is compared against. Do not change
+  its behaviour on the `multi-agent` branch. Shared pieces (L1 checks, L6 gate, case library, world-model types,
+  evaluator) are reused by importing them, never by copying them.
+- The tick never waits for a model. The hard path (sensor agent, drift watcher, retriever and belief, scheduler,
+  gate and memory) must finish in under 200 ms and publish an assessment on every tick, whatever the model lanes are doing.
+- Model answers never write belief directly. They pass the gate first; then the belief agent moves log-odds by a
+  capped amount. (Lesson from the old `_merge` bug.)
+- Every blackboard section has exactly one writer (table in the plan). Enforce it with an assertion in code, not a comment.
+- Fact IDs carry their tick: `t84.F1`. The gate checks citations against the facts of the answer's evidence tick.
+- Every model prompt stays under 1280 tokens. Answer caps: diagnosticians 60 tokens, verifier 30, text reader 50,
+  query agent 120. Log prompt tokens and answer tokens on every call.
+- Model answers are short JSON made of IDs. Readable sentences for the engineer are written by code.
+- Same GGUF model file on both lanes. Only Q4_0 or Q8_0 quantisations (K-quants silently fall back to the CPU on HTP).
+- Never tune thresholds or band edges against the 30 reporting episodes.
+
+### Planned layout
+
+```
+fieldmind/multi/
+  blackboard.py     sections, single-writer enforcement, staleness checks
+  jobs.py           Job and Result envelope (evidence_tick, lane, queue_wait_ms, tokens, latency)
+  scheduler.py      priorities P0-P4, lane choice (earliest predicted finish), one queued job per (agent, side), ladder
+  lanes.py          NPU lane and CPU lane, one call in flight each, HTTP to llama-server
+  agents/           sensor.py drift.py retriever.py gate.py diag_side.py verifier.py text_reader.py query.py
+  prompts/          one template per model agent
+  orchestrator.py   tick loop
+bench/harness.py    gains --arch single|multi and --mode lockstep|realtime
+```
+
+### The board (QIDK, SM8650)
+
+- Two persistent `llama-server` processes on the board, started once per session (`/board-up`):
+  NPU lane on port 8080 (`--device HTP0 -ngl 99`), CPU lane on port 8081 (no offload). Both with `-np 1` so each
+  lane runs one request at a time, and the same `-c` context size. `adb forward` both ports to the laptop.
+- NPU use is confirmed only when the startup log shows a nonzero HTP0 buffer and all layers offloaded.
+- Set `LD_LIBRARY_PATH` and `ADSP_LIBRARY_PATH` on every `adb shell` that starts a binary.
+- Until phase 4 the agent code runs on the laptop; only model calls run on the board. Hard-path timings measured on
+  the laptop are not board timings, and reports must say so.
+- Log chip temperature before and after every benchmark run and leave cooling gaps between runs.
+
+### How to work through a phase
+
+1. Start in plan mode. Read the plan section for the phase, propose the change list, wait for approval.
+2. Build in small commits. Add or extend tests in `tests/` for every new rule above that the phase touches.
+3. Run the phase's check from the plan's build order. Report the numbers in a table next to the previous phase's.
+4. If a number moves and you cannot say why, stop and say so instead of adjusting things until it looks right.
+5. Commit with the phase name in the message. Do not push.
