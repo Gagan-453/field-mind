@@ -212,8 +212,11 @@ Consequences, each of which gets a unit test:
   so each shows **0.5, not 1/3**. The formula is a pairwise margin, not a probability over the tied set; reading ties as
   uniform (1/k) would need a softmax over all live hypotheses (the dropped option (d)). Recorded as a known simplification.
 - **Both ranks at -4.0** (`l_1 = l_2 = -4.0`, `c = 0.018`): the margin is 0, `sigmoid(0) = 0.5`, but the `min` keeps
-  `shown = 0.018`. The `min` is a safeguard I added to the approved formula: without it a disbelieved hypothesis would show
-  50%. It cannot occur among live hypotheses today (anything under confidence 0.08 is retired), and is handled anyway.
+  `shown = 0.018`. **The `min` is my addition to the approved formula; the human approved it.** Without it a disbelieved
+  hypothesis would show 50%. It cannot occur among live hypotheses today: `update_hypotheses` rule 4 (the confidence floor,
+  `RETIRE_BELOW = 0.08`) retires any hypothesis under confidence 0.08 **unconditionally**; it is not the stale-hypothesis
+  rule (`agent.belief.retire_after_ticks`, null = off by default), which is a different path. Measured: the smallest live
+  log-odds in any dev tick is -2.4425 (confidence 0.08). The `min` is handled anyway.
   **Decision taken (rule 6, conservative):** the margin can only lower the shown value, never raise it.
 
 ### 3. ECE definition and baseline (dev, current main, measured before any code change)
@@ -258,8 +261,9 @@ Keep (c) only if **all** hold on dev, mock, against current main:
 - **P2:** belief metrics, hypothesis order, decision confidences, S4 and every other Q/S key are bit-identical (by construction:
   nothing that decides reads the new field).
 - **P3:** held-out confident-and-wrong falls sharply (83.9% of held-out ticks are ties, which now show <= 0.5).
-- **P4 (library):** confident-and-wrong falls, but by **at most the tie share of 0.227** (a tie is the only thing that
-  lowers a rank-1 to 0.5; wide-margin untied clamp ticks stay at ~0.95-0.98). I expect a modest ECE fall, **not** a collapse.
+- **P4 (library):** confident-and-wrong falls, but by **at most the tie share of 0.227** (I believed a tie was the only thing that
+  lowers a rank-1 to 0.5; **that was incomplete**, see "Where the low-confidence ticks come from": a shown rank-1 that is not the
+  belief maximum also drops below 0.5. Wide-margin untied clamp ticks do stay at ~0.95-0.98). I expect a modest ECE fall, **not** a collapse.
   It can in principle rise if the ticks moved into the 0.4-0.6 bin are right far less than half the time; the rule decides.
 - **P5:** `low_conf_rate` (held-out) rises from 0.245, and the library low-confidence share from 0.335.
 
@@ -293,6 +297,25 @@ over-confident to under-confident**: group-correct now exceeds mean confidence i
 301 library tied ticks, **83 (27.6%) have a tied set entirely inside the true group** (look-alikes such as RCA-14/18), where 0.5
 throws away real group-level certainty; the margin is pairwise and group-blind. A group-aware margin is a possible
 follow-up, not built.
+
+### Where the low-confidence ticks come from (library; answers a review question)
+Denominator of the low-confidence share: the **1,327 scored library ticks** (post-onset, non-empty hypothesis list). Before:
+444 ticks at shown <= 0.5 (0.335). After: 774 (0.583). **330 ticks newly crossed** (decision confidence > 0.5, shown <= 0.5):
+
+| cause of the crossing | ticks | share of the 330 |
+|---|---|---|
+| exact tie: the shown rank-1's log-odds equal its best rival's (l == r) | 149 | 45% |
+| the shown rank-1 is **not the belief maximum** (l < r) | 181 | 55% |
+| anything else (l > r, or no belief entry) | 0 | 0% |
+
+The two together account for every one of the 330. Only 149 of the 301 library tied ticks newly crossed (the rest were
+already <= 0.5, or the tie is not at the shown rank-1), so the +0.248 is not "ties only" and my earlier P4 reasoning
+(ties as the only route to 0.5) was wrong about the mechanism, although the library confident-and-wrong fall (0.133) stayed
+under the 0.227 bound I had derived from it. **The l < r group is intended behaviour:** the shown order comes from `_merge`
+(model / retrieval order, here the mock re-rank) while belief orders by log-odds, and the shown value is the margin against the
+best rival, so when the displayed ranking disagrees with belief the display falls below 0.5 (e.g. dev_A01 tick 78: RCA-01 at
+log-odds 0.41 vs a rival at 0.75 shows 0.415; the decision value is 0.60). On a real model that reorders, this group may be
+larger or smaller; not measured.
 
 Verification of this step:
 | step | result |
