@@ -67,6 +67,9 @@ def main():
     ap.add_argument("--mode", default="lockstep", choices=["lockstep", "realtime"],
                     help="lockstep: every job finishes inside its tick. "
                          "realtime is not built yet (Session 6)")
+    ap.add_argument("--placement", default=None,
+                    choices=["fixed", "earliest_finish"],
+                    help="overrides multi.placement (--arch multi only)")
     ap.add_argument("--record-prompts", default=None,
                     help="append every backend call (role, max_tokens, prompt, "
                          "mock-hint hash) to this JSONL file")
@@ -88,6 +91,8 @@ def main():
     if args.lane:
         ls["lane"] = args.lane
     cfg.setdefault("agent", {})["log_prompts"] = args.log_prompts
+    if args.placement:
+        cfg["multi"]["placement"] = args.placement
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)

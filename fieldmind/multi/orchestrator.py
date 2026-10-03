@@ -153,7 +153,8 @@ class MultiOrchestrator:
     def run_telemetry(self) -> dict:
         p = sorted(self.p0_ms)
         pct = (lambda q: round(p[min(len(p) - 1, int(q * len(p)))], 4)) if p else (lambda q: None)
-        return {"lanes": [l.telemetry() for l in self.scheduler.lanes],
+        return {"placement": self.scheduler.placement,
+                "lanes": [l.telemetry() for l in self.scheduler.lanes],
                 "jobs_dispatched": len(self.scheduler.dispatched),
                 "jobs_replaced": len(self.scheduler.replaced),
                 "stale_dropped": list(self.gate.stale_dropped),

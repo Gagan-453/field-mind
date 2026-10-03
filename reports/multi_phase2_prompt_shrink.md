@@ -1,8 +1,8 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-PRE-REGISTRATION ONLY. This file was committed before any Phase 2 measurement or code. It holds the human
-decisions, the dev gate, and the statement of what is expected to change. Results are added below as commits land.
+PARTIAL. The pre-registration below (human decisions, dev gate, expected-change statement) was committed before
+any Phase 2 measurement or code (`595180b`). Results are added under "Results by commit" as commits land.
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
 measure the deterministic and retrieval layers only. They are not an agent result. The real-model baseline
@@ -150,3 +150,48 @@ from the gate on that ranking as usual. Because nothing is cited, every ALARM or
 - That the Hugging Face tokenizers match the GGUF tokenizers on the board; to be checked against each lane's
   `/tokenize` or `timings.prompt_n` when the board is attached.
 - Board timings; everything timed here is laptop time.
+
+---
+
+# Results by commit
+
+## Commit 2: fixed placement in the scheduler
+`multi.placement: fixed | earliest_finish` is now a real switch (`fieldmind/multi/scheduler.py`,
+`Scheduler.choose_lane`); `run_demo.py --placement` overrides it; the run file records it under `multi.placement`.
+In fixed mode a job takes the lane `multi.fixed_placement` gives its agent and waits for it even when the other
+lane is idle. An agent with no entry raises. The default in `configs/base.yaml` is now `fixed`.
+
+**Gate (dev, 36 episodes, 5,850 ticks, mock, lockstep). Mock numbers; not an agent result.**
+
+| check | result |
+|---|---|
+| fixed vs earliest finish, decisions | `bench/compare_runs.py`: 0 differences over 5,850 assessments and 2,174 envelopes; summaries 0 differences |
+| fixed vs earliest finish, prompts | 2,174 calls each; `cmp`: byte-identical; sha256 `6e9b748a...`, the Phase 1 value |
+| fixed vs the Phase 1 multi run and the Phase 1 single run | 0 differences each (runs and summaries) |
+| every job on its assigned lane (fixed) | diagnostician: npu 1,982, cpu 0; verifier: cpu 192, npu 0 |
+| same jobs under earliest finish | diagnostician: npu 1,733, cpu 249; verifier: npu 48, cpu 144 (the Phase 1 split) |
+| S7 / P0 over 200 ms (laptop) | 0 / 0 in both runs |
+
+Independent count: jobs on lanes (2,174) = `diag_calls` + `ver_calls` summed over episodes (2,174) = prompt-log
+lines (2,174). Relative difference 0.
+
+Simulated queue wait is 0 for every job under fixed placement and nonzero for 7 jobs (max 1.3 s) under earliest
+finish. These come from the placeholder lane rates, so they are expectations, not results.
+
+Tests: `tests/test_fixed_placement.py`, 15 tests; full suite 169 passed (154 before).
+
+| mutation (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared before and after) | caught by |
+|---|---|
+| fixed mode falls through to earliest finish | 9 tests: `test_every_agent_lands_on_its_assigned_lane[*]` (6), `test_fixed_job_waits_for_its_busy_lane_while_the_other_is_idle`, `test_agent_without_a_lane_raises_and_is_not_placed`, `test_episode_every_job_runs_on_its_table_lane` |
+| a fixed job takes the idle lane | `test_fixed_job_waits_for_its_busy_lane_while_the_other_is_idle`, `test_episode_every_job_runs_on_its_table_lane` |
+| lookup returns the other lane | 9 tests, incl. `test_repair_call_stays_on_the_assigned_lane` |
+| config table swapped (verifier npu, diagnostician cpu) | `test_episode_every_job_runs_on_its_table_lane` |
+| missing agent falls back to the first lane | `test_agent_without_a_lane_raises_and_is_not_placed` |
+
+Constants introduced:
+
+| symbol | value | provenance | range | affects |
+|---|---|---|---|---|
+| `multi.fixed_placement` diag_water / diag_heat / verifier | npu / cpu / cpu | CITED: plan, "Policies to compare", fixed placement (p.11) | none | lane of each job in fixed mode |
+| `multi.fixed_placement` text_reader / query | cpu / cpu | CITED: plan, "Model agents", default lane (p.5) | none | same |
+| `multi.fixed_placement` diagnostician (unsplit) | npu | HUMAN DECISION (plan review); the plan names only the two halves | npu or cpu | lane of the Phase 2 diagnostician; with a real model, which numerics produce the diagnosis |

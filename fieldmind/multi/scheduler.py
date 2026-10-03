@@ -14,9 +14,15 @@ Queue order is (priority, submit order). At most one WAITING job per
 (agent, side): a newer one replaces the older waiting one, which is marked
 `replaced` and logged.
 
-Lane choice: earliest predicted finish over the lanes (SimLane.predict_finish),
-ties to the first lane in config order (NPU). Prediction uses the job's
-max_answer_tokens, not the eventual answer length.
+Lane choice (multi.placement):
+  earliest_finish  earliest predicted finish over the lanes
+                   (SimLane.predict_finish), ties to the first lane in config
+                   order (NPU).
+  fixed            the plan's fixed-placement policy: each agent has ONE lane
+                   (multi.fixed_placement) and waits for it even when the other
+                   lane is idle. An agent missing from the table raises -- no
+                   silent fallback to another policy.
+Prediction uses the job's max_answer_tokens, not the eventual answer length.
 
 PHASE 1 (plumbing only): lockstep. `run_lockstep` drains the queue, running
 each job to completion before the next; the harness then moves to the next
@@ -33,6 +39,8 @@ import heapq
 from ..agent.l4_diagnose import est_tokens
 from .jobs import Job, Result
 
+PLACEMENTS = ("earliest_finish", "fixed")
+
 
 class Scheduler:
     def __init__(self, lanes: list, cfg: dict):
@@ -46,6 +54,18 @@ class Scheduler:
         if cfg.get("adapt_rates"):
             raise NotImplementedError("rate adaptation from measured timings "
                                       "is not built in Phase 1")
+        self.placement = cfg.get("placement", "earliest_finish")
+        if self.placement not in PLACEMENTS:
+            raise ValueError(f"multi.placement must be one of {PLACEMENTS}, "
+                             f"got {self.placement!r}")
+        self.fixed_placement = dict(cfg.get("fixed_placement") or {})
+        if self.placement == "fixed":
+            if not self.fixed_placement:
+                raise ValueError("placement 'fixed' needs multi.fixed_placement")
+            names = {l.name for l in lanes}
+            bad = {a: n for a, n in self.fixed_placement.items() if n not in names}
+            if bad:
+                raise ValueError(f"fixed_placement names unknown lanes: {bad}")
         dl = cfg.get("deadlines_s", {})
         self.deadlines = {int(k[1:]): v for k, v in dl.items()}
         self._heap: list = []
@@ -96,13 +116,23 @@ class Scheduler:
 
     # ------------------------------------------------------------------
     def choose_lane(self, job: Job, prompt_tokens: int):
-        """Earliest predicted finish; ties to the earlier lane in config order."""
-        best, best_t = None, None
-        for lane in self.lanes:
-            t = lane.predict_finish(job.submit_s, prompt_tokens,
-                                    job.max_answer_tokens)
-            if best_t is None or t < best_t:
-                best, best_t = lane, t
+        """fixed: the agent's assigned lane, busy or not. earliest_finish:
+        earliest predicted finish; ties to the earlier lane in config order."""
+        if self.placement == "fixed":
+            name = self.fixed_placement.get(job.agent)
+            if name is None:
+                raise KeyError(f"agent {job.agent!r} has no lane in "
+                               f"multi.fixed_placement")
+            best = self._lane(name)
+            best_t = best.predict_finish(job.submit_s, prompt_tokens,
+                                         job.max_answer_tokens)
+        else:
+            best, best_t = None, None
+            for lane in self.lanes:
+                t = lane.predict_finish(job.submit_s, prompt_tokens,
+                                        job.max_answer_tokens)
+                if best_t is None or t < best_t:
+                    best, best_t = lane, t
         job.prompt_tokens = prompt_tokens
         job.predicted_finish_s = round(best_t, 6)
         job.lane = best.name

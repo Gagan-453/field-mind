@@ -123,7 +123,24 @@ agent:
 # ---------------------------------------------------------------------------
 multi:
   mode: lockstep                    # lockstep only in Phase 1; realtime is Session 6
-  placement: earliest_finish        # plan p.10; the other study policies are Phase 5
+  # Lane choice: fixed | earliest_finish (run_demo.py --placement overrides).
+  # HUMAN DECISION (Phase 1 close-out, Phase 2 plan review): the default is
+  # `fixed`, because real-model accuracy gates need one cause per change and
+  # NPU and CPU numerics can answer the same prompt differently. Earliest
+  # finish (plan p.10) and the other study policies return in Phase 5.
+  placement: fixed
+  # CITED: plan "Model agents" default lanes (p.5) and "Policies to compare",
+  # fixed placement (p.11): water diagnostician NPU, heat CPU, verifier CPU;
+  # text reader and query agent CPU. `diagnostician` (the unsplit Phase 2
+  # diagnostician) -> npu is a HUMAN DECISION (Phase 2 plan review); the
+  # plan's table names only the two halves.
+  fixed_placement:
+    diagnostician: npu
+    diag_water: npu
+    diag_heat: cpu
+    verifier: cpu
+    text_reader: cpu
+    query: cpu
   adapt_rates: false                # rate update from measured timings: not built (Phase 1)
   # Single-writer audit: fingerprint every blackboard section around each agent
   # step and raise if a non-owner changed one. Costs hard-path time (measured
