@@ -494,3 +494,18 @@ def test_call_log_refuses_to_overwrite(tmp_path):
     with pytest.raises(FileExistsError):
         C.CallLog(f)
     assert f.read_text() == "earlier record\n"
+
+
+def test_status_attempt_number_comes_from_the_manifest(tmp_path):
+    jid = "B/round1/llama32-3b/dev_A01_fcv_seize"
+    c, b = mk(tmp_path, {"fail_from": 1})
+    with pytest.raises(C.InfraFailure):
+        one_episode(c)                                     # attempts 1-4 in this process
+    seen = []
+    c2, b2 = mk(tmp_path, {})                               # a relaunch: a new process
+
+    def spy(model="", note=""):
+        seen.append(note)
+    c2.write_status = spy
+    one_episode(c2)
+    assert f"running {jid} (attempt 5)" in seen            # not "attempt 1"
