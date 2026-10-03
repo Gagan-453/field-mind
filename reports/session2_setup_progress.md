@@ -10,10 +10,10 @@ with `-c 4096 -np 1`, the same for every model and both lanes.
 |---|---|---|---|
 | 0. record quantization decision | DONE | `ecc4d72` | `reports/phase0b_board_setup.md` |
 | 1. small fixes | DONE | `cce26a4`, `b060c6f` | PROMPTS.md, README_SETUP.md, requirements.txt, .gitignore; `bench/board.py`, `bench/probe_device.py`, `tests/test_board_env.py` (101 tests pass) |
-| 2. llama.cpp builds | DONE | (this commit) | see below |
-| 3. build 4 GGUFs | IN PROGRESS | | source weights downloading to `~/fieldmind-build/src/` |
-| 4. push package + GGUFs to `/data/local/tmp/llm/` | not started | | |
-| 5. smoke test (3B, NPU lane, `-c 4096 -np 1`) | not started | | |
+| 2. llama.cpp builds | DONE | `ea1651e` | see below |
+| 3. build 4 GGUFs | IN PROGRESS | script `0c19242`+ | source weights downloading to `~/fieldmind-build/src/` via `~/fieldmind-build/fetch_weights.py` (retries until each file's sha256 matches the Hub; log `logs/fetch_weights.log`; lines `OK`/`DONE <repo>`/`ALL DONE`). Then per model: `bench/build_candidate_gguf.sh <name> <src dir>`; Gemma adds `--override-kv tokenizer.ggml.eos_token_id=int:1` |
+| 4. push package + GGUFs to `/data/local/tmp/llm/` | PARTIAL | | package pushed to `/data/local/tmp/llm/llama.cpp` (134 files, 288,458,199 B); board sha256 == laptop sha256 for all 134 (`logs/package_sha256_{laptop,board}.txt`). GGUFs not pushed yet |
+| 5. smoke test (3B, NPU lane, `-c 4096 -np 1`) | tooling ready | `0c19242`, `929ba99` | `bench.board start npu <file>` / `log npu` / `stop`; prompt saved at `logs/smoke_diagnostician_prompt.txt` (ep_A01 tick 64, 8,988 chars). Launch mechanics dry-run on the impure on-board file worked (ready in 4 s; `logs/dryrun_lane_npu_impure_lv4.log`); no timings taken from it |
 | 6. CLAUDE.md + /board-up | not started | | |
 
 ## Step 2 details
@@ -42,3 +42,9 @@ with `-c 4096 -np 1`, the same for every model and both lanes.
 | Qwen3 1.7B | `Qwen/Qwen3-1.7B` @ `70d244cc86cc` | official, open |
 | Gemma 3 1B QAT | `unsloth/gemma-3-1b-it-qat` @ `82120d4d65` | Google repos gated, not approved. `model.safetensors` and `tokenizer.model` have the same sha256 as `google/gemma-3-1b-it-qat-q4_0-unquantized`. Google's own QAT GGUF does not match the recipe (token_embd is F16) |
 | Qwen2.5 0.5B Instruct | `Qwen/Qwen2.5-0.5B-Instruct` @ `7ae557604adf` | official, open |
+
+## Notes for a resuming session
+- Network: the laptop is on a phone hotspot; at 16:30 it had 50% packet loss and < 1 MB/s. `snapshot_download` returns
+  quietly when the Hub is unreachable (a false "done"); use `fetch_weights.py`, which verifies sha256.
+- Resume the fetch with: `cd ~/fieldmind-build && env -u PYTHONPATH venv-convert/bin/python fetch_weights.py`.
+- Lane launch needs `-lv 4`: at the default log level this build prints no offload / buffer / tensor-type lines.
