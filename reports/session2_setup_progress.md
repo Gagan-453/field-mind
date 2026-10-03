@@ -66,3 +66,15 @@ Total to push: 4,545,588,640 B (4.23 GiB). Board free at 16:20 was 9,307,704 KiB
 step 4 push the 4 GGUFs to `/data/local/tmp/llm/` and compare `sha256sum` on the board with the values above; step 5
 smoke test with `Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`; step 6 commit the drafted `CLAUDE.md` and
 `.claude/skills/board-up/SKILL.md` (uncommitted in the working tree).
+
+## Stop after step A (Gemma tokenizer check), 2026-10-03
+- Human decisions (mirrors accepted, Gemma EOS 1, `-fit off`, `-lv 4` 5% rule, option C, unattended campaign) are in
+  `reports/phase0b_board_setup.md`, commits `5018410` and this one.
+- Step A result: our Gemma GGUF == Hugging Face tokenizer on 2,084 / 2,084 distinct dev prompts, but == Google's GGUF
+  vocabulary on 0 / 2,084 (one extra token each; fixed by adding `add_space_prefix = false` to Google's metadata).
+  Rule says stop on any mismatch: **STOPPED before the push, waiting for the human.**
+- NOT done: push of the 4 GGUFs, smoke test (B, C, D), docs commit (CLAUDE.md and `/board-up` drafts still
+  uncommitted), manifest/sha256 check in `bench.board.start_lane`, and the whole campaign runner (items 1-9).
+- Evidence: `~/fieldmind-build/tokcheck/` (prompts, three ID sets, the two vocab-only GGUFs).
+  Dev prompts: scratchpad only; regenerate with
+  `run_demo.py --all --episodes-dir data/episodes_dev --tag dev --backend mock --log-prompts --out <dir>`.

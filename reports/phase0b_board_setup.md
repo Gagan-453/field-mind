@@ -49,6 +49,46 @@ single-agent prompt is ~2484 tokens and context size changes NPU speed. Code: `b
 3. **`-fit off` accepted on both lanes**, so the server cannot change the context size or the offload on its own.
    **`-lv 4` is NOT yet accepted**: it waits for the measured cost (smoke test, step C).
 
+## Human decisions for the campaign (2026-10-03, committed before any further board run)
+- **`-lv 4` rule, fixed in advance.** If `-lv 4` lowers prefill or decode tok/s by more than 5% (calls 2-3 of each
+  launch), it is used only for a one-off offload-confirmation launch per model and all timed calls run at the default
+  log level. Otherwise `-lv 4` stays everywhere. Which case applied is recorded with the numbers.
+- **Option C.** All 4 candidates are screened; full dev runs only for Llama 3.2 3B and the one other model that passes
+  the GGUF and offload checks with the lowest measured verified-diagnosis time. Reason: limited board time.
+- **The campaign runs unattended.** Every decision point is applied by code from rules committed in advance; the model
+  is chosen by `bench/model_choice.py` unchanged, not by the human. Flags are recorded and do not stop the run.
+  Reason: the rules are mechanical and already committed.
+- **Go-ahead condition after the smoke test** (no waiting for the human only if ALL hold): every layer and the final
+  logits step run on HTP0 with a nonzero HTP0 buffer; the Gemma tokenizer check gave identical IDs on every dev
+  prompt; the Gemma call stopped by itself. Otherwise stop and report.
+
+## Step A: Gemma tokenizer check (laptop only) — MISMATCH against Google's GGUF, stopped before the push
+Prompts: no dev prompts were recorded on this machine, so they were recorded now: mock dev run at HEAD with
+`--log-prompts` (36 dev episodes; 2,174 prompts = 1,982 diagnostician + 192 verifier; 2,084 distinct). Verifier
+prompts embed the mock's diagnostician answer, so they are real prompt shapes, not the prompts a real model would
+produce. Each prompt was wrapped as one user message in the chat template (jinja2). Our template and Google's
+render **identical text on all 2,084**. Tokenized with the pinned `llama-tokenize` (`--no-bos --no-escape`, special
+tokens parsed). Evidence: `~/fieldmind-build/tokcheck/`.
+
+| comparison (token IDs, 2,084 distinct dev prompts) | identical |
+|---|---|
+| our Gemma GGUF vs Google's own QAT GGUF vocabulary, as published (the reference compared against earlier) | **0 / 2,084** |
+| our Gemma GGUF vs the Hugging Face tokenizer (`transformers`, a different implementation; `tokenizer.model` sha256-identical to Google's) | 2,084 / 2,084 |
+| our Gemma GGUF vs Google's GGUF vocabulary with ONE key added, `tokenizer.ggml.add_space_prefix = false` | 2,084 / 2,084 |
+
+- The mismatch is exactly one extra token per prompt on Google's side, and the first differing token is `▁user`
+  (2430) where ours and Hugging Face give `user` (2364).
+- **Cause, tested:** Google's GGUF has no `tokenizer.ggml.add_space_prefix` key; the pinned llama.cpp then inserts a
+  space after a special token. Adding that single key (value false, as the pinned converter writes) makes all 2,084
+  identical. So the difference is in how this llama.cpp reads Google's older file, not in our vocabulary.
+- **The 30 differing token spellings** are ids 138-167: runs of 2 to 31 `U+2581` in Google's GGUF, runs of 2 to 31
+  plain spaces in ours (id 138 = 2, id 139 = 3, ..., id 167 = 31); token type 1 (normal) in Google's, 4
+  (user-defined) in ours. Four of them occur in the dev prompts (ids 138, 139, 151, 155; 18,380 occurrences in total)
+  and are produced identically by all three tokenizers.
+- **Not decided here.** The rule was "identical IDs on every dev prompt against the reference compared against; any
+  mismatch = stop". That reference fails on every prompt, so the push and the smoke test have not been run. The
+  question for the human: is the Hugging Face tokenizer (2,084 / 2,084) the accepted reference?
+
 ## What was built
 - **llama.cpp pin:** `ggml-org/llama.cpp` tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`.
 - **Android package:** container `ghcr.io/snapdragon-toolchain/arm64-android:v0.7` (digest `sha256:c012b817...`,
