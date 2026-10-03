@@ -18,7 +18,10 @@ three ways:
      an agent handed the wrong object would otherwise write silently.
 
 read(section) returns read-only containers (tuple / frozenset /
-MappingProxyType) so an accidental write through a read handle fails at once.
+MappingProxyType), so an accidental write to the TOP level of a section through
+a read handle fails at once. This is SHALLOW: the objects inside (a Hypothesis,
+a case dict) are the live ones, and only the audit catches a change to them.
+With audit_writes off, enforcement is the API check alone.
 
 The sections map onto the single agent's WorldModel fields where one exists,
 so the same object can be inspected either way. Events (the timeline) are
@@ -61,6 +64,8 @@ OWNERS: dict[str, str] = {
     "status": "gate",           # degraded_mode, tick, state
     "events": "gate",           # WorldModel.timeline
     "assessment": "gate",       # the published Assessment
+    "equipment": "gate",        # WorldModel.equipment (not written in Phase 1)
+    "notes_seen": "gate",       # WorldModel.notes_seen (not written in Phase 1)
 }
 
 # Every agent that takes a step. The model agents own no section: their answers
@@ -172,7 +177,8 @@ class Blackboard:
 
     _WM_FIELDS = {"trust": "trusted_tags", "residuals": "residuals",
                   "findings": "open_findings", "baselines": "baselines",
-                  "belief": "hypotheses", "events": "timeline"}
+                  "belief": "hypotheses", "events": "timeline",
+                  "equipment": "equipment", "notes_seen": "notes_seen"}
 
     def __init__(self, wm, audit: bool = True):
         self.wm = wm
@@ -200,7 +206,8 @@ class Blackboard:
             return getattr(self.wm, self._WM_FIELDS[section])
         if section == "status":
             return {"degraded_mode": self.wm.degraded_mode,
-                    "tick": self.wm.tick, "state": self.wm.state}
+                    "tick": self.wm.tick, "state": self.wm.state,
+                    "episode_id": self.wm.episode_id}
         return self._s[section]
 
     def _check(self, section: str, writer: str) -> None:

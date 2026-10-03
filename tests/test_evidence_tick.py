@@ -78,9 +78,37 @@ def test_citation_checked_against_evidence_tick_not_current_tick():
     asmt = Assessment(tick=85, timestamp="", state="DEVIATION", headline="h")
     with bb.step("gate"):
         claims = g.fold_diagnosis(bb, asmt, _claims(), _result(84, ["F3"]), now_tick=85)
-    # F3 existed at the evidence tick (84): faithful, merged, nothing flagged
-    assert claims["hypotheses"][0]["supports"] == ["F3"]
+    # F3 existed at the evidence tick (84): faithful, merged, nothing flagged,
+    # and published STAMPED, because tick 85 has its own F-numbering
+    assert claims["hypotheses"][0]["supports"] == ["t84.F3"]
     assert not any("non-existent" in u for u in claims["unexplained"])
+
+
+def test_late_answer_cannot_explain_a_current_tick_fact_with_the_same_local_id():
+    # tick 85 has an ALARM F1; a tick-84 answer citing ITS F1 must not count
+    # as explaining it, so the ALARM stays in `unexplained`.
+    bb = Blackboard(new_world_model("t", []), audit=True)
+    alarm = Fact(id="F1", check="LIMIT", tags=["drum_level"], window=(85, 85),
+                 value=15.0, detail="drum level low alarm at t85", severity="ALARM")
+    with bb.step("sensor"):
+        book = bb.mutable("facts", "sensor")
+        book.add(84, [_fact(1, 84)])
+        book.add(85, [alarm])
+    g = _gate()
+    asmt = Assessment(tick=85, timestamp="", state="ALARM", headline="h")
+    with bb.step("gate"):
+        claims = g.fold_diagnosis(bb, asmt, _claims(), _result(84, ["F1"]), now_tick=85)
+    _, _, unexplained = g.gate.approve(claims["hypotheses"], [alarm], {}, "ALARM")
+    assert "drum level low alarm at t85" in unexplained
+
+
+def test_same_tick_answer_keeps_local_ids():
+    # lockstep: evidence tick == current tick, ids unchanged (prompt identity)
+    bb, g = _board(), _gate()
+    asmt = Assessment(tick=84, timestamp="", state="DEVIATION", headline="h")
+    with bb.step("gate"):
+        claims = g.fold_diagnosis(bb, asmt, _claims(), _result(84, ["F3"]), now_tick=84)
+    assert claims["hypotheses"][0]["supports"] == ["F3"]
 
 
 def test_citation_absent_at_evidence_tick_is_rejected():

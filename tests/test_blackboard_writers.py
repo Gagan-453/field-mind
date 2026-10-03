@@ -105,3 +105,43 @@ def test_factsbook_keeps_two_ticks():
     assert b.ticks() == [2, 3]
     with pytest.raises(KeyError):
         b.facts_of(1)
+
+
+def test_read_handles_are_shallow_and_the_audit_covers_the_inside():
+    # Documented limit: read() freezes the top level only. A non-owner changing
+    # an object INSIDE a section goes unnoticed without the audit and raises
+    # with it.
+    for audit in (False, True):
+        bb = _bb(audit=audit)
+        with bb.step("retriever"):
+            bb.mutable("belief", "retriever").append(Hypothesis(cause="x"))
+        h = bb.read("belief")[0]
+        if audit:
+            with pytest.raises(WriterError, match="belief"):
+                with bb.step("verifier"):
+                    h.confidence = 0.99
+        else:
+            with bb.step("verifier"):
+                h.confidence = 0.99
+            assert bb.wm.hypotheses[0].confidence == 0.99
+
+
+def test_every_world_model_field_is_in_a_section():
+    from dataclasses import fields
+
+    from fieldmind.schemas import WorldModel
+    bb = _bb()
+    covered = set(bb._WM_FIELDS.values()) | {"degraded_mode", "tick", "state",
+                                             "episode_id"}
+    assert {f.name for f in fields(WorldModel)} == covered
+
+
+def test_audit_catches_a_change_to_equipment_or_episode_id():
+    from fieldmind.schemas import EquipmentState
+    bb = _bb()
+    with pytest.raises(WriterError, match="equipment"):
+        with bb.step("sensor"):
+            bb.wm.equipment["FCV"] = EquipmentState(name="FCV")
+    with pytest.raises(WriterError, match="status"):
+        with bb.step("triage"):
+            bb.wm.episode_id = "other"

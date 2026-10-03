@@ -116,3 +116,17 @@ def test_repair_call_stays_on_the_lane_of_the_first_call():
     s.submit(j)
     s.run_lockstep(0.0)
     assert j.lane == "A" and s.lanes[0].n_jobs == 1 and s.lanes[1].n_jobs == 0
+
+
+def test_lane_is_released_when_a_job_raises():
+    s, f = _setup(_ab())
+    def boom():
+        f.generate("x" * 400, max_tokens=10)
+        raise RuntimeError("agent crashed mid-job")
+    s.submit(s.new_job("a", 1, 2, 10, 0.0, work=boom))
+    with pytest.raises(RuntimeError):
+        s.run_lockstep(0.0)
+    assert all(l.running is None for l in s.lanes)
+    j = _job(s, f, prompt_tokens=4000, max_answer=10, agent="b")
+    s.run_lockstep(0.0)                                 # no LaneBusy
+    assert j.finish_s is not None

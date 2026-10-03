@@ -133,8 +133,8 @@ class Scheduler:
                 env = job.work()
             finally:
                 self.current = None
-            if job.lane is not None:            # the job made a model call
-                self._lane(job.lane).end(job)
+                if job.lane is not None:        # the job made a model call;
+                    self._lane(job.lane).end(job)   # free the lane even if it raised
             self.dispatched.append(job)
             wait_ms = ((job.start_s - job.submit_s) * 1000
                        if job.start_s is not None else 0.0)

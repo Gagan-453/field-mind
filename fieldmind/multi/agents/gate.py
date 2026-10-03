@@ -21,6 +21,8 @@ scored is still the final one, so decisions match the single agent.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import time
 from types import SimpleNamespace
 
@@ -107,6 +109,12 @@ class GateMemoryAgent:
         if self._drop_if_stale(result, now_tick):
             return claims
         evidence_facts = bb.read("facts").facts_of(result.evidence_tick)
+        if result.evidence_tick != now_tick:
+            # Fact ids are tick-local in the prompt. An answer from an earlier
+            # tick is checked, merged and published with STAMPED ids
+            # (t84.F3), so L6 can never take it for the current tick's F3.
+            env, evidence_facts = self._stamped(env, evidence_facts,
+                                                result.evidence_tick)
         claims, degraded = fold_diagnosis(claims, env, evidence_facts,
                                           self.gate, self.cfg)
         bb.write("diagnosis", claims, NAME)
@@ -114,6 +122,16 @@ class GateMemoryAgent:
             bb.write("status", {"degraded_mode": degraded}, NAME)
             asmt.degraded_mode = degraded
         return claims
+
+    @staticmethod
+    def _stamped(env, facts, tick: int):
+        stamp = lambda i: f"t{tick}.{i}"
+        payload = copy.deepcopy(env.payload)
+        for h in payload.get("hypotheses", []) or []:
+            h["supports"] = [stamp(s) for s in h.get("supports", [])]
+        env = dataclasses.replace(env, payload=payload,
+                                  cited_facts=[stamp(c) for c in env.cited_facts])
+        return env, [dataclasses.replace(f, id=stamp(f.id)) for f in facts]
 
     def apply_verdict(self, bb, asmt: Assessment, claims: dict, result,
                       now_tick: int) -> dict:
