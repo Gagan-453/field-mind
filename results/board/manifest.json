@@ -29,6 +29,48 @@
    "started": "2026-10-03T23:45:28+0530",
    "summary": "A/qwen25-0.5b/screen.summary.json",
    "finished": "2026-10-03T23:47:13+0530"
+  },
+  "B/round1/llama32-3b/dev_A01_fcv_seize": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-03T23:47:13+0530",
+   "summary": "B/llama32-3b/round1.dev_A01_fcv_seize.summary.json",
+   "finished": "2026-10-04T00:02:59+0530"
+  },
+  "B/round1/qwen25-0.5b/dev_A01_fcv_seize": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T00:02:59+0530",
+   "summary": "B/qwen25-0.5b/round1.dev_A01_fcv_seize.summary.json",
+   "finished": "2026-10-04T00:17:00+0530"
+  },
+  "B/round2/llama32-3b/dev_B01_tube_leak": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T00:17:00+0530",
+   "summary": "B/llama32-3b/round2.dev_B01_tube_leak.summary.json",
+   "finished": "2026-10-04T01:18:48+0530"
+  },
+  "B/round2/qwen25-0.5b/dev_B01_tube_leak": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T01:18:48+0530",
+   "summary": "B/qwen25-0.5b/round2.dev_B01_tube_leak.summary.json",
+   "finished": "2026-10-04T01:54:38+0530"
+  },
+  "B/round3/llama32-3b/dev_C02_feeder_trip": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T01:54:38+0530",
+   "summary": "B/llama32-3b/round3.dev_C02_feeder_trip.summary.json",
+   "finished": "2026-10-04T02:24:56+0530"
+  },
+  "B/round3/qwen25-0.5b/dev_C02_feeder_trip": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T02:24:56+0530",
+   "summary": "B/qwen25-0.5b/round3.dev_C02_feeder_trip.summary.json",
+   "finished": "2026-10-04T02:41:54+0530"
   }
  },
  "stages": {
@@ -74,6 +116,29 @@
    "rule": "option C: Llama 3.2 3B plus the passing model (GGUF + offload checks) with the lowest measured verified-diagnosis time",
    "done": true,
    "finished": "2026-10-03T23:47:13+0530"
+  },
+  "B": {
+   "models": [
+    "llama32-3b",
+    "qwen25-0.5b"
+   ],
+   "dropped": {},
+   "round1": {
+    "llama32-3b": {
+     "broken_json_first_reply": 0.035,
+     "broken_json_after_repair": 0.035
+    },
+    "qwen25-0.5b": {
+     "broken_json_first_reply": 0.14,
+     "broken_json_after_repair": 0.088
+    }
+   },
+   "survivors": [
+    "llama32-3b",
+    "qwen25-0.5b"
+   ],
+   "done": true,
+   "finished": "2026-10-04T02:41:54+0530"
   }
  },
  "idle_temp": {
