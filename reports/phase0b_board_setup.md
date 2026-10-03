@@ -47,7 +47,7 @@ single-agent prompt is ~2484 tokens and context size changes NPU speed. Code: `b
    Limit: the identity covers those LFS files only. The mirrors' small JSON files differ from the official ones.
 2. **Gemma EOS id = 1 accepted**, to match Google's own GGUF.
 3. **`-fit off` accepted on both lanes**, so the server cannot change the context size or the offload on its own.
-   **`-lv 4` is NOT yet accepted**: it waits for the measured cost (smoke test, step C).
+   **`-lv 4`**: decided by the fixed 5% rule after the measurement (smoke test, step C): kept everywhere.
 
 ## Human decisions for the campaign (2026-10-03, committed before any further board run)
 - **`-lv 4` rule, fixed in advance.** If `-lv 4` lowers prefill or decode tok/s by more than 5% (calls 2-3 of each
@@ -122,6 +122,57 @@ Log: `logs/smoke_B_diag_sched_npu.log`.
   SWIGLU, FLASH_ATTN.
 - Limit: this is the scheduler's assignment, printed by the server. It is not a hardware trace of the DSP.
 
+### C. Cost of `-lv 4` (numbers for the human's fixed rule)
+Same diagnostician prompt (dev_A01-shaped, ep_A01 tick 64), `max_tokens` 256, through `LlamaServerBackend`; 3 calls
+per launch, 60 s cooldown before each launch and between calls. Raw: `logs/smoke_C.json`.
+
+| launch | call | prompt tok | answer tok | prefill tok/s | decode tok/s | chip before (CPU/NPU C) |
+|---|---|---|---|---|---|---|
+| `-lv 4` | 1 (first of launch) | 2,081 | 182 | 932.32 | 16.378 | 42.2 / 37.4 |
+| `-lv 4` | 2 | 2,081 | 182 | 900.28 | 16.257 | 35.9 / 35.1 |
+| `-lv 4` | 3 | 2,081 | 182 | 896.83 | 16.208 | 36.3 / 35.9 |
+| default | 1 (first of launch) | 2,081 | 182 | 921.12 | 16.199 | 44.9 / 39.7 |
+| default | 2 | 2,081 | 182 | 901.25 | 15.992 | 37.4 / 36.6 |
+| default | 3 | 2,081 | 182 | 897.45 | 16.033 | 36.4 / 37.0 |
+
+| calls 2-3, mean | `-lv 4` | default | `-lv 4` relative to default |
+|---|---|---|---|
+| prefill tok/s | 898.56 | 899.35 | -0.09% |
+| decode tok/s | 16.233 | 16.013 | +1.37% |
+
+- **Rule applied (fixed by the human before these numbers):** `-lv 4` lowers neither rate by more than 5%, so
+  **`-lv 4` stays everywhere** (`bench.board.TIMED_LOG_LEVEL = 4`).
+- Limits: two calls per condition, one prompt, one model. This shows no large cost; it is not a precise estimate.
+- The reply text was identical in all 6 calls (temperature 0, seed 0).
+- These are the first rates on the recipe file: about 900 tok/s prefill and 16.1 tok/s decode at a 2,081-token
+  prompt. They are NOT comparable with the earlier 839 / 11.7 tok/s (impure file, other build, conditions unknown).
+- The first call of a launch prefills 2.5-3.7% faster than calls 2-3 and starts on a warmer chip (42-45 C vs 36-37 C,
+  right after the model load). Cause not investigated.
+
+### D. Gemma stops by itself; Qwen3 thinking-off mechanism
+One short prompt each on the NPU lane (`logs/smoke_D.json`, startup logs `logs/smoke_D_lane_npu_*.log`).
+
+| model | request | stop reason | answer tok (cap) | `<end_of_turn>` in text | reasoning text | layers on HTP0 | HTP0 buffer |
+|---|---|---|---|---|---|---|---|
+| Gemma 3 1B QAT | plain | `stop` | 33 (256) | no | none | 27 / 27 incl. output | 680.82 MiB |
+| Qwen3 1.7B | `chat_template_kwargs: {enable_thinking: false}` | `stop` | 10 (400) | no | none | 29 / 29 incl. output | 1,071.77 MiB |
+| Qwen3 1.7B | default (thinking on) | `length` | 400 (400) | no | 1,877 chars, content empty | same launch | same |
+
+- **Gemma: the reply stopped by itself** (stop reason `stop`, not the token limit) and contains no `<end_of_turn>` text.
+- **Qwen3 thinking-off mechanism, recorded as the committed rule requires:** per-request
+  `chat_template_kwargs: {"enable_thinking": false}`. Evidence: with it, no reasoning and a 10-token answer; without
+  it, the whole 400-token budget went to reasoning and the content was empty. At this llama.cpp the server moves
+  thinking into `message.reasoning_content`, so a `<think>` test on the content alone would miss it: the screening
+  check fails Qwen3 on a `<think>` tag in the content OR any non-empty `reasoning_content`.
+- For both models the server's loader type counts equal `bench.gguf_types`.
+
+### Go-ahead conditions (human, fixed in advance): all hold
+| condition | result |
+|---|---|
+| every layer and the final logits step on HTP0, nonzero HTP0 buffer | yes: 29/29, `result_output` on HTP0, 1,911.90 MiB |
+| Gemma tokenizer check identical on every dev prompt | yes: 2,084 / 2,084 against the accepted reference |
+| the Gemma call stopped by itself | yes: stop reason `stop` at 33 of 256 tokens |
+
 ## What was built
 - **llama.cpp pin:** `ggml-org/llama.cpp` tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`.
 - **Android package:** container `ghcr.io/snapdragon-toolchain/arm64-android:v0.7` (digest `sha256:c012b817...`,
@@ -157,7 +208,7 @@ None: no physical response was modelled in this stage.
 |---|---|---|---|---|
 | `CTX_SIZE` | 4096 | human decision 2026-10-03 (equals `llm.llamaserver.ctx_size`, itself derived in the config) | fixed | NPU speed, KV buffer size; every lane launch |
 | `N_PARALLEL` | 1 | human decision 2026-10-03; CLAUDE.md "one request at a time" | fixed | one slot per lane |
-| log level | `-lv 4` | found on the board: the default level prints no loader lines | 4 or higher | whether the NPU-confirmation rule can be checked. Effect on speed NOT measured |
+| `TIMED_LOG_LEVEL` | `-lv 4` | found on the board: the default level prints no loader lines; kept for timed calls by the human's 5% rule (measured -0.09% prefill, +1.37% decode) | 4 or higher | whether the NPU-confirmation rule can be checked on every launch |
 | `-fit` | off | conservative: no argument may be adjusted silently (HTP0 reports 0 MiB free) | on/off | layer placement |
 
 ## Numbers that changed
@@ -209,7 +260,6 @@ None: no physical response was modelled in this stage.
   timings taken) showed `offloading output layer to GPU`, `offloaded 29/29 layers`, `HTP0 model buffer size = 1845.95
   MiB`, `CPU model buffer size = 308.23 MiB`. That is weight placement, not execution. The 308 MiB CPU buffer is
   probably the input embedding table; not checked.
-- Whether `-lv 4` changes prefill or decode speed.
 - Gemma: my Q4_0 tensors were not compared bit-for-bit with Google's QAT GGUF (needs the full 1 GB file).
 - The unsloth small files (config, tokenizer_config) against the official gated ones, beyond the comparisons above.
 - No timing, energy or accuracy number exists for any of the 4 candidates yet.

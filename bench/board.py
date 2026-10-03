@@ -78,6 +78,14 @@ N_PARALLEL = 1
 
 LANE_PORT = {"npu": 8080, "cpu": 8081}
 
+# Log level for timed calls. RULE (human, fixed before the measurement): if
+# -lv 4 lowers prefill or decode tok/s by more than 5% (calls 2-3 of each
+# launch), use it only for a one-off offload-confirmation launch per model;
+# otherwise keep -lv 4 everywhere. MEASURED 2026-10-03 on the pure 3B, NPU lane
+# (logs/smoke_C.json): prefill 898.6 vs 899.4 tok/s (-0.09%), decode 16.23 vs
+# 16.01 tok/s (+1.37%). Neither is lowered by more than 5%: -lv 4 EVERYWHERE.
+TIMED_LOG_LEVEL: int | None = 4
+
 # The only model files a lane may load: the Phase 0b candidates, built by
 # bench/build_candidate_gguf.sh (every matrix Q4_0, token embedding and output
 # Q8_0). start_lane() checks the file's sha256 ON THE BOARD against this table

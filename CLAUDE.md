@@ -445,11 +445,27 @@ bench/harness.py    gains --arch single|multi and --mode lockstep|realtime
 
 ### The board (QIDK, SM8650)
 
-- Two persistent `llama-server` processes on the board, started once per session (`/board-up`):
-  NPU lane on port 8080 (`--device HTP0 -ngl 99`), CPU lane on port 8081 (no offload). Both with `-np 1` so each
-  lane runs one request at a time, and the same `-c` context size. `adb forward` both ports to the laptop.
-- NPU use is confirmed only when the startup log shows a nonzero HTP0 buffer and all layers offloaded.
-- Set `LD_LIBRARY_PATH` and `ADSP_LIBRARY_PATH` on every `adb shell` that starts a binary.
+- Two persistent `llama-server` processes on the board, started once per session (`/board-up`, commands in
+  `bench/board.py`): NPU lane on port 8080 (`--device HTP0 -ngl 99`), CPU lane on port 8081 (`--device none -ngl 0`).
+  `adb forward` both ports to the laptop.
+- **HUMAN DECISION (2026-10-03): `llama-server` is always launched with `-c 4096 -np 1`, the same for every model and
+  both lanes.** The single-agent prompt is ~2484 tokens and context size changes NPU speed, so it is never set per model.
+- Paths on the board: package `/data/local/tmp/llm/llama.cpp` (`bin/llama-server`, `lib/`), GGUFs
+  `/data/local/tmp/llm/*.gguf`, lane logs `/data/local/tmp/llm/logs/`.
+- Set `LD_LIBRARY_PATH=/data/local/tmp/llm/llama.cpp/lib` and `ADSP_LIBRARY_PATH=/data/local/tmp/llm/llama.cpp/lib`
+  on every `adb shell` that starts a binary. That folder holds `libggml-hexagon.so` and `libggml-htp-v75.so`.
+- llama.cpp is pinned: tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`, built in
+  `ghcr.io/snapdragon-toolchain/arm64-android:v0.7` with the `arm64-android-snapdragon-release` preset. The same commit
+  builds the host `llama-quantize`. Do not mix builds; `llama-server --version` must print `commit 99b95488c`.
+- Model files follow the quantization recipe in `reports/phase0b_board_setup.md` (every matrix Q4_0, token embedding
+  and output Q8_0, built by `bench/build_candidate_gguf.sh`). Published "Q4_0" files are not pure; never use one.
+- NPU use is confirmed only when the startup log shows a nonzero HTP0 buffer and all layers offloaded, including the
+  output layer. The lanes log at `-lv 4` (measured cost under 5%, human rule); at the default level this build prints
+  none of those lines. `-fit off` is always passed, so the server cannot change the context or the offload itself.
+- Lanes load only files listed in `bench.board.CANDIDATES`, and only when the board's sha256 matches.
+- This laptop exports `PYTHONPATH` into the QAIRT SDK. Board scripts run with it unset (`bench.board` re-executes
+  itself without it). The board's clock is wrong (it reads 2023): log laptop time, never board time.
+- After every `adb push`, run `sha256sum` on the board and compare with the laptop value.
 - Until phase 4 the agent code runs on the laptop; only model calls run on the board. Hard-path timings measured on
   the laptop are not board timings, and reports must say so.
 - Log chip temperature before and after every benchmark run and leave cooling gaps between runs.
