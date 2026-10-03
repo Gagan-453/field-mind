@@ -98,13 +98,12 @@ set (harmless). Nothing is running on the laptop either. The campaign has NOT be
 | Setup steps 0-6 (decisions, small fixes, llama.cpp builds, 4 GGUFs, push, smoke test B/C/D, CLAUDE.md + /board-up) | DONE | up to `e7661c4` |
 | Gemma tokenizer check (step A) | DONE, passes 2,084 / 2,084 against the accepted reference | `11ac80b` |
 | Go-ahead conditions | all three hold (recorded in the report) | `e7661c4` |
-| Campaign runner items 1-9 (`bench/campaign.py`, `scripts/board_campaign.sh`, `tests/fake_board.py`, `tests/test_campaign.py`, `bench/harness.py` on_tick hook, `.gitignore` for `results/board/`) | BUILT and committed. 135 tests pass. 24 of 24 mutations caught (PYTHONDONTWRITEBYTECODE=1) | `a75bdc1` |
+| Campaign runner items 1-9 (`bench/campaign.py`, `scripts/board_campaign.sh`, `tests/fake_board.py`, `tests/test_campaign.py`, `bench/harness.py` on_tick hook, `.gitignore` for `results/board/`) | BUILT and committed. 135 tests pass. 23 of 23 distinct mutations caught (PYTHONDONTWRITEBYTECODE=1) | `a75bdc1` |
 | Mock baseline after the harness hook | reproduced: 0 differences outside latency vs `single_v3_summary.json` | (checked, nothing to commit) |
 | Real-board interface check of the runner (NOT the campaign: header check, lane start, `/tokenize`, one 700/60 and one 350/30 call on the 3B, stop) | DONE, works; prompt tokens exactly 700 and 350 | scratch only |
 
 **Half-done / still to do (in this order):**
-1. Write the campaign runner section into `reports/phase0b_board_setup.md` (what was built, verification table,
-   mutation list, decisions taken, limits). NOT written yet.
+1. Campaign runner section of `reports/phase0b_board_setup.md`: WRITTEN (this commit).
 2. Give the human the launch command (below). Then stop. Do not launch it.
 
 **Launch command (from the repo root, once):**

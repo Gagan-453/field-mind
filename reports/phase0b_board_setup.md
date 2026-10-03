@@ -1,9 +1,10 @@
 # Phase 0b / board setup (Fedora laptop + QIDK) — report
 
 ## Status
-PARTIAL — laptop side done: llama.cpp pinned and built (Android Hexagon package + host `llama-quantize`), package pushed
-and checksum-verified, all 4 candidate GGUFs built to the recipe and checked. Not done (board unplugged by the human):
-pushing the GGUFs, the smoke test, and committing the CLAUDE.md / `/board-up` updates. Step-by-step state:
+DONE for the setup and the campaign runner; the campaign itself has NOT been run (the human launches it). llama.cpp
+pinned and built, 4 candidate GGUFs built to the recipe, pushed and checksum-verified, smoke test passed (B, C, D),
+CLAUDE.md and `/board-up` updated, unattended campaign runner built and tested against a fake board. No timing,
+accuracy or energy result exists for any candidate beyond the smoke-test calls below. Step-by-step state:
 `reports/session2_setup_progress.md`.
 
 ## Human decision: quantization recipe (recorded before any board run)
@@ -173,6 +174,62 @@ One short prompt each on the NPU lane (`logs/smoke_D.json`, startup logs `logs/s
 | Gemma tokenizer check identical on every dev prompt | yes: 2,084 / 2,084 against the accepted reference |
 | the Gemma call stopped by itself | yes: stop reason `stop` at 33 of 256 tokens |
 
+## Campaign runner (built, tested on a fake board, not launched)
+Code: `bench/campaign.py`, `scripts/board_campaign.sh`; tests `tests/test_campaign.py` with `tests/fake_board.py`
+(a local HTTP server that speaks `/health`, `/tokenize` and `/v1/chat/completions`, with fault injection).
+`fieldmind/` is untouched; `bench/harness.run_episode` gained an optional `on_tick` callback (telemetry only; the
+mock reporting run still equals `single_v3_summary.json` on every key outside latency: 1,659 paths, 0 differences).
+
+Launch, once, from the repo root: `tmux new -s campaign 'scripts/board_campaign.sh all'`.
+Status: `results/board/STATUS.md`. Exit codes: 0 finished, 2 infrastructure stop, 3 stopped by a committed rule.
+
+| requirement | how it is met | test |
+|---|---|---|
+| ordered job list, manifest, resume | `results/board/manifest.json`; a job is complete only if its summary file exists (written last, atomically) | `test_complete_episode_is_skipped_incomplete_is_redone` |
+| per-call JSONL, flushed at once | `CallLog`: flush + fsync per record; fields: laptop time, stage/phase, model, sha256, server flags, episode, tick, lane, prompt sha + full prompt, raw reply, parse status, stop reason, server timings (None if missing), chip temperature | `test_call_is_logged_at_once_with_every_field`, `test_missing_server_timings_are_none` |
+| per-episode record | git commit, code hash, llama.cpp commit (read from the board), full config, start/end temperature, thermal wait, network state, energy `null` | full dry run |
+| reply cache | key = sha256(model sha, server flags, sampling params incl. `max_tokens` and extra body, prompt sha); hits are marked and carry no timing | `test_cache_*` (3 tests) |
+| infrastructure failures | `CampaignBackend` raises `InfraFailure` (connection, HTTP error, timeout, malformed body, failed temperature read); the episode is INCOMPLETE, the lane is health-checked and restarted, 3 retries, then a clean stop with the position in `STATUS.md` and the manifest | `test_infra_failure_is_retried_and_never_scored` (4 fault types), `test_adb_drop_is_infrastructure`, `test_stops_cleanly_after_three_retries_and_resumes`, `test_run_all_returns_infra_exit_code` |
+| thermal gate | within 5 C of the idle temperature measured at campaign start, 15 s polls, 15 min cap, wait logged | 2 tests |
+| `results/board/` tracked, commit per stage, never push | `.gitignore` un-ignores it (scratch `tmp/` and `cache/` stay ignored); `git commit -- results/board` after each stage | not tested (tests run with `--no-commit`) |
+| one script, stages A-E | `scripts/board_campaign.sh all` under `systemd-inhibit` | full dry run |
+| status file | `STATUS.md` rewritten after every episode | full dry run, stop tests |
+| stage rules | A: option C; B: interleaved rounds and the 0.30 / 0.10 drop; C: `bench.model_choice` run unchanged as a subprocess; D: round-robin N, A, B, C, D, E; E: only if the 3-episode verdict is INCONCLUSIVE, reusing the 3 episodes | 9 tests |
+| kill and resume | `SIGKILL` delivered mid-episode to the real CLI process, then relaunch | `test_kill_minus_9_mid_episode_then_resume_is_identical` |
+
+### Verification (runner)
+| step | result |
+|---|---|
+| ran the module | full fake campaign A-E through the real CLI: exit 0, 50 jobs, 4,955 model calls, 26 s. Real-board interface exercised once outside the campaign: `bench.gguf_types` over adb OK, lane start, offload parsed (29/29, 1,911.9 MiB), `/tokenize`, one 700/60 and one 350/30 call (server prompt tokens exactly 700 and 350; 60 and 30 answer tokens) |
+| self-tests | 135 passed / 0 failed (29 new in `tests/test_campaign.py`; the suite now takes about 80 s) |
+| independent re-derivation | kill-and-resume: the resumed campaign's summaries, run records, model-choice output and stage decisions equal an uninterrupted run's on every non-timing field (99 files compared). The measured screening time is recomputed in the test from the raw call records and equals the runner's value; the fake projection equals the hand value 1050/900 + 90/16 = 6.79 s |
+| mutation check | 23 distinct mutations, `PYTHONDONTWRITEBYTECODE=1`, all caught: cache-hit timings kept; log not flushed; cache key without server flags; without sampling; hit not marked; no retry; retries 3 -> 1; HTTP 500 returned as a model reply; complete without a summary; thermal margin 5 -> 10; max wait 900 -> 300; second model slowest; screening 700 -> 800; reasoning text unchecked; offload ignoring layer count / output layer / zero buffer; drop limit 0.30 -> 0.60; family order; adb drop ignored; cache not reloaded after a kill; stage E condition inverted; no-pick not stopping. Two were first NOT caught for the right reason (offload layer count: no test; drop limit: the test was failing anyway); tests were added/fixed and both re-run |
+
+### Decisions taken in the runner (conservative choice each time; all reversible before launch)
+1. **Cache hit = replay, timings nulled.** A hit returns the stored reply; afterwards its call timings and the
+   envelope latency are set to `None` in the run record, so `bench.model_choice` (unchanged) leaves it out of rates,
+   the projection and call-time means. Token counts stay. Per-tick wall time (S1, S7) of a tick answered from the
+   cache is the real, short wall time; such ticks are marked `cache_hit`.
+2. **Screening calls never use the cache** and start with one warm-up call that is logged and excluded (the first
+   call of a launch was 2.5-3.7% faster in prefill in step C).
+3. **Screening prompts** are the first real diagnostician prompt (dev_A01 tick 37) and verifier prompt (dev_B01 tick
+   51) from the mock runs, cut with the server's own tokenizer to exactly 700 / 350 prompt tokens with the output
+   schema kept at the end. Answers are capped at 60 / 30; a shorter answer is counted (`short_answers`), not padded.
+4. **"Measured verified-diagnosis time"** = mean server time (prefill + decode) of the five 700/60 calls + mean of
+   the five 350/30 calls. The projection beside it is `model_choice.projected_s` at the same calls' pooled rates.
+5. **Screening pass** = GGUF check + offload check (+ no thinking for Qwen3). The 10 s projected limit is NOT a
+   screening gate; it is applied by `model_choice` in stage C, as committed.
+6. **Qwen3 thinking off** = per-request `chat_template_kwargs: {"enable_thinking": false}`; it fails screening on a
+   `<think>` tag in the content OR any non-empty `reasoning_content`.
+7. **Idle temperature** is measured once, at campaign start, with no lane running (stable to 0.5 C), and kept in the
+   manifest across restarts. If the board is warm at launch, the gate is correspondingly looser.
+8. **Stage E reuse** of the 3 model-choice episodes requires an unchanged hash of `fieldmind/`, `bench/`, `configs/`
+   and `data/kb/` (result commits do not move it); otherwise all 13 are run.
+9. **The mock column** for stage C's floor is the mock run of the same 3 dev episodes, computed at stage C.
+10. **Baseline name:** `results/baselines/single_v3_real_<model>_npu_summary.json`.
+11. **Timeout:** the config's 120 s per call. A timeout is infrastructure (human rule), so a model that needs more
+    than 120 s for one call would stop the campaign, not be scored.
+
 ## What was built
 - **llama.cpp pin:** `ggml-org/llama.cpp` tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`.
 - **Android package:** container `ghcr.io/snapdragon-toolchain/arm64-android:v0.7` (digest `sha256:c012b817...`,
@@ -215,7 +272,7 @@ None: no physical response was modelled in this stage.
 | quantity | old | new | note |
 |---|---|---|---|
 | Llama 3.2 3B file | 1,921,909,280 B (bartowski: 193 Q4_0, 3 Q4_1, token_embd Q6_K) | 2,012,612,832 B (196 Q4_0, token_embd Q8_0) | ratio 1.047. The earlier 839 / 11.7 tok/s belong to the old file |
-| tests | 98 | 103 | |
+| tests | 98 | 135 | 29 for the campaign runner, 8 for the board helpers |
 
 ## Decisions taken
 1. **Toolchain image pulled.** The message said the snapdragon-toolchain container was already in `podman images`; it
@@ -253,7 +310,8 @@ None: no physical response was modelled in this stage.
   (single user message, `LlamaServerBackend._body`); it would matter if a system message were ever sent.
 
 ## Blocked / needs a decision
-- Board steps (push GGUFs, smoke test) wait for the human to reconnect the board and say continue.
+- Launching the campaign is the human's action: `tmux new -s campaign 'scripts/board_campaign.sh all'`.
+- Whether the Q4_0/Q8_0 rule's stated reason should be reworded, given the Hexagon source finding (see Disagreements).
 
 ## What I could not verify
 - That every operation runs on the NPU. The dry run (impure on-board file, launch mechanics only, no request sent, no
@@ -262,4 +320,15 @@ None: no physical response was modelled in this stage.
   probably the input embedding table; not checked.
 - Gemma: my Q4_0 tensors were not compared bit-for-bit with Google's QAT GGUF (needs the full 1 GB file).
 - The unsloth small files (config, tokenizer_config) against the official gated ones, beyond the comparisons above.
-- No timing, energy or accuracy number exists for any of the 4 candidates yet.
+- No accuracy or energy number exists for any candidate. Timing exists only for the smoke-test calls above.
+- The campaign runner has never run a real episode on the board; only its board interface was exercised (one lane
+  start and three calls). The per-stage `git commit` path is untested (tests run with `--no-commit`).
+- A resumed real campaign can differ from an uninterrupted one in timing-based fields (rates, call-time means, the
+  third tie-break of the model-choice rule), because redone calls answered from the cache have no timing.
+- NPU replies were identical across 6 repeats of one prompt; determinism across lane restarts over a whole episode
+  is assumed by the cache, not measured.
+- Campaign duration is a planning estimate, not a measurement: mock call counts x 13.6 s per 3B call give about
+  1.1 h (stage B, 3B only) + 8.8 h (stage D) + 4.5 h (stage E) = 14.4 h if the 3B is chosen, plus the second model's
+  dev runs, thermal waits and repair calls.
+- The server's own `predicted_per_second` differs from tokens / `predicted_ms` on the same call (19.15 vs 19.81 tok/s
+  on one 30-token call). Unexplained; every rate in this project uses tokens / server ms, as `model_choice` does.
