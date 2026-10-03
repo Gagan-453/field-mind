@@ -1,0 +1,44 @@
+# Session 2 setup — progress (for resuming)
+
+Updated after every step. Full report: `reports/phase0b_board_setup.md`. Build tree (outside the repo, new):
+`~/fieldmind-build/` (llama.cpp checkout, convert venv, source weights, GGUFs). Logs: `logs/` (gitignored).
+
+Standing human decisions: quantization recipe (`reports/phase0b_board_setup.md`); llama-server is always launched
+with `-c 4096 -np 1`, the same for every model and both lanes.
+
+| step | state | commit | paths / hashes |
+|---|---|---|---|
+| 0. record quantization decision | DONE | `ecc4d72` | `reports/phase0b_board_setup.md` |
+| 1. small fixes | DONE | `cce26a4`, `b060c6f` | PROMPTS.md, README_SETUP.md, requirements.txt, .gitignore; `bench/board.py`, `bench/probe_device.py`, `tests/test_board_env.py` (101 tests pass) |
+| 2. llama.cpp builds | DONE | (this commit) | see below |
+| 3. build 4 GGUFs | IN PROGRESS | | source weights downloading to `~/fieldmind-build/src/` |
+| 4. push package + GGUFs to `/data/local/tmp/llm/` | not started | | |
+| 5. smoke test (3B, NPU lane, `-c 4096 -np 1`) | not started | | |
+| 6. CLAUDE.md + /board-up | not started | | |
+
+## Step 2 details
+- llama.cpp: `https://github.com/ggml-org/llama.cpp`, tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`,
+  at `~/fieldmind-build/llama.cpp` (untracked additions only: `CMakeUserPresets.json`, copied from
+  `docs/backend/snapdragon/`, and the build/package folders).
+- Toolchain container: `ghcr.io/snapdragon-toolchain/arm64-android:v0.7`, digest
+  `sha256:c012b8174f4154088ee027077e9cb80e68cc9a494d46f63454a050fa4789897b` (NDK r29, Hexagon SDK 6.6.0.0).
+  It was NOT already on this machine (podman had only `ubuntu:22.04`); pulled with podman.
+- Android build: preset `arm64-android-snapdragon-release`, plus `-DLLAMA_BUILD_SERVER=ON -DLLAMA_OPENSSL=OFF`
+  (the preset already sets OpenSSL off; `LLAMA_CURL` is deprecated at this commit). Package:
+  `~/fieldmind-build/llama.cpp/pkg-android/llama.cpp` (276 MB). Log: `logs/llamacpp_android_build.log`.
+  - `bin/llama-server` sha256 `853e7ccf3f7e008dca41f28d52440aaf95e292b241dbca4b8ebde52bd0e55cad`
+  - `lib/libggml-hexagon.so` sha256 `ac17be24f4dc16469d265108103fdc84f2c1b8a25562d964b33d21f96342cf76`
+  - `lib/libggml-htp-v75.so` sha256 `1fd898cc0709498defeed3439a52500ff8340efd7725b3f88902e0adb2d0aa37`
+- Host CPU build: `~/fieldmind-build/llama.cpp/build-host/bin/llama-quantize`
+  (sha256 `376baf5ced3d3412ff820fcaa3ae9e043390421d39d4ec8d13c55975cbc32da2`), `-DGGML_NATIVE=ON`, gcc 15.2.1.
+  Log: `logs/llamacpp_host_build.log`.
+- Convert venv: `~/fieldmind-build/venv-convert` (python 3.13, torch 2.11.0+cpu, transformers 4.57.6), from
+  `requirements/requirements-convert_hf_to_gguf.txt`. Always run with `env -u PYTHONPATH`. Log: `logs/convert_venv.log`.
+
+## Step 3 sources (decided; see the full report for the evidence)
+| model | source repo @ revision | why |
+|---|---|---|
+| Llama 3.2 3B Instruct | `unsloth/Llama-3.2-3B-Instruct` @ `006f5dcd13` | Meta repo gated, not approved. Both safetensors shards have the same sha256 as Meta's. Tokenizer/template check pending |
+| Qwen3 1.7B | `Qwen/Qwen3-1.7B` @ `70d244cc86cc` | official, open |
+| Gemma 3 1B QAT | `unsloth/gemma-3-1b-it-qat` @ `82120d4d65` | Google repos gated, not approved. `model.safetensors` and `tokenizer.model` have the same sha256 as `google/gemma-3-1b-it-qat-q4_0-unquantized`. Google's own QAT GGUF does not match the recipe (token_embd is F16) |
+| Qwen2.5 0.5B Instruct | `Qwen/Qwen2.5-0.5B-Instruct` @ `7ae557604adf` | official, open |
