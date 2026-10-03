@@ -1,10 +1,11 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-BLOCKED at commit 3 on a stop rule: the ID-only answer format does not fit the 60-token cap on any of the four
-tokenizers (see "Commit 3" and "Blocked / needs a decision" at the end). Commits 0 to 3 are done; commits 4 to
-7 have not started. The pre-registration below (human decisions, dev gate, expected-change statement) was committed before
-any Phase 2 measurement or code (`595180b`). Results are added under "Results by commit" as commits land.
+BLOCKED before commit 4. The answer format is decided (amendment below), but answering the human's question (a)
+showed that gate G1 cannot hold at 0 differences under format B' (see "Blocked / needs a decision" at the end).
+Commits 0 to 3 are done; commits 4 to 7 have not started. The pre-registration below (human decisions, dev gate,
+expected-change statement) was committed before any Phase 2 measurement or code (`595180b`); the amendment was
+added after commit 3's token counts and before any accuracy measurement.
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
 measure the deterministic and retrieval layers only. They are not an agent result. The real-model baseline
@@ -42,6 +43,86 @@ checks with the mock only and makes no accuracy claim.
     no case data is edited;
   - tokenizer files for the two gated models come from ungated mirrors unless `HF_TOKEN` is set;
   - `tokenizers`, `jinja2` and `brew install llama.cpp` are approved for `bench/` only.
+
+## AMENDMENT: HUMAN DECISIONS on the answer format (after commit 3, before any accuracy measurement)
+Made by the human after seeing the commit 3 token counts (the plan's format needs 89 to 111 tokens against a cap
+of 60). No accuracy has been measured with any backend for the shrunk prompts at the time of this amendment.
+
+1. **Format B' for the diagnostician:** line numbers for cases, facts and notes, no model confidences.
+   Reasons: it fits 60 with margin (49 tokens worst case on all four tokenizers); option A (raising the cap)
+   would break the committed projection formula, which assumes 60 and 30 answer tokens; decode is the
+   bottleneck. The line-to-ID map is built when the prompt is built and stored with the job, never recomputed
+   when the answer arrives. Test required: an answer for a tick-83 job that arrives at tick 84 maps to t83 IDs.
+2. **At most 9 fact lines per diagnosis prompt, most severe first.** Every tick where facts are dropped is
+   logged; the count is reported on dev and, once, on the reporting run.
+3. **Verifier: line numbers with an explicit pass or fail for every shown case, plus the fact line of the
+   strongest contradiction.** Not the failures-only list. Reason: an empty or truncated answer must not read as
+   agreement. A case with no verdict counts as "not judged", not as pass.
+4. **Faithfulness amendment.** With line numbers, Q3 (cited ID exists) is near 1.0 by construction and no
+   longer measures anything. New metric **Q3_rel**: the share of the model's citations for a case that are in
+   the deterministic supports set for that case. Computed for every backend and both arches. The Phase 2 gate
+   becomes: **Q3_rel drop <= 0.02 against the real-model baseline**; Q3 is still reported. Out-of-range line
+   numbers count as invented citations. This replaces "faithfulness drop <= 0.02" in the allowed-drop decision
+   above; the group top-1 clauses are unchanged.
+5. **Commit 1 deviation, accepted after the fact.** The commit 1 stop rule (a re-run differing by more than 2x)
+   tripped on the maximum (0.778 ms against 1.808 and 1.609) and the build continued without stopping. That was
+   a deviation from the plan. The human accepts it after the fact, as the human's decision: the maximum of a
+   laptop timing is one tick, and mean and p50 reproduced.
+
+Added to the plan by the same amendment:
+- **Switch `multi.compact.case_order: score | shuffled`** (shuffled is seeded per tick), default `score`. With
+  line numbers, "1,2,3" equals the listed order, so the real-model run must be able to measure position echo.
+  Open item: measure it with the real model.
+- **Erratum to `docs/multi_agent_plan.pdf`, p.13:** the example diagnosis answer is described as "about 50
+  tokens". It measures 72 / 78 / 84 / 78 tokens (Llama 3.2 / Qwen3 / Gemma 3 / Qwen2.5). The PDF itself is not
+  edited in this repo; this line is the correction of record until its source is updated.
+- **Gemma tokenizer (reported by the human from the other machine, not verified here):** the Hugging Face
+  tokenizer and the board's Gemma GGUF give identical IDs on 2,084 dev prompts. To be cited after the merge
+  with `main`, and the `tokenizer.model` sha256 compared then.
+
+### Answers to the human's two questions (no code changed to answer them)
+**(a) Under B', what confidence does a case outside belief's top 3 get, and does G1 still hold at 0
+differences with the mock? It does not hold.**
+- Today (`fieldmind/agent/orchestrator.py`, `merge`): a case the model ranks that is not among belief's top 3
+  becomes a `model_only` hypothesis with confidence `min(model's confidence, 0.5)`; if the model gives no
+  confidence the code's existing default is 0.3. For a case inside the top 3 the model's number is discarded.
+- In the Phase 1 dev run the mock supplied that number (`max(0.15, score - 0.1 x rank)`): 3,170 `model_only`
+  hypotheses, values 0.15 to 0.50 (2,696 of them 0.15). On 595 of 1,982 non-QUIET ticks the rank-1 hypothesis is
+  `model_only`.
+- Under B' the model writes no confidence, so the code must supply one, and no choice reproduces the mock's
+  numbers without copying the mock's invented formula into the gate. Measured on the Phase 1 dev run:
+
+| choice for a case outside belief's top 3 | `model_only` confidences unchanged | ticks whose rank-1 confidence changes | verifier calls (192 today) |
+|---|---|---|---|
+| (i) the existing default, 0.3 | 11 of 3,170 | 585 | 140 (52 ticks flip) |
+| (ii) belief's own confidence for that case, capped at 0.5 by `merge`; 0.3 when belief has no entry (1,154 of 3,170) | 19 of 3,170 | 580 | 327 (163 ticks flip) |
+
+- Consequence with a real model: under (i) a model-ranked case outside belief's top 3 always sits at 0.3, below
+  the verifier band [0.35, 0.75], so in conditional mode the verifier never runs when such a case is rank 1.
+- Fields that would move: `confidence` and `confidence_shown` of `model_only` hypotheses, the assessment's
+  `confidence` when rank 1 is `model_only`, the verifier trigger and therefore `ver_calls`, the verifier
+  envelopes and `envelope_status_counts`. Order, case_ref, cause, supports, discriminator, actions, escalate,
+  state, triage, facts, belief_ranking and unexplained are still expected identical. Not checked: why 1,154
+  `model_only` cases have no live belief entry.
+
+**(b) What sets the retrieval token budget, and does it differ between the mock config and a llamaserver run
+at -c 4096? It does not differ.**
+- The budget is `agent.retrieval.context_cap_tokens` per triage level (WATCH 2,048, INVESTIGATE 3,072, URGENT
+  1,024), applied in `Retriever._enforce_budget` to a chars//4 estimate of the retrieved items only (case
+  title, root cause and discriminating evidence; experience causes; note text; candidates; records; operator
+  question). It drops whole items: experience, then notes, then cases. It does not count the rules, the facts,
+  the world-model summary or the schema, so it is not a cap on the whole prompt.
+- It lives in the `agent` block. `run_demo.load_config` changes only `llm.backend`, and the prompt is built
+  before the backend is called, so the same episode gives a byte-identical prompt on mock and on llamaserver.
+  `llm.llamaserver.ctx_size` (4,096) is not read by any code; it is the `-c` value for `/board-up`.
+- One input that can differ between machines: `data/experience/store.json` is gitignored and absent here. If
+  it is non-empty elsewhere, "own past episode" lines are added to the cases block. Here 0 of 2,164 reporting
+  prompts and 0 dev prompts contain one.
+- **The 2,484 figure is not reproduced and is recorded as unexplained.** The plan (p.2) says "~2484-token
+  prompt". Here the largest single-agent diagnostician prompt is 2,103 to 2,150 real tokens on dev and 2,120 to
+  2,160 on the reporting set (chars//4: 2,284 and 2,274); the same maximum, 2,274, is in the v1 baseline run.
+  Ratio 1.15. No run file in this repo contains 2,484 as a prompt size. Untested possible causes: a non-empty
+  experience store, a different tokenizer or template, or an earlier prompt version on the board.
 
 ## Stops
 - After every commit, `reports/multi_phase2_progress.md` is updated and committed.
@@ -284,35 +365,26 @@ to 41 tokens. The text reader fits its cap of 50: 30 to 32 tokens for two tags, 
 - The Llama 3.2 template writes today's date; a different date could move the count by a token.
 
 ## Blocked / needs a decision
-**The ID-only answer format and the answer caps conflict (stop rules 2 and 6).** The plan's format needs up to
-111 tokens for a legal 3-case answer and 72 to 84 for its own example, against a cap of 60; the plan's estimate
-of "about 50" is off by more than the cap allows. Commits 4 to 7 are not started, because the answer format
-fixes the parser, the gate's expansion, the mock roles and the prompts' ID scheme.
+**Resolved: the answer format.** The ID-only format of the plan did not fit the caps (89 to 111 tokens against
+60; verifier 33 to 41 against 30). The human chose format B' and the explicit pass/fail verifier; see the
+amendment. Measured worst cases: diagnostician B' 49 tokens on all four tokenizers; verifier with a verdict for
+each of 3 cases plus a fact line, 21 to 23.
 
-Options, each measured on all four tokenizers (Llama 3.2 / Qwen3 / Gemma 3 / Qwen2.5):
-
-| option | worst-case answer | tokens | fits 60 | what it gives up |
-|---|---|---|---|---|
-| A. keep the plan's format, raise the cap | 3 cases x 2 stamped citations, 4 notes, 2 unexplained | 107 / 127 / 135 / 127 | no; needs a cap near 136 | the 60 rule; G3 becomes prompt + ~136 < 1,280; writing time roughly doubles (9.8 s against 4.3 s at the plan's 13.9 tok/s planning rate, an expectation, not a measurement) |
-| B. line numbers for everything: cases 1..4, facts and notes by their line in the prompt, confidence in tenths | `{"g":"A","r":[[1,6,[1,2]],[2,3,[1,2]],[3,2,[1,2]]],"sep":1,"n":[1,2,3,4],"x":[3,4]}` | 55 / 55 / 55 / 55 | yes, by 5 (62 on three tokenizers if a cited fact line is two digits, so it also needs at most 9 fact lines) | the model no longer writes `t84.F1` or `RCA-11`; code maps line numbers to the stamped IDs of the job's evidence tick |
-| B'. as B, without confidences | `{"g":"A","r":[[1,[1,2]],[2,[1,2]],[3,[1,2]]],"sep":1,"n":[1,2,3,4],"x":[3,4]}` | 49 / 49 / 49 / 49 | yes, by 11 | as B, plus the model's confidence |
-| C. real case IDs, fact and note line numbers, no confidences | `{"g":"A","r":[["RCA-11",[1,2]],...],"sep":"RCA-11","n":[1,2,3,4],"x":[3,4]}` | 61 / 65 / 65 / 65 | no (52 to 56 with one note and nothing unexplained) | would need limits on notes and unexplained facts as well |
-| D. keep stamped IDs, shrink the content to 2 cases x 1 citation | `{"g":"A","r":[["RCA-11",0.6,["t143.F1"]],["RCA-07",0.3,["t143.F2"]]],...}` | 57 / 64 / 66 / 64 | no | and loses the third case |
-
-Facts that bear on the choice:
-- **The model's confidence is already mostly unused.** In the single agent's `merge`, a case that is in belief's
-  top 3 keeps belief's confidence and the model's number is discarded; the model's number is used only for a
-  case outside belief's top 3, capped at 0.5. On the dev mock run that was 3,170 of the published hypotheses.
-- With B or B', the gate still checks every citation against the facts of the answer's evidence tick, and
-  published citations are still `t84.F1`; only what the model types changes. This does change the letter of the
-  CLAUDE.md rule "Fact IDs carry their tick", so it is a human decision.
-- Verifier at cap 30: real case IDs plus a stamped fact ID is 33 to 41 tokens (over). Line numbers
-  (`{"v":[[1,"p"],[2,"f"],[3,"p"]],"c":2}`) is 21 to 23. Listing only the failed line numbers is 13.
+**Open: gate G1 cannot be 0 differences under B'** (question (a) above). The model no longer supplies a
+confidence, so `model_only` confidences, the rank-1 confidence on about 580 ticks, and the verifier trigger
+(192 calls -> 140 or 327) must move on the mock, whichever value the code supplies.
 
 Questions:
-1. Which answer format: A, B, B', or something else?
-2. If B or B': is at most 9 fact lines in a diagnosis prompt acceptable? Dev's maximum is 7 facts on a tick.
-3. Does the verifier follow the same choice?
+1. Which confidence does a case outside belief's top 3 get: (i) the existing default 0.3, or (ii) belief's own
+   confidence for that case, capped at 0.5, with 0.3 when belief has no entry?
+2. How should G1 be restated? Proposal, using the per-section switches already in the plan:
+   - **G1a (the format change alone):** multi with only the `schema` switch on, against the Phase 1 multi run.
+     Differences allowed only in the fields listed under (a), and their counts must equal the predictions in
+     the table above for the chosen option (for (i): 3,159 `model_only` confidences change, 585 rank-1
+     confidences change, verifier calls 192 -> 140). Any other difference fails the gate.
+   - **G1b (the shrink alone):** multi with every switch on, against the G1a run: 0 differences outside the
+     pre-registered moving fields. This keeps a strict 0-difference test for everything except the one
+     decision that removes the model's confidence.
 
 ## Disagreements recorded, not resolved
 - **Plan p.13: "about 50 tokens" for the example answer.** Measured 72 / 78 / 84 / 78. Ratio 1.4 to 1.7.

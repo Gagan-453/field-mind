@@ -18,3 +18,9 @@ Updated and committed after every commit. Mock backend only; no accuracy claim.
    needs 89 to 111 tokens for a legal 3-case answer (72 to 84 for the plan's own example) against a cap of 60;
    the verifier's needs 33 to 41 against 30. Options and their measured sizes are in
    `reports/multi_phase2_prompt_shrink.md`, "Blocked / needs a decision". Commits 4 to 7 wait on the choice.
+2. **Before commit 4 (the human's condition: stop if (a) or (b) changes the gate).** Format B' is decided and
+   recorded as an amendment. Answering question (a) showed G1 cannot be 0 differences: with no model confidence,
+   `model_only` confidences, the rank-1 confidence on about 580 dev ticks and the verifier trigger (192 calls ->
+   140 or 327) must move on the mock. Question (b): the retrieval budget does not differ between mock and
+   llamaserver; the 2,484 figure is not reproduced here. Two questions are open in
+   `reports/multi_phase2_prompt_shrink.md`, "Blocked / needs a decision". No code changed.
