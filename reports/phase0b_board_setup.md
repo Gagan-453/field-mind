@@ -204,6 +204,28 @@ reboot.
   their failing calls were reconstructed from the reply cache); (c) STATUS.md's attempt number from the manifest.
   Each with a test and a caught mutation (`PYTHONDONTWRITEBYTECODE=1`). 140 tests pass.
 
+## Human decisions after the soak test (2026-10-03, recorded before any further board run)
+**Override of the pre-set reading, decided AFTER seeing the result.** The rule said run B's server RSS must be "not
+growing", with no tolerance. The human calls that wording a drafting error: run B grew about 0.5 MB per call against
+about 190 MB per call in run A, MemAvailable stayed at 6.2 GB, and every other condition passed. **Memory exhaustion
+from llama-server's host prompt cache is accepted as the cause of the stalls.** Recorded as an override: the reading
+was NOT CONFIRMED as written, and my own 2% margin (written into `bench/soak_cache.py` before the runs) also failed
+(4.5%).
+
+1. **Every lane, every model, both lanes, adds `--cache-ram 0`.** Reason: no prompt is ever reused, the cache only
+   grows, and it penalises models with a larger state per token.
+2. **The campaign restarts from stage A with the new flags.** The results so far are kept, not used for any decision
+   or timing: `results/board` moved to `results/board_aborted_20261003` and committed. Reason: the 3B calls were timed
+   on a degrading server and the server flags have changed, so every number must come from one configuration. No
+   model-choice result has been looked at.
+3. **Peak in-episode temperature** (93.8 C CPU was seen) is reported per episode from now on. It is not a gate.
+4. **Memory guard.** Before each episode, log server RSS and board MemAvailable. If MemAvailable is under 2 GB, restart
+   the lane before that episode and log the restart. Never restart inside an episode.
+5. **Unexplained:** launch 3's last good call ended at 93.8 C CPU, against a 72.1 C peak in soak run A at the same
+   stall, with the same prompts. Not investigated.
+6. **Open item, to be tested after the campaign:** replies at temperature 0 and seed 0 differed between soak runs A
+   and B on 10 of 37 calls. **Until tested, no claim is made that replies are reproducible across launches.**
+
 ## Soak test: memory vs heat (2026-10-03, 22:15-22:53) — reading NOT CONFIRMED, stopped
 `bench/soak_cache.py` (committed before the runs, `1dda41c`). Fresh 3B NPU lane per run, campaign request body,
 the same 50 prompts in the same order: the first 50 distinct prompts of the crashed job
@@ -229,7 +251,7 @@ pinned server's `--help`).
 four conditions (50 calls; none over 60 s; prefill within 10% of its first 5 calls, worst -8.2%) but **its server RSS
 grew** (512 -> 535 MB, monotonically). By the rule's words that is "anything else": **stop and report**. The
 committed script's own check also says NOT CONFIRMED (it allows 2% RSS growth; B grew 4.5%; the 2% was my choice,
-written before the runs). Part 3 (cache-off flag, restart from stage A, moving `results/board`) has NOT been done.
+written before the runs). Part 3 (cache-off flag, restart from stage A, moving `results/board`) was then done after the human's override (next section).
 
 What the data shows, for the human's decision (not acted on):
 - Run A stalled at the same call as launch 2, at the moment board MemAvailable reached 0, with the chip at 70 C;
