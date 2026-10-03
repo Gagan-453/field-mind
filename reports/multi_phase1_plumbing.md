@@ -1,7 +1,8 @@
 # Multi-agent Phase 1: plumbing: report
 
 ## Status
-PARTIAL: built and the dev gate passes on every clause. Still to do: the phase-reviewer review and the one-shot reporting run.
+DONE. Phase 1 plumbing is built and passes the gate on the dev set and on the one-shot reporting run. Reviewer findings were fixed
+and re-gated. Tagged `multi-phase1`.
 
 **Every number below comes from the mock backend.** The mock backend re-ranks retrieved cases and does no reasoning, so these
 figures measure the deterministic and retrieval layers only. They are not an agent result. All timings are **laptop timings**
@@ -61,7 +62,7 @@ Summary: every key of `summary_*.json` except the latency keys.
 | 2. prompt identity | 2,174 recorded calls on each side; **`cmp` reports the logs byte-identical**, same sha256 (`6e9b748a…`) | PASS |
 | 3. single on branch vs main `ca93ed5` | runs: 0 differences; summary: 0 differences. The single prompt log is also byte-identical to the one recorded before the refactor | PASS |
 | 4. S7 / timing | S7 misses = 0 for single and multi, in both repetitions. P0 never exceeded 200 ms (0 of 5,850 ticks). Timing table below | PASS |
-| 5. tests | 47 new tests; all 9 mutations were caught (table below); full suite 145 passed | PASS |
+| 5. tests | 47 new tests at the gate, 56 after review fixes; all 9 + 6 mutations were caught (tables below); full suite **154 passed** | PASS |
 
 No decision field differed, so there was no first differing tick to report.
 
@@ -94,7 +95,7 @@ CPU this could approach the 200 ms budget. See Decisions taken, item 3.
 | verifier P3: lane | NPU 48, CPU 144 |
 | queue wait (simulated) | 0 for 99.7% of jobs; max 1.3 s |
 | simulated deadline misses | P1 317 of 317, P2 0 of 1,665, P3 0 of 192 |
-| finish more than 30 s after the evidence tick | 142 of 2,174 (diagnostician then verifier: mean 31.0 s, max 35.6 s) |
+| finish more than 30 s after the evidence tick | 142 of 2,174 (mean 33.3 s for those 142). Over all 192 diagnostician-then-verifier ticks the chain finishes at mean 31.0 s, max 35.6 s |
 | lane busy (simulated) | NPU 36,093 s, CPU 6,508 s |
 | prompt tokens (estimate) | diagnostician mean 2,036, max 2,285, **1,980 of 1,982 over 1,280**; verifier max 2,095, 170 of 192 over 1,280 |
 
@@ -186,7 +187,7 @@ lives in the board's index (`FactsBook.stamped_ids`, `resolve("t84.F1")`). The g
 | step | result |
 |---|---|
 | ran the module | dev, single and multi, mock: 36 episodes, 5,850 ticks each, exit 0 |
-| self-tests | `pytest`: **145 passed** (98 before + 47 new); `bench` scripts 20/22/16 passed after the refactor |
+| self-tests | `pytest`: 145 passed at the gate (98 before + 47 new), **154 after the review fixes**; `bench` scripts 20/22/16 passed after the refactor |
 | independent re-derivation | LLM call count by three routes: prompt-log lines by role (1,982 diag + 192 ver = 2,174) = run counters `diag_calls`+`ver_calls` (2,174) = lane `n_jobs` sum (2,174); relative difference 0. Decision identity by a second method: a whitelist sha256 over the decision fields (not `compare_runs`' blacklist walk) gives `e43b0ceb4d073cee` for main, single and multi |
 | mutation check | 9 mutations, 9 caught (next table) |
 | comparator can fail | 3 injected differences (a confidence_shown +0.001, a prompt +1 space, diag_calls +1) were all reported; a +50 ms `tick_latency_ms` was correctly ignored |
@@ -233,6 +234,69 @@ None. Decisions, prompts and summaries are identical to `main` `ca93ed5`.
 5. **Simulated decode is capped at `max_tokens`** (see Constants). This is telemetry only.
 6. **`build_multi_agent` lives in `bench/harness.py`, not in `fieldmind/multi/`.** That keeps `fieldmind/` free of `bench`
    imports for the device copy. It builds the components through `build_agent`, so nothing is duplicated.
+7. **Lane choice uses earliest predicted finish, not the plan's Phase 1 "fixed placement".** The session prompt asked for
+   earliest finish, and it overrides the plan here. It cannot change a mock decision, since both lanes share one backend.
+   With a real model it could: NPU and CPU arithmetic may give different answers. Phase 2 and later comparisons on a real
+   backend must either pin placement or report lane-dependent differences. The plan's rule 3 (same GGUF on both lanes)
+   assumes they don't differ.
+8. **Cross-tick answers are published with stamped ids (review fix).** An answer whose evidence tick is not the current tick
+   is checked, merged and published with `t84.F3`-style ids, so L6 cannot take it for the current tick's `F3`. This never
+   happens in lockstep, where ids stay local and prompts stay identical.
+
+## Phase-reviewer findings and what was done
+
+The reviewer independently reproduced the dev gate (0 differences, prompt sha256 matches, telemetry numbers match). It then
+ran 6 mutations in a scratch copy and read the diff against the 10 checks. Its three most serious findings, and what was done
+about each:
+
+| finding | action |
+|---|---|
+| **1. Failure-path wiring untested.** The mock never fails, so "gate skips `Verifier.apply`" (A) and "gate drops the degraded marker" (B) survived all 145 tests, and A would also pass the dev gate | Added `tests/test_multi_failure_paths.py`. A scripted backend, keyed by call index, forces a repaired answer, invalid_schema (degraded marker), timeout, error, low faithfulness, a model-only cause, a verifier fail and a verifier revise. They run through both arches on 3 dev episodes (A02, C02, D03), with prompts compared. The test asserts each path occurred, then 0 differences. **Mutations A, B and F (URGENT `max_facts` forced to 12) are now caught.** F was first missed because the test ran without `log_prompts`, so prompt text was not compared; fixed. |
+| **2. Tick stamp only in the index.** A one-tick-old accepted answer brought local ids into the current tick, where `Gate.approve` (`l6_gate.py:114-116`) could match them to the wrong facts and hide an ALARM from `unexplained`; the old test asserted this as correct | Cross-tick answers now carry stamped ids (Decisions taken, item 8). New test: a tick-84 citation of `F1` leaves tick 85's ALARM `F1` in `unexplained`. Mutation "stamping off" is caught by 2 tests. |
+| **3. Enforcement depends on the audit.** `read()` is shallow; `equipment`, `notes_seen` and `episode_id` were in no section | `equipment` and `notes_seen` are now sections (owner gate), and `episode_id` is audited under `status`. A test pins that every WorldModel field is in a section. The docstring and this report now say read handles are shallow; a test documents it (no raise with audit off, raise with audit on). The audit stays on; the board question is under Open items. |
+| latent lane latch: a job that raises after `begin` left `LaneBusy` set | `lane.end` moved into `finally`; test `test_lane_is_released_when_a_job_raises` |
+| report: "mean 31.0 s" described the wrong set | corrected (lane telemetry table) |
+| plan says "fixed placement" for Phase 1 | recorded as a deviation (Decisions taken, item 7) |
+| some tick glue is re-typed in `gate.py` (assembly, QUIET publish, verifier-apply branch) | Not extracted further, as the conservative choice: no second `fieldmind/agent` refactor. These copies are now pinned by the failure-path parity test (mutations A and B caught). |
+
+Not acted on, because it is already declared and out of Phase 1 scope: the hard path blocks on lockstep jobs, and is a
+synchronous HTTP call on llamaserver (Session 6); the capped model→belief update; the prompt and answer caps.
+
+### Review-fix mutation checks (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared)
+| mutation | caught by |
+|---|---|
+| A: gate skips `Verifier.apply` | `test_failure_paths_identical_single_vs_multi` |
+| B: gate drops the degraded marker | `test_failure_paths_identical_single_vs_multi` |
+| F: multi URGENT `max_facts` forced to 12 | `test_failure_paths_identical_single_vs_multi` |
+| cross-tick stamping off | `test_citation_checked_against_evidence_tick_not_current_tick`, `test_late_answer_cannot_explain_a_current_tick_fact_with_the_same_local_id` |
+| lane not released on raise | `test_lane_is_released_when_a_job_raises` (+3) |
+| `equipment` removed from sections | `test_audit_catches_a_change_to_equipment_or_episode_id` |
+
+After the fixes the dev gate was re-run: multi vs single 0 differences, prompt logs byte-identical.
+
+## Reporting run (30 episodes, run once, mock, HEAD `c1e1470`, clean tree)
+
+| check | result |
+|---|---|
+| decision identity, multi vs single | **0 differences** over 30 episodes, 5,160 assessments and 2,335 envelopes; summary 0 differences |
+| prompt identity | 2,335 calls each; `cmp`: byte-identical |
+| single vs committed `results/baselines/single_v3_summary.json` | `summary` 0 differences, `per_episode` 0 differences |
+| S7 | 0 for single, 0 for multi; P0 > 200 ms: 0 of 5,160 |
+| stale drops / jobs | 0 / 2,335 (= `diag_calls` + `ver_calls`) |
+
+| metric (mock, both arches identical) | value |
+|---|---|
+| Q1 macro F1 | 0.743 |
+| Q2 top-1 / top-3 | 0.334 / 0.523 |
+| library: belief top-1 tie-fair / belief group / group top-1 | 0.438 / 0.574 / 0.547 |
+| Q3 faithfulness | 1.0 |
+| Q4 precision / recall | 0.38 / 0.926 |
+| Q5 FP/h | 0.91 |
+| Q6 lead time (min) | 31.5 |
+| S4 | 0.45 |
+| S7 | 0.0 |
+
+Saved as `results/baselines/multi_p1_summary.json`. Mock numbers measure the deterministic and retrieval layers, not an agent.
 
 ## Disagreements recorded, not resolved
 - **Prompt cap.** CLAUDE.md requires every prompt to stay under 1,280 tokens. In Phase 1, 1,980 of 1,982 diagnostician prompts
