@@ -205,7 +205,9 @@ class CallLog:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.fh = open(self.path, "w")
+        # "x": exclusive create. A call log is never reopened for writing, so an
+        # earlier attempt's records can never be overwritten (a relaunch did that).
+        self.fh = open(self.path, "x")
         self.n = 0
 
     def write(self, rec: dict) -> None:
@@ -479,6 +481,29 @@ class Campaign:
     def job(self, jid: str) -> dict:
         return self.manifest["jobs"].setdefault(jid, {"status": "pending", "attempts": 0})
 
+    def live_log(self, jid: str) -> Path:
+        """This attempt's call log (attempt number from the manifest)."""
+        n = self.manifest["jobs"][jid]["attempts"]
+        return self.tmp / f"{jid.replace('/', '__')}.attempt{n}.calls.jsonl"
+
+    def archive_attempt_logs(self, jid: str, keep: Path | None = None) -> list[str]:
+        """Move every call log of `jid` left in tmp/ (a failed attempt, or one a
+        kill interrupted) into attempts/, gzipped, under its attempt number.
+        Never overwrites: an archive that already exists is an error."""
+        out = []
+        for f in sorted(self.tmp.glob(f"{jid.replace('/', '__')}.attempt*.calls.jsonl")):
+            if keep is not None and f == keep:
+                continue
+            dst = self.out / "attempts" / (f.name + ".gz")
+            if dst.exists():
+                raise RuntimeError(f"attempt log archive already exists: {dst}")
+            atomic_write(dst, gzip.compress(f.read_bytes()))
+            f.unlink()
+            out.append(str(dst.relative_to(self.out)))
+        if out:
+            self.manifest["jobs"][jid].setdefault("attempt_logs", []).extend(out)
+        return out
+
     def is_complete(self, jid: str) -> bool:
         j = self.manifest["jobs"].get(jid, {})
         return j.get("status") == "complete" and (self.out / j.get("summary", "?")).exists()
@@ -577,10 +602,11 @@ class Campaign:
         if self.is_complete(jid):
             self.stage_done += 1
             return json.loads((self.out / j["summary"]).read_text())
+        self.archive_attempt_logs(jid)          # left by a kill or an older launch
         for attempt in range(1, MAX_INFRA_RETRIES + 2):
             j.update(status="incomplete", attempts=j["attempts"] + 1, started=now())
             self.save()
-            self.write_status(tag, f"running {jid} (attempt {attempt})")
+            self.write_status(tag, f"running {jid} (attempt {j['attempts']})")
             t0 = time.monotonic()
             try:
                 summary = fn()
@@ -591,6 +617,8 @@ class Campaign:
                 if self.ctx.log:
                     self.ctx.log.close()
                     self.ctx.log = None
+                self.archive_attempt_logs(jid)
+                self.save()
                 if attempt > MAX_INFRA_RETRIES:
                     self.write_status(tag, f"STOPPED at {jid}: infrastructure failure after "
                                            f"{MAX_INFRA_RETRIES} retries. Fix the board and relaunch; "
@@ -644,7 +672,7 @@ class Campaign:
             self.ensure_lane(tag, self.timed_log_level())
             c = self.ctx
             c.stage, c.phase, c.episode, c.tick, c.use_cache, c.events = stage, phase, episode, None, True, []
-            live = self.tmp / (jid.replace("/", "__") + ".calls.jsonl")
+            live = self.live_log(jid)
             c.log = CallLog(live)
             cfg = self.episode_cfg(episodes_dir)
             t_start, net = self.board.temperature(), network_state()
@@ -745,7 +773,7 @@ class Campaign:
             c = self.ctx
             c.stage = c.phase = "A"
             c.episode, c.tick, c.use_cache, c.events = "screen", None, False, []
-            live = self.tmp / (jid.replace("/", "__") + ".calls.jsonl")
+            live = self.live_log(jid)
             c.log = CallLog(live)
             be = CampaignBackend(c)
             src = self.screening_sources()

@@ -404,7 +404,7 @@ def test_kill_minus_9_mid_episode_then_resume_is_identical(full_run, tmp_path):
     jid = "B/round1/llama32-3b/dev_A01_fcv_seize"
     assert m["jobs"][jid]["status"] == "incomplete"
     assert not (tmp_path / "out/B/llama32-3b/round1.dev_A01_fcv_seize.summary.json").exists()
-    live = (tmp_path / "out/tmp/B__round1__llama32-3b__dev_A01_fcv_seize.calls.jsonl").read_text()
+    live = (tmp_path / "out/tmp/B__round1__llama32-3b__dev_A01_fcv_seize.attempt1.calls.jsonl").read_text()
     assert len(live.splitlines()) == 29                   # every finished call was already on disk
     p2 = _cli(tmp_path / "out", tmp_path / "base", {"models": MODELS_PLAN})     # relaunch
     assert p2.returncode == 0, p2.stderr[-2000:]
@@ -413,6 +413,10 @@ def test_kill_minus_9_mid_episode_then_resume_is_identical(full_run, tmp_path):
     assert all(j["attempts"] == 1 for k, j in m2["jobs"].items() if k != jid)   # the rest ran once
     redo = json.loads((tmp_path / "out/B/llama32-3b/round1.dev_A01_fcv_seize.summary.json").read_text())
     assert redo["meta"]["n_cache_hits"] == 29
+    # the killed attempt's log was kept, not overwritten, and is identical to what was on disk
+    kept = tmp_path / "out/attempts/B__round1__llama32-3b__dev_A01_fcv_seize.attempt1.calls.jsonl.gz"
+    assert gzip.decompress(kept.read_bytes()).decode() == live
+    assert m2["jobs"][jid]["attempt_logs"] == [str(kept.relative_to(tmp_path / "out"))]
     # results identical to the uninterrupted run, timings and clocks aside
     files = sorted(str(f.relative_to(ref / "out")) for f in (ref / "out").rglob("*")
                    if f.name.endswith((".summary.json", ".run.json.gz")) or f.parent.name in "CDE"
@@ -469,3 +473,24 @@ def test_cli_rule_stop_exits_3(tmp_path):
     assert p.returncode == C.EXIT_STOP, p.stderr[-1500:]
     status = (tmp_path / "out/STATUS.md").read_text()
     assert "STOPPED by a committed rule" in status and "llama32-3b failed screening" in status
+
+
+# ---- a failed attempt's call log is kept --------------------------------------
+def test_failed_attempt_log_is_kept_not_overwritten(tmp_path):
+    c, b = mk(tmp_path, {"fail_calls": {"5": "http500"}})
+    one_episode(c)
+    jid = "B/round1/llama32-3b/dev_A01_fcv_seize"
+    j = c.manifest["jobs"][jid]
+    assert j["attempts"] == 2 and len(j["attempt_logs"]) == 1
+    old = [json.loads(ln) for ln in gzip.open(c.out / j["attempt_logs"][0], "rt")]
+    assert len(old) == 5 and old[-1]["status"] == "infra" and "HTTP 500" in old[-1]["error"]
+    assert [r["status"] for r in old[:4]] == ["ok"] * 4
+    assert not list(c.tmp.glob("*.calls.jsonl"))          # nothing left behind
+
+
+def test_call_log_refuses_to_overwrite(tmp_path):
+    f = tmp_path / "x.calls.jsonl"
+    f.write_text("earlier record\n")
+    with pytest.raises(FileExistsError):
+        C.CallLog(f)
+    assert f.read_text() == "earlier record\n"
