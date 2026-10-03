@@ -78,3 +78,11 @@ smoke test with `Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`; step 6 commit the 
 - Evidence: `~/fieldmind-build/tokcheck/` (prompts, three ID sets, the two vocab-only GGUFs).
   Dev prompts: scratchpad only; regenerate with
   `run_demo.py --all --episodes-dir data/episodes_dev --tag dev --backend mock --log-prompts --out <dir>`.
+
+## Resumed 2026-10-03 (board reconnected)
+- Human decision: Hugging Face tokenizer is the Gemma reference; step A passes 2,084 / 2,084 (commit `11ac80b`).
+- `bench.board.CANDIDATES` manifest: lanes refuse any file not in it or whose board sha256 differs (`11ac80b`).
+- **Step 4 DONE.** 4 GGUFs pushed to `/data/local/tmp/llm/`; `sha256sum` on the board equals the laptop value for all 4
+  (`logs/push_gguf.log`). Board free space after the push: 4,581,412 KiB.
+- Next: step 5 smoke test (B offload/logits placement, C `-lv 4` cost, D Gemma stop), then docs commit, then the
+  campaign runner (items 1-9 of the human's message; nothing built yet).
