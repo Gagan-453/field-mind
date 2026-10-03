@@ -38,3 +38,25 @@ def test_adb_subprocess_gets_clean_env(monkeypatch):
     assert "PYTHONPATH" not in seen["env"]
     # laptop time: ISO with a UTC offset, and the laptop's year, not the board's
     assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d{4}", out["t"])
+
+
+def test_lanes_always_use_ctx_4096_np_1():
+    # HUMAN DECISION 2026-10-03: -c 4096 -np 1 for every model and both lanes.
+    import yaml
+    for lane, model in (("npu", "a.gguf"), ("cpu", "b.gguf"), ("npu", "c.gguf")):
+        cmd = board.lane_command(lane, model)
+        assert " -c 4096 -np 1 " in cmd
+        assert f"-m /data/local/tmp/llm/{model} " in cmd
+    cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    assert cfg["llm"]["llamaserver"]["ctx_size"] == 4096
+
+
+def test_lane_command_env_and_offload():
+    lib = "/data/local/tmp/llm/llama.cpp/lib"
+    npu, cpu = board.lane_command("npu", "m.gguf"), board.lane_command("cpu", "m.gguf", threads=6)
+    for cmd in (npu, cpu):
+        # both variables on every launch; the folder holds libggml-htp-v75.so
+        assert f"LD_LIBRARY_PATH={lib} " in cmd and f"ADSP_LIBRARY_PATH={lib} " in cmd
+    assert "--device HTP0 -ngl 99" in npu and "--port 8080" in npu
+    assert "--device none -ngl 0 -t 6" in cpu and "--port 8081" in cpu
+    assert "HTP0" not in cpu

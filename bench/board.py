@@ -16,6 +16,9 @@ Host side only: shells out to adb and talks HTTP to the forwarded lanes.
   .venv/bin/python -m bench.board temp
   .venv/bin/python -m bench.board speed http://localhost:8080 [prompt_file]
   .venv/bin/python -m bench.board env      (what the board scripts run with)
+  .venv/bin/python -m bench.board start npu <model.gguf>   (also: cpu)
+  .venv/bin/python -m bench.board log npu
+  .venv/bin/python -m bench.board stop
 
 Two host rules for every board script (bench.board, bench.probe_device):
   * PYTHONPATH is unset. This laptop exports PYTHONPATH into the QAIRT SDK's
@@ -58,6 +61,82 @@ _NPU_KEYS = ("nsp", "cdsp", "q6", "npu")
 
 _ZONE_CMD = ('for z in /sys/class/thermal/thermal_zone*; do '
              'echo "$(cat $z/type 2>/dev/null) $(cat $z/temp 2>/dev/null)"; done')
+
+
+# ---- llama-server lanes -----------------------------------------------------
+# Where the pinned llama.cpp Android package and the GGUFs live on the board
+# (pushed in the Phase 0b board setup; reports/phase0b_board_setup.md).
+DEVICE_PKG = "/data/local/tmp/llm/llama.cpp"
+DEVICE_MODELS = "/data/local/tmp/llm"
+DEVICE_LOGS = "/data/local/tmp/llm/logs"
+
+# HUMAN DECISION 2026-10-03: llama-server is ALWAYS launched with -c 4096 -np 1,
+# the same for every model and both lanes. The single-agent prompt is ~2484
+# tokens and context size changes NPU speed, so it is fixed, never per-model.
+CTX_SIZE = 4096
+N_PARALLEL = 1
+
+LANE_PORT = {"npu": 8080, "cpu": 8081}
+
+
+def lane_command(lane: str, model_file: str, threads: int = 6) -> str:
+    """The board-side shell command for one lane (no redirection, no &).
+    LD_LIBRARY_PATH and ADSP_LIBRARY_PATH both point at the package's lib/
+    folder: it holds libggml-hexagon.so (host side) and libggml-htp-v75.so (the
+    code the DSP loads; without ADSP_LIBRARY_PATH the NPU lane cannot start it).
+    -fit off: nothing is silently adjusted to "fit" (HTP0 reports 0 MiB free)."""
+    if lane == "npu":
+        offload = "--device HTP0 -ngl 99"
+    elif lane == "cpu":
+        offload = f"--device none -ngl 0 -t {threads}"
+    else:
+        raise ValueError(f"unknown lane {lane!r}")
+    return (f"cd {DEVICE_PKG} && LD_LIBRARY_PATH={DEVICE_PKG}/lib "
+            f"ADSP_LIBRARY_PATH={DEVICE_PKG}/lib ./bin/llama-server "
+            f"-m {DEVICE_MODELS}/{model_file} --host 0.0.0.0 --port {LANE_PORT[lane]} "
+            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off")
+
+
+def _adb(*args: str, serial: str = "", timeout: float = 60) -> subprocess.CompletedProcess:
+    cmd = ["adb"] + (["-s", serial] if serial else []) + list(args)
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                          env=clean_env())
+
+
+def lane_log_path(lane: str) -> str:
+    return f"{DEVICE_LOGS}/lane_{lane}.log"
+
+
+def start_lane(lane: str, model_file: str, threads: int = 6, serial: str = "") -> dict:
+    """Start one lane in the background on the board and forward its port.
+    Returns the command and the LAPTOP start time (the board clock is wrong)."""
+    cmd = lane_command(lane, model_file, threads)
+    port = LANE_PORT[lane]
+    _adb("shell", f"mkdir -p {DEVICE_LOGS}", serial=serial)
+    _adb("shell", f"nohup sh -c '{cmd}' > {lane_log_path(lane)} 2>&1 &", serial=serial)
+    _adb("forward", f"tcp:{port}", f"tcp:{port}", serial=serial)
+    return {"lane": lane, "started_laptop_time": laptop_time(), "command": cmd,
+            "board_log": lane_log_path(lane), "url": f"http://localhost:{port}"}
+
+
+def stop_lanes(serial: str = "") -> str:
+    """Stop llama-server by process name only. Never deletes files."""
+    return _adb("shell", "pkill llama-server; sleep 1; pgrep -l llama-server",
+                serial=serial).stdout.strip()
+
+
+def lane_log(lane: str, serial: str = "") -> str:
+    return _adb("shell", f"cat {lane_log_path(lane)}", serial=serial).stdout
+
+
+def wait_health(url: str, timeout_s: float = 300) -> float | None:
+    """Seconds until /health is ok, or None on timeout (laptop wall clock)."""
+    t0 = time.perf_counter()
+    while time.perf_counter() - t0 < timeout_s:
+        if lane_health(url):
+            return round(time.perf_counter() - t0, 1)
+        time.sleep(2)
+    return None
 
 
 def _to_c(v: int) -> float:
@@ -170,6 +249,14 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "env":
         print(json.dumps({"laptop_time": laptop_time(),
                           "PYTHONPATH": os.environ.get("PYTHONPATH")}))
+    elif len(sys.argv) >= 4 and sys.argv[1] == "start":
+        info = start_lane(sys.argv[2], sys.argv[3])
+        info["ready_after_s"] = wait_health(info["url"])
+        print(json.dumps(info, indent=1))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "stop":
+        print(json.dumps({"laptop_time": laptop_time(), "still_running": stop_lanes()}))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "log":
+        print(lane_log(sys.argv[2]))
     elif len(sys.argv) >= 2 and sys.argv[1] == "temp":
         print(json.dumps(chip_temperature(raw=True), indent=1))
     elif len(sys.argv) >= 3 and sys.argv[1] == "speed":
