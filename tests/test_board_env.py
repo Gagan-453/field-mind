@@ -61,7 +61,7 @@ def test_lane_command_env_and_offload():
     assert "--device none -ngl 0 -t 6" in cpu and "--port 8081" in cpu
     assert "HTP0" not in cpu
     # loader lines (type counts, offloaded layers, HTP0 buffer) need log level 4
-    assert npu.endswith("-fit off -lv 4") and cpu.endswith("-fit off -lv 4")
+    assert npu.endswith("-fit off --cache-ram 0 -lv 4") and cpu.endswith("-fit off --cache-ram 0 -lv 4")
 
 
 def _fake_adb(sha_on_board):
@@ -101,4 +101,12 @@ def test_lane_refuses_a_wrong_sha256_and_accepts_the_right_one(monkeypatch):
 
 def test_log_level_is_optional():
     assert " -lv " not in board.lane_command("npu", "m.gguf", log_level=None)
-    assert board.lane_command("npu", "m.gguf", log_level=None).endswith("-fit off")
+    assert board.lane_command("npu", "m.gguf", log_level=None).endswith("-fit off --cache-ram 0")
+
+
+def test_every_lane_and_model_has_the_host_prompt_cache_off():
+    # HUMAN DECISION 2026-10-03: --cache-ram 0 on every lane, every model
+    for lane in ("npu", "cpu"):
+        for model in board.CANDIDATES:
+            for lv in (4, None):
+                assert " --cache-ram 0" in board.lane_command(lane, model, log_level=lv)

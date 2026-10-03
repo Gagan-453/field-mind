@@ -450,6 +450,9 @@ bench/harness.py    gains --arch single|multi and --mode lockstep|realtime
   `adb forward` both ports to the laptop.
 - **HUMAN DECISION (2026-10-03): `llama-server` is always launched with `-c 4096 -np 1`, the same for every model and
   both lanes.** The single-agent prompt is ~2484 tokens and context size changes NPU speed, so it is never set per model.
+- **HUMAN DECISION (2026-10-03): every lane, every model, both lanes, adds `--cache-ram 0`.** The server's host
+  prompt cache (default 8,192 MiB) keeps a KV copy of every finished prompt although none is ever reused; on the 3B
+  it filled board memory after ~36 calls and the next call stalled (soak test in `reports/phase0b_board_setup.md`).
 - Paths on the board: package `/data/local/tmp/llm/llama.cpp` (`bin/llama-server`, `lib/`), GGUFs
   `/data/local/tmp/llm/*.gguf`, lane logs `/data/local/tmp/llm/logs/`.
 - Set `LD_LIBRARY_PATH=/data/local/tmp/llm/llama.cpp/lib` and `ADSP_LIBRARY_PATH=/data/local/tmp/llm/llama.cpp/lib`

@@ -132,6 +132,11 @@ def lane_command(lane: str, model_file: str, threads: int = 6,
     folder: it holds libggml-hexagon.so (host side) and libggml-htp-v75.so (the
     code the DSP loads; without ADSP_LIBRARY_PATH the NPU lane cannot start it).
     -fit off: nothing is silently adjusted to "fit" (HTP0 reports 0 MiB free).
+    --cache-ram 0: HUMAN DECISION 2026-10-03, every lane, every model. The
+    server's host prompt cache (default 8192 MiB) kept a KV copy of every
+    finished prompt, although no prompt is ever reused (cache_prompt false); on
+    the 3B it filled board memory after ~36 calls and the next call stalled
+    (soak test, reports/phase0b_board_setup.md).
     -lv 4: at the default level this build prints no loader lines; level 4 adds
     the tensor-type counts, "offloaded N/N layers" and the HTP0 buffer sizes
     that the NPU-confirmation rule reads from the startup log."""
@@ -144,7 +149,7 @@ def lane_command(lane: str, model_file: str, threads: int = 6,
     return (f"cd {DEVICE_PKG} && LD_LIBRARY_PATH={DEVICE_PKG}/lib "
             f"ADSP_LIBRARY_PATH={DEVICE_PKG}/lib ./bin/llama-server "
             f"-m {DEVICE_MODELS}/{model_file} --host 0.0.0.0 --port {LANE_PORT[lane]} "
-            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off"
+            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off --cache-ram 0"
             + (f" -lv {log_level}" if log_level is not None else ""))
 
 

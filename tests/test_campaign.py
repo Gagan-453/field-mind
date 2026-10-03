@@ -75,7 +75,7 @@ def test_call_is_logged_at_once_with_every_field(tmp_path):
     assert REQUIRED_CALL_FIELDS <= set(r)
     assert r["tick"] == 7 and r["episode"] == "ep" and r["lane"] == "npu"
     assert r["model_sha256"] == "5aa3ece50ab33d09a7181888a75f8755f924c662dc99626e7f45440adfeadcdb"
-    assert r["server_flags"] == "-c 4096 -np 1 --device HTP0 -ngl 99 -fit off -lv 4"
+    assert r["server_flags"] == "-c 4096 -np 1 --device HTP0 -ngl 99 -fit off --cache-ram 0 -lv 4"
     assert r["prompt"] == "FACTS F1 F2 case RCA-01" and r["parse_status"] == "ok"
     assert r["stop_reason"] == "stop" and r["timings"]["prompt_ms"] > 0
     assert r["chip_temp"]["cpu_max_c"] == 33.0

@@ -16,6 +16,8 @@ Fixed facts (Phase 0b board setup, `reports/phase0b_board_setup.md`). If the boa
   `libggml-htp-v75.so` (the code the DSP loads; without `ADSP_LIBRARY_PATH` the NPU lane cannot start it).
 - HUMAN DECISION: always `-c 4096 -np 1`, the same for every model and both lanes. Never change it per model.
 - `-fit off` on both lanes (human decision), so the server cannot change the context size or the offload itself.
+- `--cache-ram 0` on both lanes, every model (human decision): the host prompt cache otherwise grows by one KV copy
+  per call until board memory runs out and a call stalls (soak test, 2026-10-03).
 - `-lv 4` on every launch (human rule, measured: it costs under 5%; `bench.board.TIMED_LOG_LEVEL`). At the default log
   level this build prints no offload, buffer or tensor-type lines.
 - Only the files in `bench.board.CANDIDATES` may be loaded, and only if `sha256sum` on the board matches. `start`
