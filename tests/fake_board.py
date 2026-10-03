@@ -15,6 +15,7 @@ subprocess tests):
   temps: [..]                  successive max temperatures; the last one repeats
   adb_drop_at_temp: n          the n-th temperature read reports an adb error
   no_timings: true             the server omits its timings block
+  mem_available_kb: [..]       successive MemAvailable reads (kB); the last one repeats
 """
 from __future__ import annotations
 
@@ -190,6 +191,13 @@ class FakeBoard:
         temps = self.plan.get("temps") or [IDLE_C]
         t = temps[min(self.temp_reads - 1, len(temps) - 1)]
         return {"t": "fake", "cpu_max_c": t, "npu_max_c": t - 1, "n_zones": 2}
+
+    def memory(self) -> dict:
+        """mem_available_kb: successive values from the plan; the last one repeats."""
+        self.mem_reads = getattr(self, "mem_reads", 0) + 1
+        seq = self.plan.get("mem_available_kb") or [6_000_000]
+        return {"mem_available_kb": seq[min(self.mem_reads - 1, len(seq) - 1)],
+                "server_rss_kb": 530_000 if self.running else None, "t": "fake"}
 
     def server_commit(self) -> str:
         return "99b95488c"

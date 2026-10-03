@@ -509,3 +509,31 @@ def test_status_attempt_number_comes_from_the_manifest(tmp_path):
     c2.write_status = spy
     one_episode(c2)
     assert f"running {jid} (attempt 5)" in seen            # not "attempt 1"
+
+
+# ---- memory guard and peak temperature (human decisions 3 and 4) --------------
+def test_memory_guard_restarts_the_lane_before_an_episode_when_under_2gb(tmp_path):
+    c, b = mk(tmp_path, {"mem_available_kb": [2_097_151, 6_000_000]})   # 1 kB under 2 GiB
+    s = one_episode(c)
+    g = s["meta"]["memory_guard"]
+    assert g["restarted"] is True and g["before"]["mem_available_kb"] == 2_097_151
+    assert g["after"]["mem_available_kb"] == 6_000_000 and g["before"]["server_rss_kb"] == 530_000
+    assert len(b.starts) == 2                                 # the first launch + the guard's restart
+    assert c.manifest["lane_restarts"][0]["before_job"] == "B/round1/llama32-3b/dev_A01_fcv_seize"
+
+
+def test_memory_guard_does_nothing_at_2gb_and_never_restarts_inside_an_episode(tmp_path):
+    c, b = mk(tmp_path, {"mem_available_kb": [2_097_152]})               # exactly 2 GiB: not under
+    s = one_episode(c)
+    assert s["meta"]["memory_guard"]["restarted"] is False and "lane_restarts" not in c.manifest
+    assert len(b.starts) == 1
+    assert b.mem_reads == 1                                   # read once, before the episode only
+
+
+def test_peak_in_episode_temperature_is_reported(tmp_path):
+    #            idle x2, gate, then start-of-episode and per-call reads; 93.8 once, mid-episode
+    c, b = mk(tmp_path, {"temps": [33.0, 33.0, 34.0, 35.0, 50.0, 93.8, 60.0]})
+    s = one_episode(c)
+    p = s["meta"]["chip_temp_peak"]
+    assert p["cpu_max_c"] == 93.8 and p["npu_max_c"] == 92.8
+    assert p["n_reads"] == s["meta"]["n_calls"] + 2           # start + every call + end

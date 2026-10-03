@@ -88,7 +88,12 @@ THERMAL_MARGIN_C = 5.0  # gate: within 5 C of the measured idle temperature
 THERMAL_MAX_WAIT_S = 900
 THERMAL_POLL_S = 15
 MAX_INFRA_RETRIES = 3
-CONFIRM_LOG_LEVEL = 4   # the offload-confirmation launch always logs at -lv 4
+CONFIRM_LOG_LEVEL = 4
+# HUMAN DECISION 2026-10-03 (memory guard): before each episode, if board
+# MemAvailable is under 2 GB, restart the lane before that episode. Never inside
+# an episode. 2 GB read as 2 GiB = 2,097,152 kB (MemAvailable is in kB): the
+# stricter of the two readings, so it restarts slightly earlier, never later.
+MEM_GUARD_KB = 2 * 1024 * 1024   # the offload-confirmation launch always logs at -lv 4
 EXIT_OK, EXIT_INFRA, EXIT_STOP = 0, 2, 3
 
 
@@ -155,6 +160,17 @@ class RealBoard:
 
     def temperature(self) -> dict:
         return _board.chip_temperature()
+
+    def memory(self) -> dict:
+        """Server RSS and board MemAvailable, in kB."""
+        p = _board._adb("shell", "grep MemAvailable /proc/meminfo; "
+                                 "pid=$(pidof llama-server); "
+                                 "[ -n \"$pid\" ] && grep VmRSS /proc/$pid/status")
+        vals = dict(re.findall(r"(MemAvailable|VmRSS):\s+(\d+) kB", p.stdout))
+        if "MemAvailable" not in vals:
+            raise InfraFailure(f"adb: MemAvailable unreadable ({p.stderr[:100]!r})")
+        return {"mem_available_kb": int(vals["MemAvailable"]),
+                "server_rss_kb": int(vals["VmRSS"]) if "VmRSS" in vals else None, "t": now()}
 
     def server_commit(self) -> str | None:
         lib = f"{_board.DEVICE_PKG}/lib"
@@ -268,6 +284,15 @@ class CallContext:
         self.use_cache = True
         self.log: CallLog | None = None
         self.events: list[dict] = []
+        self.peak: dict = {}
+
+    def note_temp(self, temp: dict) -> None:
+        """Peak in-episode chip temperature (human decision 3: reported, not a gate)."""
+        for k in ("cpu_max_c", "npu_max_c"):
+            v = temp.get(k)
+            if v is not None and (self.peak.get(k) is None or v > self.peak[k]):
+                self.peak[k] = v
+        self.peak["n_reads"] = self.peak.get("n_reads", 0) + 1
 
     def set_tick(self, k: int) -> None:
         self.tick = k
@@ -374,6 +399,7 @@ class CampaignBackend(LLMBackend):
         temp = c.board.temperature()
         if "error" in temp or temp.get("cpu_max_c") is None:
             infra(f"adb: chip temperature unavailable ({temp.get('error', 'no zones')})")
+        c.note_temp(temp)
         rec = {"raw_reply": text, "reasoning_content": msg.get("reasoning_content"),
                "parse_status": parse_status(role, text), "stop_reason": stop_reason,
                "prompt_n": num("prompt_n", int), "predicted_n": num("predicted_n", int),
@@ -591,6 +617,23 @@ class Campaign:
         if self.server_commit is None:
             self.server_commit = getattr(self.board, "server_commit", lambda: None)()
 
+    def memory_guard(self, tag: str, jid: str) -> dict:
+        """Log server RSS and board MemAvailable; restart the lane if MemAvailable
+        is under MEM_GUARD_KB. Called only between episodes."""
+        before = self.board.memory()
+        out = {"threshold_kb": MEM_GUARD_KB, "before": before, "restarted": False}
+        if before["mem_available_kb"] < MEM_GUARD_KB:
+            self.board.stop()
+            self.lane_state = None
+            self.ensure_lane(tag, self.timed_log_level())
+            out.update(restarted=True, after=self.board.memory())
+            self.manifest.setdefault("lane_restarts", []).append(
+                {"t": now(), "before_job": jid, "reason": "memory guard", **out})
+            self.save()
+            self.write_status(tag, f"memory guard: MemAvailable {before['mem_available_kb'] // 1024} MB "
+                                   f"< {MEM_GUARD_KB // 1024} MB, lane restarted before {jid}")
+        return out
+
     def timed_log_level(self) -> int | None:
         return _board.TIMED_LOG_LEVEL
 
@@ -670,16 +713,20 @@ class Campaign:
         def fn() -> Path:
             gate = self.thermal_gate()
             self.ensure_lane(tag, self.timed_log_level())
+            guard = self.memory_guard(tag, jid)              # before the episode, never inside it
             c = self.ctx
             c.stage, c.phase, c.episode, c.tick, c.use_cache, c.events = stage, phase, episode, None, True, []
+            c.peak = {}
             live = self.live_log(jid)
             c.log = CallLog(live)
             cfg = self.episode_cfg(episodes_dir)
             t_start, net = self.board.temperature(), network_state()
             self._max_c(t_start)
+            c.note_temp(t_start)
             run = run_episode(Episode(ROOT / episodes_dir / episode), cfg, on_tick=c.set_tick)
             t_end = self.board.temperature()
             self._max_c(t_end)
+            c.note_temp(t_end)
             c.log.close()
             c.log = None
             hits = null_cache_hit_timings(run, c.events)
@@ -693,6 +740,7 @@ class Campaign:
                     "git_commit": git_commit_hash(), "code_hash": code_hash(),
                     "llamacpp_commit": self.server_commit, "config": cfg,
                     "chip_temp_start": t_start, "chip_temp_end": t_end, "thermal_gate": gate,
+                    "chip_temp_peak": dict(c.peak), "memory_guard": guard,
                     "network": net, "n_calls": len(c.events), "n_cache_hits": hits,
                     "finished": now(), "energy_mwh": None}
             atomic_write(Path(base + ".run.json.gz"), gzip.compress(json.dumps(run).encode()))

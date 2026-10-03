@@ -226,6 +226,18 @@ was NOT CONFIRMED as written, and my own 2% margin (written into `bench/soak_cac
 6. **Open item, to be tested after the campaign:** replies at temperature 0 and seed 0 differed between soak runs A
    and B on 10 of 37 calls. **Until tested, no claim is made that replies are reproducible across launches.**
 
+### Part 3 as implemented
+- `--cache-ram 0` in `bench.board.lane_command` (the only place a lane command is built); test that every lane, model
+  and log level has it; mutation (flag removed) caught by 3 tests.
+- `results/board` moved to `results/board_aborted_20261003` with a README; committed in full (1.1 MB).
+- Peak in-episode temperature: `meta.chip_temp_peak` in every episode summary (max CPU and NPU over the start, every
+  live call and the end reading; cache hits make no reading). Reported, not a gate.
+- Memory guard: `meta.memory_guard` in every episode summary (server RSS and MemAvailable before the episode). Under
+  2 GB the lane is stopped and restarted before the episode; the restart goes into the manifest (`lane_restarts`) and
+  STATUS.md. "2 GB" is implemented as 2 GiB = 2,097,152 kB, the stricter reading (restarts slightly earlier). The guard
+  runs only before an episode, so it can never restart a lane inside one. Six mutations caught (threshold, `<=`, no
+  restart, guard not called, peak not updated, peak keeping the minimum).
+
 ## Soak test: memory vs heat (2026-10-03, 22:15-22:53) — reading NOT CONFIRMED, stopped
 `bench/soak_cache.py` (committed before the runs, `1dda41c`). Fresh 3B NPU lane per run, campaign request body,
 the same 50 prompts in the same order: the first 50 distinct prompts of the crashed job
