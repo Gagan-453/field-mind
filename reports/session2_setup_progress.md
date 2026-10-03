@@ -135,3 +135,9 @@ Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunc
   4 attempts, exit 2, stop reason in STATUS.md; rule stop -> exit 3. Mutation (fix removed) caught by the exit-2 test.
 - `results/board/` holds the uncommitted state of the crashed campaign (stage A committed in `afde367`; stage B
   partial). Untouched until Part 3.
+- Part 1b DONE (`b2e0a6e`): per-attempt call logs (`tmp/<job>.attemptN.calls.jsonl`, opened "x"); a failed or killed
+  attempt's log is archived to `results/board/attempts/` and listed in the manifest. Mutations caught: "w" mode,
+  no archive after failure, no archive after a kill.
+- Part 1c DONE: STATUS.md shows the manifest's attempt number (code in `b2e0a6e`, test in the next commit; mutation
+  caught). Full suite: 140 passed.
+- Next: Part 2 soak test on the board.
