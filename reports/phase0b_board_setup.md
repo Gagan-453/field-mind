@@ -93,6 +93,35 @@ tokens parsed). Evidence: `~/fieldmind-build/tokcheck/`.
   not covered. (2) The ~6,400 differing scores and token types between our file and Google's GGUF are unexplained,
   with no effect on any of the 2,084 prompts.
 
+## Smoke test on the board (Llama 3.2 3B, new pure file, NPU lane, `-c 4096 -np 1 -fit off`)
+GGUFs pushed to `/data/local/tmp/llm/`; `sha256sum` on the board equals the laptop value for all 4. Lanes load only
+files in `bench.board.CANDIDATES` whose board sha256 matches (tested), so the old impure file cannot be loaded.
+
+### B. Offload and where the final logits step runs
+One-off diagnostic launch (`GGML_SCHED_DEBUG=2`, `-lv 5`, one 38-token request; not a timed run).
+Log: `logs/smoke_B_diag_sched_npu.log`.
+
+| item | value from the startup log |
+|---|---|
+| tensor types (server's own loader) | f32 58, q4_0 196, q8_0 1: identical to `bench.gguf_types` |
+| layers offloaded to HTP0 | **29 of 29** (27 repeating + the output layer; `offloading output layer to GPU`) |
+| HTP0 model buffer | **1,911.90 MiB** (nonzero) |
+| CPU model buffer | 399.23 MiB |
+| HTP0 KV buffer / compute buffer | 448.00 MiB / 64.01 MiB |
+| slots, context | `n_slots = 1`, `n_ctx_slot = 4096` |
+
+- **Where the token embedding lives: in both places.** The loader keeps one copy on the CPU
+  (`'token_embd.weight' (q8_0) ... using CPU`) for the input lookup, and a second copy inside the HTP0 buffer for the
+  tied output layer. Independent check: the Q8_0 table is 128,256 x 3,072 values at 34 bytes per 32 values =
+  399.23 MiB, equal to the CPU buffer; and the HTP0 buffer (1,911.90 MiB) equals llama-quantize's total quant size
+  for ALL tensors (1,911.90 MiB), which is only possible if the embedding is counted there too.
+- **The final logits step runs on HTP0.** Scheduler assignment, every graph: `node #873 (MUL_MAT): result_output
+  [HTP0]`, with inputs `token_embd.weight (399M) [HTP0]` and `result_norm [HTP0]`.
+- **The only CPU operation is the input embedding lookup** (`GET_ROWS embd`, one per graph, 10 of 10 graphs). Every
+  other node is on HTP0: per graph 197 MUL_MAT (196 weight matrices + the logits), plus RMS_NORM, MUL, ROPE, ADD,
+  SWIGLU, FLASH_ATTN.
+- Limit: this is the scheduler's assignment, printed by the server. It is not a hardware trace of the DSP.
+
 ## What was built
 - **llama.cpp pin:** `ggml-org/llama.cpp` tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`.
 - **Android package:** container `ghcr.io/snapdragon-toolchain/arm64-android:v0.7` (digest `sha256:c012b817...`,
@@ -157,6 +186,13 @@ None: no physical response was modelled in this stage.
 8. **`logs/` added to `.gitignore`.**
 
 ## Disagreements recorded, not resolved
+- **The premise of the "only Q4_0 or Q8_0" rule does not hold at the pinned llama.cpp, by source.** CLAUDE.md says
+  K-quants silently fall back to the CPU on HTP. At commit `99b9548`, `ggml_hexagon_supported_mul_mat`
+  (`ggml/src/ggml-hexagon/ggml-hexagon.cpp`) accepts Q4_0, Q4_1, Q8_0, IQ4_NL, MXFP4 and Q2_K-Q6_K weights. So the
+  old impure file (Q4_1, Q6_K) may well run fully on HTP0 with this build. **Not tested on the board** (no request
+  was timed or traced on that file). The rule and the recipe are human decisions and are unchanged; the recipe still
+  gives one uniform, reproducible file per model. Whether the rule's stated reason should be reworded is the
+  human's call.
 - Gemma tokenizer arrays: against Google's own GGUF, my conversion differs in 30 token spellings (ids 138-167, `▁`
   runs vs spaces), 6,414 scores and 6,407 token types. The sentencepiece `tokenizer.model` is byte-identical, so I
   attribute this to the converter version. **Not tested** (would need Google's file converted by the pinned converter,
