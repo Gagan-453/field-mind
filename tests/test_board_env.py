@@ -62,3 +62,43 @@ def test_lane_command_env_and_offload():
     assert "HTP0" not in cpu
     # loader lines (type counts, offloaded layers, HTP0 buffer) need log level 4
     assert npu.endswith("-fit off -lv 4") and cpu.endswith("-fit off -lv 4")
+
+
+def _fake_adb(sha_on_board):
+    calls = []
+
+    def fake(*args, serial="", timeout=60):
+        calls.append(args)
+        out = f"{sha_on_board}  /data/local/tmp/llm/x\n" if "sha256sum" in args[-1] else ""
+        return subprocess.CompletedProcess(args, 0, out, "")
+    return fake, calls
+
+
+def test_lane_refuses_a_file_outside_the_manifest(monkeypatch):
+    import pytest
+    fake, calls = _fake_adb("0" * 64)
+    monkeypatch.setattr(board, "_adb", fake)
+    # the old impure file still on the board, reached by a relative path
+    with pytest.raises(board.ModelNotAllowed):
+        board.start_lane("npu", "../geniex/models/Llama-3.2-3B-Instruct-Q4_0.gguf")
+    assert not any("llama-server" in a[-1] for a in calls)      # nothing was launched
+
+
+def test_lane_refuses_a_wrong_sha256_and_accepts_the_right_one(monkeypatch):
+    import pytest
+    name = "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf"
+    fake, calls = _fake_adb("f" * 64)
+    monkeypatch.setattr(board, "_adb", fake)
+    with pytest.raises(board.ModelNotAllowed):
+        board.start_lane("npu", name)
+    assert not any("llama-server" in a[-1] for a in calls)
+    fake, calls = _fake_adb(board.CANDIDATES[name])
+    monkeypatch.setattr(board, "_adb", fake)
+    info = board.start_lane("npu", name)
+    assert info["model_sha256"] == board.CANDIDATES[name]
+    assert any("llama-server" in a[-1] for a in calls)
+
+
+def test_log_level_is_optional():
+    assert " -lv " not in board.lane_command("npu", "m.gguf", log_level=None)
+    assert board.lane_command("npu", "m.gguf", log_level=None).endswith("-fit off")

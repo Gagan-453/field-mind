@@ -78,8 +78,47 @@ N_PARALLEL = 1
 
 LANE_PORT = {"npu": 8080, "cpu": 8081}
 
+# The only model files a lane may load: the Phase 0b candidates, built by
+# bench/build_candidate_gguf.sh (every matrix Q4_0, token embedding and output
+# Q8_0). start_lane() checks the file's sha256 ON THE BOARD against this table
+# before launching, so the old impure file still on the board can never be
+# loaded by accident. Values: reports/phase0b_board_setup.md.
+CANDIDATES = {
+    "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf":
+        "5aa3ece50ab33d09a7181888a75f8755f924c662dc99626e7f45440adfeadcdb",
+    "Qwen3-1.7B-Q4_0-pure-embq8.gguf":
+        "4a4ebf10354822c45dfa38b9248a42a59ebae53c0ad992147b881dd7ed09c56c",
+    "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf":
+        "3a229fece56839877093042f0699939d9c4a65691dda81999f80ff27dae2cc5f",
+    "Qwen2.5-0.5B-Instruct-Q4_0-pure-embq8.gguf":
+        "00d3bb3f9210f132ef246cc5db2a7d8c9f8b63785679a95aef3558875b50e341",
+}
 
-def lane_command(lane: str, model_file: str, threads: int = 6) -> str:
+
+class ModelNotAllowed(RuntimeError):
+    pass
+
+
+def board_sha256(model_file: str, serial: str = "") -> str:
+    out = _adb("shell", f"sha256sum {DEVICE_MODELS}/{model_file}", serial=serial,
+               timeout=300).stdout.split()
+    return out[0] if out else ""
+
+
+def check_model(model_file: str, serial: str = "") -> str:
+    """Raise unless model_file is a known candidate AND its sha256 on the board
+    equals the recorded one. Returns the sha256."""
+    want = CANDIDATES.get(model_file)
+    if want is None:
+        raise ModelNotAllowed(f"{model_file!r} is not in bench.board.CANDIDATES")
+    got = board_sha256(model_file, serial)
+    if got != want:
+        raise ModelNotAllowed(f"{model_file}: board sha256 {got or '(missing)'} != {want}")
+    return got
+
+
+def lane_command(lane: str, model_file: str, threads: int = 6,
+                 log_level: int | None = 4) -> str:
     """The board-side shell command for one lane (no redirection, no &).
     LD_LIBRARY_PATH and ADSP_LIBRARY_PATH both point at the package's lib/
     folder: it holds libggml-hexagon.so (host side) and libggml-htp-v75.so (the
@@ -97,7 +136,8 @@ def lane_command(lane: str, model_file: str, threads: int = 6) -> str:
     return (f"cd {DEVICE_PKG} && LD_LIBRARY_PATH={DEVICE_PKG}/lib "
             f"ADSP_LIBRARY_PATH={DEVICE_PKG}/lib ./bin/llama-server "
             f"-m {DEVICE_MODELS}/{model_file} --host 0.0.0.0 --port {LANE_PORT[lane]} "
-            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off -lv 4")
+            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off"
+            + (f" -lv {log_level}" if log_level is not None else ""))
 
 
 def _adb(*args: str, serial: str = "", timeout: float = 60) -> subprocess.CompletedProcess:
@@ -110,15 +150,19 @@ def lane_log_path(lane: str) -> str:
     return f"{DEVICE_LOGS}/lane_{lane}.log"
 
 
-def start_lane(lane: str, model_file: str, threads: int = 6, serial: str = "") -> dict:
+def start_lane(lane: str, model_file: str, threads: int = 6, serial: str = "",
+               log_level: int | None = 4) -> dict:
     """Start one lane in the background on the board and forward its port.
+    Refuses any file that is not a known candidate with the recorded sha256.
     Returns the command and the LAPTOP start time (the board clock is wrong)."""
-    cmd = lane_command(lane, model_file, threads)
+    sha = check_model(model_file, serial)
+    cmd = lane_command(lane, model_file, threads, log_level)
     port = LANE_PORT[lane]
     _adb("shell", f"mkdir -p {DEVICE_LOGS}", serial=serial)
     _adb("shell", f"nohup sh -c '{cmd}' > {lane_log_path(lane)} 2>&1 &", serial=serial)
     _adb("forward", f"tcp:{port}", f"tcp:{port}", serial=serial)
     return {"lane": lane, "started_laptop_time": laptop_time(), "command": cmd,
+            "model_file": model_file, "model_sha256": sha,
             "board_log": lane_log_path(lane), "url": f"http://localhost:{port}"}
 
 

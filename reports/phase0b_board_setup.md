@@ -62,7 +62,7 @@ single-agent prompt is ~2484 tokens and context size changes NPU speed. Code: `b
   logits step run on HTP0 with a nonzero HTP0 buffer; the Gemma tokenizer check gave identical IDs on every dev
   prompt; the Gemma call stopped by itself. Otherwise stop and report.
 
-## Step A: Gemma tokenizer check (laptop only) — MISMATCH against Google's GGUF, stopped before the push
+## Step A: Gemma tokenizer check (laptop only) — passes against the accepted reference (Hugging Face tokenizer)
 Prompts: no dev prompts were recorded on this machine, so they were recorded now: mock dev run at HEAD with
 `--log-prompts` (36 dev episodes; 2,174 prompts = 1,982 diagnostician + 192 verifier; 2,084 distinct). Verifier
 prompts embed the mock's diagnostician answer, so they are real prompt shapes, not the prompts a real model would
@@ -85,9 +85,13 @@ tokens parsed). Evidence: `~/fieldmind-build/tokcheck/`.
   plain spaces in ours (id 138 = 2, id 139 = 3, ..., id 167 = 31); token type 1 (normal) in Google's, 4
   (user-defined) in ours. Four of them occur in the dev prompts (ids 138, 139, 151, 155; 18,380 occurrences in total)
   and are produced identically by all three tokenizers.
-- **Not decided here.** The rule was "identical IDs on every dev prompt against the reference compared against; any
-  mismatch = stop". That reference fails on every prompt, so the push and the smoke test have not been run. The
-  question for the human: is the Hugging Face tokenizer (2,084 / 2,084) the accepted reference?
+- **HUMAN DECISION (2026-10-03): the Hugging Face tokenizer is the accepted reference for Gemma.** Reason: its
+  `tokenizer.model` is sha256-identical to Google's, so it is the tokenizer the model was trained with; Google's GGUF
+  is a converted copy, and its mismatch is caused by a missing `add_space_prefix` key under this llama.cpp version
+  (tested above). **The check passes 2,084 of 2,084.**
+- **Limits of this check.** (1) It covers input prompts recorded with the mock, so real-model verifier prompts are
+  not covered. (2) The ~6,400 differing scores and token types between our file and Google's GGUF are unexplained,
+  with no effect on any of the 2,084 prompts.
 
 ## What was built
 - **llama.cpp pin:** `ggml-org/llama.cpp` tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`.
