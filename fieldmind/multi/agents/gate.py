@@ -31,6 +31,7 @@ from ...agent.orchestrator import (fold_diagnosis, initial_claims,
                                    quiet_deadline_miss, rung_marker,
                                    stamp_shown_confidence, tick_deadline_miss)
 from ...schemas import Assessment
+from .. import compact
 
 NAME = "gate"
 
@@ -132,6 +133,14 @@ class GateMemoryAgent:
         env = dataclasses.replace(env, payload=payload,
                                   cited_facts=[stamp(c) for c in env.cited_facts])
         return env, [dataclasses.replace(f, id=stamp(f.id)) for f in facts]
+
+    def check_notefact(self, result, vocab) -> tuple[bool, str]:
+        """A text-reader answer may reach the board only if the call succeeded
+        and every value is from the vocabulary. Returns (ok, why)."""
+        env = result.envelope
+        if env.status != "ok":
+            return False, f"{env.status}: {env.error}"
+        return compact.check_note_answer(env.payload, vocab)
 
     def apply_verdict(self, bb, asmt: Assessment, claims: dict, result,
                       now_tick: int) -> dict:

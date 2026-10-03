@@ -161,6 +161,24 @@ multi:
   lanes:
     npu: {prefill_tok_s: 909, decode_tok_s: 13.9, url: "http://localhost:8080"}
     cpu: {prefill_tok_s: 126, decode_tok_s: 42, url: "http://localhost:8081"}
+  # ---- Phase 2: shrunk prompts and short answers. Every switch off = the
+  # Phase 1 path (the single agent's prompts, byte for byte).
+  compact:
+    text_reader: true               # notes -> note-facts (one model call per note)
+  # Answer caps, tokens. CITED: plan "Model agents" (p.5) and CLAUDE.md.
+  answer_caps: {diagnostician: 60, verifier: 30, text_reader: 50, query: 120}
+  # The text reader's vocabulary. DESIGN CHOICE (not derived): the kinds, the
+  # states and the three extra subjects were written from the 20 distinct note
+  # texts of the DEV set (reports/multi_phase2_prompt_shrink.md, note-fact
+  # coverage). Subjects also include the six tags and the asset model's
+  # equipment ids. Not tuned on the reporting episodes. max_pairs 3 keeps the
+  # worst-case answer at 36-40 tokens on the four candidate tokenizers.
+  text_reader:
+    kinds: [OBS, MAINT, INSTR, OTHER]
+    states: [UP, DOWN, HIGH, LOW, NORMAL, STUCK, OPEN, CHOKED, WET, LEAK,
+             NO_LEAK, SERVICED, UNCHECKED, TRIPPED, MENTIONED]
+    extra_subjects: [MAKEUP_WATER, COAL, COAL_CV, EFFICIENCY]
+    max_pairs: 3
 
 # ---------------------------------------------------------------------------
 #  Deterministic check thresholds  (Plan Appendix A.5)

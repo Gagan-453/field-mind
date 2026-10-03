@@ -151,6 +151,7 @@ def test_episode_every_result_stamped_with_its_tick_and_decisions_match():
 
     cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
     cfg["llm"]["backend"] = "mock"
+    cfg["multi"]["compact"] = {}                   # Phase 1 path: parity with single
     ep = Episode(ROOT / "data/episodes_dev/dev_A01_fcv_seize")
     single = run_episode(ep, cfg)
     multi = run_episode(ep, cfg, arch="multi")

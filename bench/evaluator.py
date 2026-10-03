@@ -189,7 +189,40 @@ def t3_faithfulness(run: dict) -> dict:
                 cited += 1
                 valid += (c in ids)
     return {"n_citations": cited,
-            "faithfulness": round(valid / cited, 3) if cited else 1.0}
+            "faithfulness": round(valid / cited, 3) if cited else 1.0,
+            **t3_rel(run)}
+
+
+def t3_rel(run: dict) -> dict:
+    """Q3_rel (Phase 2 human decision 4): of the fact citations the MODEL gave
+    for a case, the share that are in the DETERMINISTIC supports of that case
+    on that tick (`belief_supports`, written by the harness).
+
+    Read from the diagnostician's own answer, before the gate: the old answer
+    format carries case and supports per hypothesis, the line-number format
+    carries them under payload["expanded"]. A line number that maps to no fact
+    is an invented citation and counts against. None when the run has no
+    `belief_supports` (older run files) or the model made no citation.
+    """
+    if not any("belief_supports" in a for a in run["assessments"]):
+        return {"rel": None, "n_rel_citations": 0}
+    cited = ok = 0
+    for a in run["assessments"]:
+        det = a.get("belief_supports", {})
+        for e in a.get("envelopes", []):
+            if e.get("agent") != "diagnostician" or e.get("status") != "ok":
+                continue
+            p = e.get("payload") or {}
+            hyps = (p.get("expanded") or {}).get("hypotheses", p.get("hypotheses", []))
+            for h in hyps or []:
+                if not h.get("case_ref"):
+                    continue
+                allowed = set(det.get(h["case_ref"], []))
+                for c in h.get("supports", []):
+                    cited += 1
+                    ok += (str(c).rpartition(".")[2] in allowed)
+    return {"rel": round(ok / cited, 3) if cited else None,
+            "n_rel_citations": cited}
 
 
 def t4_actions(run: dict) -> dict:
@@ -370,6 +403,7 @@ def aggregate(evals: list[dict]) -> dict:
             sorted(e["episode_id"] for e in evals
                    if e["family"] != "N" and not e["T2_root_cause"].get("applicable")),
         "Q3_faithfulness": mean("T3_faithfulness", "faithfulness"),
+        "Q3_rel": mean("T3_faithfulness", "rel"),
         "Q4_action_precision": mean("T4_actions", "precision"),
         "Q4_action_recall": mean("T4_actions", "recall"),
         "Q4_n_episodes_scored": len(q4_scored),

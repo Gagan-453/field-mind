@@ -137,6 +137,8 @@ class MockBackend(LLMBackend):
             payload = self._mock_diagnosis(hint)
         elif role == "verifier":
             payload = self._mock_verification(hint)
+        elif role == "text_reader":
+            payload = self._mock_text_read(hint)
         else:
             payload = {"note": "mock backend, no role-specific behaviour"}
 
@@ -176,6 +178,16 @@ class MockBackend(LLMBackend):
             "hypotheses": hyps,
             "unexplained": [],
         }
+
+    @staticmethod
+    def _mock_text_read(hint: dict) -> dict:
+        """Echo the note's own metadata in the text reader's answer format
+        (multi-agent Phase 2). It does not read the note text, so it says
+        nothing about text-reader quality."""
+        note = hint.get("note", {})
+        tags = [t for t in note.get("tags", [])][:3]
+        kind = "INSTR" if note.get("injection") else ("OBS" if tags else "OTHER")
+        return {"k": kind, "s": [[t, "MENTIONED"] for t in tags]}
 
     @staticmethod
     def _mock_verification(hint: dict) -> dict:

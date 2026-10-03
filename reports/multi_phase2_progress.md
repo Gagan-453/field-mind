@@ -8,7 +8,7 @@ Updated and committed after every commit. Mock backend only; no accuracy claim.
 | 1 | Phase 1 close-out: hard-stage timing script committed and re-run | done | `bench/time_single_hard.py`; mean 0.276 -> 0.299 / 0.290 ms, p50 0.252 -> 0.256 / 0.257; max does not reproduce (0.778 -> 1.808 / 1.609, unexplained, one tick); over 200 ms: 0 |
 | 2 | fixed placement in the scheduler | done | dev, mock: fixed vs earliest finish 0 differences, prompt logs byte-identical (sha `6e9b748a`, same as Phase 1); fixed vs Phase 1 multi and single 0 differences; jobs on lanes: diagnostician npu 1,982, verifier cpu 192; 15 new tests, 169 pass; 5 mutations caught |
 | 3 | real tokenizer counts; 60-token answer check. **STOP and report** | done, **stop rule tripped** | `bench/token_count.py`, 4 tokenizers pinned by sha256; Phase 1 dev diagnostician prompts: mean 1,866 to 1,894, max 2,103 to 2,150 real tokens, 1,980 of 1,982 over on every tokenizer; llama.cpp cross-check 0 of 81 texts differ on 3 tokenizers; 28 new tests, 197 pass; 8 mutations caught. **Worst-case ID answer is 89 / 105 / 111 / 105 tokens against a cap of 60** |
-| 4 | text reader (notes), record-facts by code, note-fact coverage check | pending | |
+| 4 | text reader (notes), record-facts by code, note-fact coverage check | done, **stop rule tripped** | dev, mock: decisions 0 differences vs Phase 1; diagnostician and verifier prompts byte-identical (sha `6e9b748a`); single unchanged; 259 text-reader calls = 259 notes, 0 for records; text prompts max 392 to 414 tokens; 24 new tests, 223 pass; 21 mutations caught (2 after strengthening tests). **Coverage: A03 and B03 (tier B) keep their note content only in part** |
 | 5 | compact diagnostician with per-section switches | pending | |
 | 6 | compact verifier | pending | |
 | 7 | dev gate and report. **STOP and report** | pending | |
@@ -27,3 +27,8 @@ Updated and committed after every commit. Mock backend only; no accuracy claim.
 3. **Resolved by the human (amendment 2).** Option (ii) for the confidence; G1 split into G1a (schema switch
    only, predicted counts committed first) and G1b (all switches, 0 differences against G1a). Item 3 answered:
    the 1,154 cases are retired by the belief floor (0.08) in the same tick they are retrieved.
+4. **After commit 4 (the note-fact coverage stop rule).** Two tier-B dev episodes that need notes, A03 and B03,
+   keep their discriminating note content only in part: "bfp A suction pr on lower side" can only be written as
+   BFP_A LOW, and the local gauge-glass reading becomes drum_level NORMAL. Nothing is lost outright; the build
+   stopped rather than judge "partly" itself. The coverage table, the kind enum and three options are in the
+   report. Commits 5 to 7 have not started and no G1a run has been made.

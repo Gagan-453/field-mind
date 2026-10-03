@@ -41,6 +41,10 @@ class Job:
     start_s: float | None = None
     finish_s: float | None = None
     replaced: bool = False
+    # Phase 2: what each line number in the prompt stood for (cases, facts,
+    # notes), fixed when the prompt was built. The gate maps an answer through
+    # THIS, never through the board's state when the answer arrives.
+    line_map: dict | None = field(default=None, repr=False)
 
     def to_dict(self) -> dict:
         return {"job": self.job_id, "agent": self.agent,

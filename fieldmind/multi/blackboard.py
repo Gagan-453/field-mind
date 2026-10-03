@@ -66,10 +66,16 @@ OWNERS: dict[str, str] = {
     "assessment": "gate",       # the published Assessment
     "equipment": "gate",        # WorldModel.equipment (not written in Phase 1)
     "notes_seen": "gate",       # WorldModel.notes_seen (not written in Phase 1)
+    # Phase 2. Note-facts: one per engineer note, written by the text reader
+    # AFTER the gate has checked the model's answer (plan p.12). Record-facts:
+    # written by code from records.json, no model call (human decision a).
+    "notefacts": "text_reader",
+    "recordfacts": "retriever",
 }
 
-# Every agent that takes a step. The model agents own no section: their answers
-# come back as Results and only the gate writes them onto the board.
+# Every agent that takes a step. The diagnostician and verifier own no section:
+# their answers come back as Results and only the gate writes them onto the
+# board. The text reader owns `notefacts` but writes only gate-checked answers.
 MODEL_AGENTS = ["diagnostician", "verifier"]
 AGENTS = sorted(set(OWNERS.values())) + MODEL_AGENTS
 
@@ -194,6 +200,8 @@ class Blackboard:
             "diagnosis": None,
             "verdict": None,
             "assessment": None,
+            "notefacts": {},            # note id -> note-fact (or a rejection)
+            "recordfacts": [],
         }
         self._active: str | None = None
         self.writes: dict[str, int] = {s: 0 for s in OWNERS}

@@ -195,6 +195,12 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
             recorder.tick = k
         asmt = orch.tick(wm, window, k, ts, now_s=t_end)
         d = asmt.to_dict()
+        # Q3_rel (Phase 2): the DETERMINISTIC supports of every case belief
+        # holds this tick, read from the world model after the tick. Both
+        # arches; nothing in fieldmind/agent/ writes or reads it.
+        d["belief_supports"] = ({} if asmt.triage == "QUIET" else
+                                {h.case_ref: list(h.supports)
+                                 for h in wm.hypotheses if h.case_ref})
         if arch == "multi":
             d["multi"] = orch.last_telemetry   # jobs, lanes, P0 time; not compared
         assessments.append(d)
@@ -236,4 +242,6 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
     }
     if arch == "multi":
         out["multi"] = orch.run_telemetry()
+        if orch.text is not None:           # key present only when the reader is on
+            out["text_calls"] = out["multi"]["text_calls"]
     return out

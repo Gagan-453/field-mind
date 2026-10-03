@@ -29,11 +29,14 @@ from __future__ import annotations
 import time
 
 from ..agent.orchestrator import top_confidence
+from ..schemas import TAGS
+from . import compact
 from ..runtime.llm_backend import make_backend
 from .agents.diagnostician import DiagnosticianAgent
 from .agents.gate import GateMemoryAgent
 from .agents.retriever import RetrieverAgent
 from .agents.sensor import SensorAgent
+from .agents.text_reader import TextReaderAgent
 from .agents.triage import TriageAgent
 from .agents.verifier import VerifierAgent
 from .blackboard import Blackboard
@@ -55,6 +58,13 @@ class MultiOrchestrator:
         self.diag = DiagnosticianAgent(diag, acfg)
         self.ver = VerifierAgent(ver, acfg)
         self.gate = GateMemoryAgent(gate, ver, acfg)
+        self.compact = mcfg.get("compact") or {}
+        self.text = None
+        if self.compact.get("text_reader"):
+            vocab = compact.NoteVocab(TAGS, retriever.asset.equipment,
+                                      mcfg["text_reader"])
+            self.text = TextReaderAgent(diag.backend, retriever.notes, vocab, mcfg,
+                                        log_prompts=bool(acfg.get("log_prompts")))
         self.operator_query = ""
         self.rung = 0                       # ladder not built (Session 6)
         self.bb: Blackboard | None = None
@@ -87,7 +97,10 @@ class MultiOrchestrator:
             with bb.step("gate"):
                 self.gate.publish_quiet(bb, asmt, tick_no, state, check_ms, t_tick)
             p0 = (time.perf_counter() - t_tick) * 1000
-            self._record(tick_no, p0, [], None)
+            # A note can arrive on a quiet tick. It is read then, AFTER the
+            # assessment is out: the tick never waits for a model.
+            text = self._read_notes(bb, tick_no, now_s, facts)
+            self._record(tick_no, p0, [], None, text=text)
             return asmt
 
         with bb.step("sensor"):
@@ -101,6 +114,9 @@ class MultiOrchestrator:
         p0 = (time.perf_counter() - t_tick) * 1000   # deterministic assessment out
 
         # ---------------- model jobs (lockstep) ---------------------------
+        # Notes first: in lockstep every note that has arrived is read before
+        # the diagnosis prompt is built (this does NOT hold in real time).
+        text = self._read_notes(bb, tick_no, now_s, facts)
         results = []
         llm_used = False
         submit_s = now_s
@@ -136,11 +152,37 @@ class MultiOrchestrator:
             hard_ms = self.gate.finalize(bb, asmt, claims, facts, retrieved,
                                          state, tick_no, check_ms, llm_used,
                                          t_tick)
-        self._record(tick_no, p0, results, p0_asmt, hard_ms)
+        self._record(tick_no, p0, results, p0_asmt, hard_ms, text=text)
         return asmt
 
     # ===================================================================
-    def _record(self, tick, p0_ms, results, p0_asmt, hard_ms=None) -> None:
+    def _read_notes(self, bb, tick: int, now_s: float, facts) -> list[dict]:
+        """One text-reader job per note that has arrived and is unread. The
+        gate checks each answer; the text reader writes the checked note-fact."""
+        if self.text is None:
+            return []
+        notes = self.text.arrivals(bb, now_s)
+        if not notes:
+            return []
+        active = {t for f in facts for t in f.tags if f.severity != "INFO"}
+        with bb.step("scheduler"):
+            jobs = [self.text.make_job(bb, self.scheduler, tick, n, active, now_s)
+                    for n in notes]
+            for job in jobs:
+                self.scheduler.submit(job)
+            bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
+            got = self.scheduler.run_lockstep(now_s)
+        out = []
+        for r in got:
+            checked = self.gate.check_notefact(r, self.text.vocab)
+            with bb.step("text_reader"):
+                entry = self.text.accept(bb, r, checked)
+            out.append({"notefact": entry, "envelope": r.envelope.to_dict(),
+                        "result": r.telemetry()})
+        return out
+
+    def _record(self, tick, p0_ms, results, p0_asmt, hard_ms=None,
+                text=None) -> None:
         self.p0_ms.append(p0_ms)
         self.last_telemetry = {
             "p0_ms": round(p0_ms, 4),
@@ -148,6 +190,7 @@ class MultiOrchestrator:
             "hard_ms": None if hard_ms is None else round(hard_ms, 4),
             "deterministic": p0_asmt,
             "results": [r.telemetry() for r in results],
+            "text": text or [],
         }
 
     def run_telemetry(self) -> dict:
@@ -158,6 +201,9 @@ class MultiOrchestrator:
                 "jobs_dispatched": len(self.scheduler.dispatched),
                 "jobs_replaced": len(self.scheduler.replaced),
                 "stale_dropped": list(self.gate.stale_dropped),
+                "text_calls": self.text.calls if self.text else 0,
+                "text_parse_failures": self.text.parse_failures if self.text else 0,
+                "notefacts_rejected": self.text.rejected if self.text else 0,
                 "p0_ms_p50": pct(0.5), "p0_ms_p95": pct(0.95),
                 "p0_ms_max": p[-1] if p else None,
                 "audit_writes": self.bb.audit if self.bb else None,

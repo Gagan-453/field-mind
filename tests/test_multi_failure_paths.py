@@ -102,6 +102,7 @@ def test_failure_paths_identical_single_vs_multi():
     cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
     cfg["llm"]["backend"] = "scripted"
     cfg["agent"]["verifier"] = "always"            # exercise every verifier path
+    cfg["multi"]["compact"] = {}                   # Phase 1 path: parity with single
     cfg["agent"]["log_prompts"] = True             # envelopes carry the prompt text,
                                                    # so a prompt-only change is compared
     singles, multis = [], []

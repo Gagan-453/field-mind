@@ -13,6 +13,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from ...agent import world_model as wmod
+from .. import compact
 
 NAME = "retriever"
 
@@ -27,6 +28,8 @@ class RetrieverAgent:
         retrieved = self.retriever.retrieve(facts, signature, now_s, level,
                                             operator_query=operator_query)
         bb.write("retrieval", retrieved, NAME)
+        # Record-facts: code, no model call (Phase 2 human decision a).
+        bb.write("recordfacts", compact.record_facts(retrieved.get("records")), NAME)
 
         events: list = []
         view = SimpleNamespace(hypotheses=bb.mutable("belief", NAME),
