@@ -56,3 +56,4 @@ from `bench.gguf_types` and agree with llama.cpp's own `gguf-py` reader (`~/fiel
 | model | source precision | candidate file | bytes | sha256 | matrices | verdict |
 |---|---|---|---|---|---|---|
 | Qwen2.5 0.5B Instruct | BF16 | `Qwen2.5-0.5B-Instruct-Q4_0-pure-embq8.gguf` | 352,154,624 | `00d3bb3f9210f132ef246cc5db2a7d8c9f8b63785679a95aef3558875b50e341` | 168 Q4_0 + token_embd Q8_0 (output tied) | OK |
+| Gemma 3 1B QAT | BF16 | `gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf` | 720,425,280 | `3a229fece56839877093042f0699939d9c4a65691dda81999f80ff27dae2cc5f` | 182 Q4_0 + token_embd Q8_0 (output tied) | OK. Built with `--override-kv tokenizer.ggml.eos_token_id=int:1` (unsloth's files give 106; Google's own GGUF has 1) |
