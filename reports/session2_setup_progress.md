@@ -11,7 +11,7 @@ with `-c 4096 -np 1`, the same for every model and both lanes.
 | 0. record quantization decision | DONE | `ecc4d72` | `reports/phase0b_board_setup.md` |
 | 1. small fixes | DONE | `cce26a4`, `b060c6f` | PROMPTS.md, README_SETUP.md, requirements.txt, .gitignore; `bench/board.py`, `bench/probe_device.py`, `tests/test_board_env.py` (101 tests pass) |
 | 2. llama.cpp builds | DONE | `ea1651e` | see below |
-| 3. build 4 GGUFs | IN PROGRESS | script `0c19242`+ | source weights downloading to `~/fieldmind-build/src/` via `~/fieldmind-build/fetch_weights.py` (retries until each file's sha256 matches the Hub; log `logs/fetch_weights.log`; lines `OK`/`DONE <repo>`/`ALL DONE`). Then per model: `bench/build_candidate_gguf.sh <name> <src dir>`; Gemma adds `--override-kv tokenizer.ggml.eos_token_id=int:1` |
+| 3. build 4 GGUFs | DONE | `f3ab0f8`, `f7b5699`, `b9fd4c0`, this commit | all 4 built and checked; table under "Step 3 results". Source weights verified by sha256 against the Hub (`logs/fetch_weights.log`, 0 retries) |
 | 4. push package + GGUFs to `/data/local/tmp/llm/` | PARTIAL | | package pushed to `/data/local/tmp/llm/llama.cpp` (134 files, 288,458,199 B); board sha256 == laptop sha256 for all 134 (`logs/package_sha256_{laptop,board}.txt`). GGUFs not pushed yet |
 | 5. smoke test (3B, NPU lane, `-c 4096 -np 1`) | tooling ready | `0c19242`, `929ba99` | `bench.board start npu <file>` / `log npu` / `stop`; prompt saved at `logs/smoke_diagnostician_prompt.txt` (ep_A01 tick 64, 8,988 chars). Launch mechanics dry-run on the impure on-board file worked (ready in 4 s; `logs/dryrun_lane_npu_impure_lv4.log`); no timings taken from it |
 | 6. CLAUDE.md + /board-up | not started | | |
@@ -58,3 +58,11 @@ from `bench.gguf_types` and agree with llama.cpp's own `gguf-py` reader (`~/fiel
 | Qwen2.5 0.5B Instruct | BF16 | `Qwen2.5-0.5B-Instruct-Q4_0-pure-embq8.gguf` | 352,154,624 | `00d3bb3f9210f132ef246cc5db2a7d8c9f8b63785679a95aef3558875b50e341` | 168 Q4_0 + token_embd Q8_0 (output tied) | OK |
 | Gemma 3 1B QAT | BF16 | `gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf` | 720,425,280 | `3a229fece56839877093042f0699939d9c4a65691dda81999f80ff27dae2cc5f` | 182 Q4_0 + token_embd Q8_0 (output tied) | OK. Built with `--override-kv tokenizer.ggml.eos_token_id=int:1` (unsloth's files give 106; Google's own GGUF has 1) |
 | Llama 3.2 3B Instruct | BF16 | `Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf` | 2,012,612,832 | `5aa3ece50ab33d09a7181888a75f8755f924c662dc99626e7f45440adfeadcdb` | 196 Q4_0 + token_embd Q8_0 (output tied) | OK. Chat template, tokens, token types, merges, BOS/EOS identical to the Meta-derived `bartowski/...-f16.gguf` header; only extra key is `padding_token_id` 128004 (unsloth), unused in single-sequence generation |
+| Qwen3 1.7B | BF16 | `Qwen3-1.7B-Q4_0-pure-embq8.gguf` | 1,460,395,904 | `4a4ebf10354822c45dfa38b9248a42a59ebae53c0ad992147b881dd7ed09c56c` | 196 Q4_0 + token_embd Q8_0 + output.weight Q8_0 (not tied) | OK |
+
+Total to push: 4,545,588,640 B (4.23 GiB). Board free at 16:20 was 9,307,704 KiB before the 288 MB package push.
+
+**State at stop (board unplugged by the human):** step 3 DONE for all 4. Next, only after the human says continue:
+step 4 push the 4 GGUFs to `/data/local/tmp/llm/` and compare `sha256sum` on the board with the values above; step 5
+smoke test with `Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`; step 6 commit the drafted `CLAUDE.md` and
+`.claude/skills/board-up/SKILL.md` (uncommitted in the working tree).
