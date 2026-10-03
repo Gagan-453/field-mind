@@ -174,6 +174,36 @@ One short prompt each on the NPU lane (`logs/smoke_D.json`, startup logs `logs/s
 | Gemma tokenizer check identical on every dev prompt | yes: 2,084 / 2,084 against the accepted reference |
 | the Gemma call stopped by itself | yes: stop reason `stop` at 33 of 256 tokens |
 
+## Campaign crashes (2026-10-03 evening): diagnosis and runner fixes
+**Correction:** launches 2 and 3 were NOT stopped by power cuts. Each died on an uncaught `InfraFailure` (below).
+**The board reboot at about 20:08 is unexplained:** the laptop kernel log shows the board leaving USB at 20:02:45 and
+returning at 20:08:35, 13 minutes after launch 2 died; the board records only `sys.boot.reason=reboot` (no panic,
+thermal or watchdog reason); `pstore` and `dmesg` are not readable as the shell user; nothing in the repo issues a
+reboot.
+
+| launch | job | failing call | prompt sha | prompt tok | calls finished on that lane |
+|---|---|---|---|---|---|
+| 1 (18:37) | `B/round1/llama32-3b/dev_A01` | tick 68 diagnostician | `1c163cd2dff3` | 1,910 | 31 |
+| 2 (19:14) | `B/round2/llama32-3b/dev_B01` | tick 72 verifier | `6ec2c628324f` | 1,145 | 36 |
+| 3 (21:21) | same | tick 97 verifier | `44e660ee6493` | 1,108 | 35 |
+
+- Each failing call succeeded when the next launch reached it; earlier verifier calls had succeeded.
+- Server log (launch 3): the request reached `init sampler`, then nothing for 120.7 s (no prefill timing, no error)
+  until the client's cancel. The server's host prompt cache (`--cache-ram`, default 8,192 MiB, active although every
+  request sends `cache_prompt: false`) held 33 prompts, 6,797.6 MiB, on an 11.1 GiB board; each 3B prompt costs
+  0.1094 MiB per token = the 3B's F16 KV size. The call before each failure was slower (decode 12.35 / 14.30 / 12.05
+  tok/s against about 16); launch 3's last good call ended at CPU 93.8 C. Memory and heat are not separated by this
+  data: the soak test below does that.
+- **Why no retry:** `python -m bench.campaign` ran the file as `__main__`, and `main()` then imported
+  `bench.campaign` again (default `--board`; also `tests.fake_board`), creating a second module whose
+  `InfraFailure` class the `except` clauses did not match. Exit 1, no retry, STATUS.md not updated. The in-process
+  tests had one module copy; the command-line tests never injected a fault.
+- **Fixed (no board):** (a) one module copy however launched, with command-line tests for exit 2 (3 retries, stop
+  reason in STATUS.md) and exit 3; (b) per-attempt call logs, exclusive-create, archived to
+  `results/board/attempts/` after a failure or a kill (the relaunch had overwritten launches 1 and 2's records;
+  their failing calls were reconstructed from the reply cache); (c) STATUS.md's attempt number from the manifest.
+  Each with a test and a caught mutation (`PYTHONDONTWRITEBYTECODE=1`). 140 tests pass.
+
 ## Human decisions on two runner choices (2026-10-03, before any screening or dev result)
 1. **Stage C floor = the mock run of the same 3 dev episodes.** Reason: like-for-like with the models' scores. The
    committed 0.501 is to be printed beside it. Current runner: the mock floor is in `C/model_choice.txt`/`.json`;
