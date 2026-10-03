@@ -144,3 +144,14 @@ Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunc
 - Part 2 DONE, reading NOT CONFIRMED (run B's server RSS grew 512 -> 535 MB; all other conditions met). STOPPED as
   the rule requires. Part 3 NOT done: no flag change, `results/board` not moved, campaign not relaunched.
   Board: no llama-server running. Data: `reports/data/soak_{A,B}.jsonl.gz`; table in `reports/phase0b_board_setup.md`.
+
+## Part 3 DONE (2026-10-03, ~23:05) — campaign ready, NOT launched
+- Human override of the soak reading and decisions 1-6 recorded (`7154118`).
+- `results/board` -> `results/board_aborted_20261003`, committed with a README (`20eee00`). `results/board` does not exist;
+  the next launch creates it fresh (stage A first).
+- `--cache-ram 0` on every lane (`9c7ec74`); CLAUDE.md and /board-up updated.
+- Memory guard + peak in-episode temperature (`ff43ae5`).
+- 144 tests pass. CLI dry run A-E against the fake board with 4 models: exit 0, 50/50 jobs, flags
+  `-c 4096 -np 1 --device HTP0 -ngl 99 -fit off --cache-ram 0 -lv 4`.
+- Board: connected, no llama-server running, adb forwards cleared.
+- Launch (human only): `tmux new -s campaign 'scripts/board_campaign.sh all'`
