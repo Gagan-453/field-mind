@@ -128,3 +128,10 @@ Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunc
   `reasoning_content`; the reporting baseline is written as `results/baselines/single_v3_real_<model>_npu_summary.json`.
 - Finding to keep visible: at the pinned llama.cpp the Hexagon backend accepts K-quants by source, so the stated
   reason for the Q4_0/Q8_0 rule does not hold for this build (recorded in the report, rule unchanged).
+
+## Campaign crash fixes (after the diagnosis of 2026-10-03 evening)
+- Part 1a DONE (`git log -1 --grep "one module copy"`): `python -m bench.campaign` now registers itself as
+  `bench.campaign`, so there is one module copy and `InfraFailure` is caught. CLI tests: infrastructure fault ->
+  4 attempts, exit 2, stop reason in STATUS.md; rule stop -> exit 3. Mutation (fix removed) caught by the exit-2 test.
+- `results/board/` holds the uncommitted state of the crashed campaign (stage A committed in `afde367`; stage B
+  partial). Untouched until Part 3.
