@@ -61,6 +61,15 @@ def main():
                     help="overrides llm.llamaserver.lane (npu|cpu label)")
     ap.add_argument("--cooldown-s", type=float, default=0.0,
                     help="board runs: idle gap between episodes (chip cooling)")
+    ap.add_argument("--arch", default="single", choices=["single", "multi"],
+                    help="single = fieldmind/agent (baseline); multi = "
+                         "fieldmind/multi (blackboard agents, scheduler, lanes)")
+    ap.add_argument("--mode", default="lockstep", choices=["lockstep", "realtime"],
+                    help="lockstep: every job finishes inside its tick. "
+                         "realtime is not built yet (Session 6)")
+    ap.add_argument("--record-prompts", default=None,
+                    help="append every backend call (role, max_tokens, prompt, "
+                         "mock-hint hash) to this JSONL file")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--out", default="results")
     ap.add_argument("--episodes-dir", default=None,
@@ -70,6 +79,8 @@ def main():
                          "overwrites a reporting run")
     args = ap.parse_args()
 
+    if args.mode == "realtime":
+        ap.error("--mode realtime is not built yet (multi-agent Session 6)")
     cfg = load_config(args.config, args.backend)
     ls = cfg["llm"].setdefault("llamaserver", {})
     if args.url:
@@ -114,7 +125,8 @@ def main():
             time.sleep(args.cooldown_s)            # chip cooling between episodes
         temp0 = chip_temperature() if on_board else None
         run = run_episode(ep, cfg, ablate_text=args.ablate_text,
-                          verbose=args.verbose)
+                          verbose=args.verbose, arch=args.arch,
+                          record_prompts=args.record_prompts)
         if on_board:
             run["chip_temp_start"] = temp0
             run["chip_temp_end"] = chip_temperature()

@@ -77,16 +77,22 @@ class Episode:
         return self.rows[-1]["t"]
 
 
-def build_agent(cfg: dict, notes: list[dict], records: dict | None = None):
+def build_agent(cfg: dict, notes: list[dict], records: dict | None = None,
+                wrap_backend=None):
     """Wire the pipeline. One place, so a sweep can rebuild it per configuration.
 
     `records` is the episode's records.json (coal lab reports, maintenance
     history, boiler-water conductivity log). Eight of the thirty episodes list
     `records` as a required modality; without this argument tier C was
     untestable (known bug 3).
+
+    `wrap_backend` (bench tooling, e.g. bench.prompt_log.RecordingBackend) wraps
+    the backend before anything is built on it; None leaves it untouched.
     """
     p = cfg["paths"]
     backend = make_backend(cfg["llm"])          # <-- THE MODEL SWITCH
+    if wrap_backend is not None:
+        backend = wrap_backend(backend)
 
     asset = AssetModel(Path(p["asset_model"]))
     cases = CaseLibrary(Path(p["case_library"]))
@@ -106,21 +112,46 @@ def build_agent(cfg: dict, notes: list[dict], records: dict | None = None):
 
 
 def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
-                verbose: bool = False) -> dict:
+                verbose: bool = False, arch: str = "single",
+                record_prompts: str | None = None) -> dict:
     """Replay one episode. `ablate_text` removes every note -- that is the T8
     modality ablation, and tier B/C accuracy MUST collapse under it or the
-    episode is mislabelled."""
+    episode is mislabelled.
+
+    `arch`: "single" (fieldmind/agent, the baseline) or "multi"
+    (fieldmind/multi, lockstep). `record_prompts`: path of a JSONL file every
+    backend call is appended to (bench/prompt_log.py), for the Phase 1
+    prompt-identity check."""
     notes = [] if ablate_text else ep.notes
+    recorder = None
+    wrap = None
+    if record_prompts:
+        from bench.prompt_log import RecordingBackend
+
+        def wrap(b):
+            nonlocal recorder
+            recorder = RecordingBackend(b, record_prompts)
+            recorder.episode = ep.id
+            return recorder
     # records.json is a separate modality from notes -- text ablation (T8)
     # removes notes, not the coal lab report / conductivity log.
-    orch, asset, cases, experience, backend, diag, ver = build_agent(
-        cfg, notes, ep.records)
+    if arch == "single":
+        orch, asset, cases, experience, backend, diag, ver = build_agent(
+            cfg, notes, ep.records, wrap_backend=wrap)
+    elif arch == "multi":
+        from fieldmind.multi.orchestrator import build_multi_agent
+        orch, asset, cases, experience, backend, diag, ver = build_multi_agent(
+            cfg, notes, ep.records, wrap_backend=wrap)
+    else:
+        raise ValueError(f"unknown arch {arch!r}")
     orch.operator_query = ep.operator_query
 
     tick_s = cfg["agent"]["tick_period_s"]
     window = SensorWindow(window_min=60.0,
                           sample_period_s=cfg["checks"]["sample_period_s"])
     wm = new_world_model(ep.id, asset.equipment)
+    if arch == "multi":
+        orch.bind(wm)                      # the blackboard wraps this world model
 
     assessments, t0 = [], time.perf_counter()
     n_ticks = int(ep.duration_s // tick_s)
@@ -137,8 +168,13 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
             continue                       # still filling; do not guess
 
         ts = (EPOCH + timedelta(seconds=t_end)).isoformat()
+        if recorder is not None:
+            recorder.tick = k
         asmt = orch.tick(wm, window, k, ts, now_s=t_end)
-        assessments.append(asmt.to_dict())
+        d = asmt.to_dict()
+        if arch == "multi":
+            d["multi"] = orch.last_telemetry   # jobs, lanes, P0 time; not compared
+        assessments.append(d)
 
         if verbose and (asmt.triage != "QUIET" or k % 40 == 0):
             top = asmt.hypotheses[0]["cause"][:46] if asmt.hypotheses else "-"
@@ -146,12 +182,14 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                   f"{asmt.headline[:58]:58s} | {top}")
 
     wall = time.perf_counter() - t0
+    if recorder is not None:
+        recorder.close()
     envs = [e for a in assessments for e in a.get("envelopes", [])]
     ptoks = [e.get("prompt_tokens", 0) for e in envs if e.get("prompt_tokens")]
     env_status = {}
     for e in envs:
         env_status[e["status"]] = env_status.get(e["status"], 0) + 1
-    return {
+    out = {
         "episode_id": ep.id,
         "backend": cfg["llm"]["backend"],
         "n_ticks": len(assessments),
@@ -173,3 +211,6 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
         "envelope_status_counts": env_status,
         "ablate_text": ablate_text,
     }
+    if arch == "multi":
+        out["multi"] = orch.run_telemetry()
+    return out
