@@ -448,3 +448,24 @@ def test_offload_check_needs_every_layer_the_output_layer_and_a_nonzero_buffer()
     assert C.parse_offload(_LOG.format(out="", n=29, buf="1911.90"))["htp0_all_layers"] is False
     assert C.parse_offload(_LOG.format(out=_OUT, n=29, buf="0.00"))["htp0_all_layers"] is False
     assert C.parse_offload("llama_server: listening")["htp0_all_layers"] is False     # default log level
+
+
+# ---- the real command line: infrastructure stop (exit 2) and rule stop (exit 3) ---
+def test_cli_infra_fault_retries_three_times_then_exits_2(tmp_path):
+    # stage A makes 4 x 11 = 44 chat calls; from call 50 on, every call fails
+    p = _cli(tmp_path / "out", tmp_path / "base", {"models": MODELS_PLAN, "fail_from": 50})
+    assert p.returncode == C.EXIT_INFRA, p.stderr[-1500:]
+    assert "Traceback" not in p.stderr
+    m = json.loads((tmp_path / "out/manifest.json").read_text())
+    j = m["jobs"]["B/round1/llama32-3b/dev_A01_fcv_seize"]
+    assert j["status"] == "incomplete" and j["attempts"] == 4          # 1 try + 3 retries
+    status = (tmp_path / "out/STATUS.md").read_text()
+    assert "STOPPED at B/round1/llama32-3b/dev_A01_fcv_seize" in status
+    assert "INFRASTRUCTURE" in status and "HTTP 500" in status
+
+
+def test_cli_rule_stop_exits_3(tmp_path):
+    p = _cli(tmp_path / "out", tmp_path / "base", {"models": {LLAMA: {"gguf_ok": False}}})
+    assert p.returncode == C.EXIT_STOP, p.stderr[-1500:]
+    status = (tmp_path / "out/STATUS.md").read_text()
+    assert "STOPPED by a committed rule" in status and "llama32-3b failed screening" in status

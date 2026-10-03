@@ -1042,4 +1042,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    # ONE copy of this module, however it is launched. `python -m bench.campaign`
+    # runs this file as __main__; without this line, the later import of
+    # "bench.campaign" (the default --board, and tests.fake_board) creates a second
+    # copy whose InfraFailure is a different class, so `except InfraFailure` here
+    # never matched and a timeout crashed the campaign (2026-10-03, three launches).
+    sys.modules.setdefault("bench.campaign", sys.modules[__name__])
+    if sys.modules["bench.campaign"] is not sys.modules[__name__]:
+        raise SystemExit("bench.campaign was imported twice; launch it with "
+                         "`python -m bench.campaign` only")
     raise SystemExit(main())
