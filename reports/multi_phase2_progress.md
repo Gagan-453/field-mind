@@ -24,3 +24,6 @@ Updated and committed after every commit. Mock backend only; no accuracy claim.
    140 or 327) must move on the mock. Question (b): the retrieval budget does not differ between mock and
    llamaserver; the 2,484 figure is not reproduced here. Two questions are open in
    `reports/multi_phase2_prompt_shrink.md`, "Blocked / needs a decision". No code changed.
+3. **Resolved by the human (amendment 2).** Option (ii) for the confidence; G1 split into G1a (schema switch
+   only, predicted counts committed first) and G1b (all switches, 0 differences against G1a). Item 3 answered:
+   the 1,154 cases are retired by the belief floor (0.08) in the same tick they are retrieved.

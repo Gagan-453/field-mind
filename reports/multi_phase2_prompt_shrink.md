@@ -1,11 +1,9 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-BLOCKED before commit 4. The answer format is decided (amendment below), but answering the human's question (a)
-showed that gate G1 cannot hold at 0 differences under format B' (see "Blocked / needs a decision" at the end).
-Commits 0 to 3 are done; commits 4 to 7 have not started. The pre-registration below (human decisions, dev gate,
-expected-change statement) was committed before any Phase 2 measurement or code (`595180b`); the amendment was
-added after commit 3's token counts and before any accuracy measurement.
+PARTIAL. Commits 0 to 3 are done. The answer format (amendment 1) and the restated gate G1a / G1b with its
+predicted counts (amendment 2) are decided and were committed before any G1a run and before any accuracy
+measurement. Commits 4 to 7 follow.
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
 measure the deterministic and retrieval layers only. They are not an agent result. The real-model baseline
@@ -118,11 +116,85 @@ at -c 4096? It does not differ.**
 - One input that can differ between machines: `data/experience/store.json` is gitignored and absent here. If
   it is non-empty elsewhere, "own past episode" lines are added to the cases block. Here 0 of 2,164 reporting
   prompts and 0 dev prompts contain one.
-- **The 2,484 figure is not reproduced and is recorded as unexplained.** The plan (p.2) says "~2484-token
+- **The 2,484 figure is not reproduced and is recorded as unexplained** (measured maximum 2,160 on the
+  reporting set; the board campaign's per-call server token counts will settle it after the merge). The plan (p.2) says "~2484-token
   prompt". Here the largest single-agent diagnostician prompt is 2,103 to 2,150 real tokens on dev and 2,120 to
   2,160 on the reporting set (chars//4: 2,284 and 2,274); the same maximum, 2,274, is in the v1 baseline run.
   Ratio 1.15. No run file in this repo contains 2,484 as a prompt size. Untested possible causes: a non-empty
   experience store, a different tokenizer or template, or an earlier prompt version on the board.
+
+## AMENDMENT 2: HUMAN DECISIONS on confidence and on G1 (committed before the G1a run)
+1. **Confidence for a case outside belief's top 3: option (ii).** Belief's own confidence for that case, capped
+   at 0.5 by `merge`, and the existing 0.3 default when belief has no live entry. Reasons: confidence then always
+   comes from the deterministic layer, as it already does inside the top 3; and option (i) would stop the
+   verifier from ever running on the ticks where the model and belief disagree. Cost, recorded: verifier calls
+   on dev go from 192 to 327.
+2. **G1 is restated.**
+   - **G1a:** answer-schema switch only, against the Phase 1 multi dev run. Differences are allowed only in the
+     confidence-derived fields listed below (and the by-construction moving fields already pre-registered).
+   - **G1b:** all switches on, against the G1a run: 0 differences outside the pre-registered moving fields.
+   - If a measured count differs from its prediction, or any field outside the list moves: stop and report.
+     The prediction is not adjusted.
+3. **The 2,484-token figure stays "unexplained, not reproduced".** The measured maximum is 2,160 tokens on the
+   reporting set (Gemma 3; 2,120 to 2,157 on the other three). The board campaign's per-call server token counts
+   will settle it after the merge with `main`.
+
+### G1a: confidence-derived fields, by name (the only decision fields allowed to move)
+| field | where | why it moves |
+|---|---|---|
+| `hypotheses[].confidence` | only on hypotheses flagged `model_only` | the model no longer supplies it; code supplies belief's value capped at 0.5, or 0.3 |
+| `hypotheses[].confidence_shown` | only on `model_only` hypotheses | display value, `min(confidence, margin)`; follows `confidence` |
+| `confidence` (assessment) | only on ticks whose rank-1 hypothesis is `model_only` | it is rank 1's shown value |
+| verifier envelope present or absent in `envelopes` | ticks where rank 1 is `model_only` and the level is INVESTIGATE or URGENT | the verifier trigger reads rank 1's `confidence` against the band [0.35, 0.75] |
+| `ver_calls`, `envelope_status_counts.ok` | per run | follow the verifier trigger |
+
+Nothing else may move: hypothesis order, `rank`, `cause`, `case_ref`, `supports`, `discriminator`, the
+`carried` / `model_only` / `verifier` flags, `actions`, `escalate`, `unexplained`, `state`, `triage`, `facts`,
+`headline`, `belief_ranking`, `degraded_mode`, `llm_invoked`, `diag_calls`, `parse_failure_rate`,
+`verifier_disagreement_rate`, `llm_retries`, and the diagnostician envelope's `status`, `cited_cases`,
+`retrieved_cases`, `retries`, `error`, and `cited_facts` after stripping the tick stamp.
+
+### G1a: predicted counts (dev, computed from the Phase 1 run before any Phase 2 code)
+| quantity | prediction |
+|---|---|
+| `model_only` hypotheses | 3,170 |
+| of those, `confidence` unchanged | 19 (so 3,151 change) |
+| ticks whose rank-1 decision `confidence` changes | 580 |
+| verifier calls | 327 (192 in Phase 1) |
+| ticks where a cited fact is not among the shown fact lines (would move `supports`) | 0 |
+
+### Summary metrics that move because confidence moved (cause stated in advance)
+- `Q2_library.low_conf_rate`, `Q2_heldout.low_conf_rate`, and per episode `T2_root_cause.low_conf_rate` and
+  `low_conf_rate_decision`: they read rank 1's shown or decision confidence.
+- The `bench/belief_saturation.py` outputs: ECE and the confident-and-wrong counts, for the same reason.
+- Verifier call counts (`ver_calls`; 192 -> 327), and `mean_prompt_tokens` through the extra verifier prompts.
+- Every other summary key is expected unchanged: Q1, Q2 top-1 / top-3 / group / sep / belief metrics, Q3, Q4,
+  Q5, Q6, S4, S7. They depend on order, case, state and actions, none of which may move.
+
+### New harness key for Q3_rel (pre-registered here, before it exists)
+Q3_rel needs the deterministic supports of each case at each tick, which no run file holds today. The harness
+(`bench/harness.py`, both arches; `fieldmind/agent/` is not edited) will write `belief_supports`
+(case -> fact IDs, read from the world model after the tick) into each assessment, and the evaluator will add
+`Q3_rel` to the summary and `T3_faithfulness.rel` per episode. So:
+- against **Phase 1 run files**, `belief_supports` is excluded by name (those files do not have it); between
+  Phase 2 runs it is compared;
+- against `results/baselines/single_v3_summary.json`, "0 differences" means every key that file holds; the new
+  `Q3_rel` keys are extra and reported.
+- Q3_rel on the mock is not an agent result: the mock cites the first two facts whatever the case.
+
+### Item 3: why 1,154 of the 3,170 `model_only` cases have no live belief entry (read-only finding)
+They do have a belief entry; it is **retired in the same tick**. `update_hypotheses`
+(`fieldmind/agent/world_model.py`) un-retires every retrieved case, updates its log-odds, and then rule 4
+retires any hypothesis whose confidence is under `RETIRE_BELOW` = 0.08. All 1,154 are in that state: retrieved
+this tick, retired this tick, belief confidence 0.018 to 0.079 (mean 0.030). The mock still ranks them, because
+it ranks whatever was retrieved.
+
+Consequence under option (ii), recorded, not fixed: a case belief has just retired as nearly dead is shown at
+the 0.3 default, above 745 of the 2,016 live `model_only` cases whose belief confidence is under 0.3 (lowest
+0.08). So "no live entry" is not "unknown"; it means "belief holds it below 0.08". It does not change the gate:
+the predictions above were computed with exactly this rule. **Open item for `main`** (it is in
+`fieldmind/agent/`, so not changed here): decide whether a retired-this-tick case should take its retired belief
+confidence instead of the 0.3 default, and whether retrieval should return cases belief has retired.
 
 ## Stops
 - After every commit, `reports/multi_phase2_progress.md` is updated and committed.
@@ -370,21 +442,7 @@ to 41 tokens. The text reader fits its cap of 50: 30 to 32 tokens for two tags, 
 amendment. Measured worst cases: diagnostician B' 49 tokens on all four tokenizers; verifier with a verdict for
 each of 3 cases plus a fact line, 21 to 23.
 
-**Open: gate G1 cannot be 0 differences under B'** (question (a) above). The model no longer supplies a
-confidence, so `model_only` confidences, the rank-1 confidence on about 580 ticks, and the verifier trigger
-(192 calls -> 140 or 327) must move on the mock, whichever value the code supplies.
-
-Questions:
-1. Which confidence does a case outside belief's top 3 get: (i) the existing default 0.3, or (ii) belief's own
-   confidence for that case, capped at 0.5, with 0.3 when belief has no entry?
-2. How should G1 be restated? Proposal, using the per-section switches already in the plan:
-   - **G1a (the format change alone):** multi with only the `schema` switch on, against the Phase 1 multi run.
-     Differences allowed only in the fields listed under (a), and their counts must equal the predictions in
-     the table above for the chosen option (for (i): 3,159 `model_only` confidences change, 585 rank-1
-     confidences change, verifier calls 192 -> 140). Any other difference fails the gate.
-   - **G1b (the shrink alone):** multi with every switch on, against the G1a run: 0 differences outside the
-     pre-registered moving fields. This keeps a strict 0-difference test for everything except the one
-     decision that removes the model's confidence.
+**Resolved: gate G1 under B'.** The human chose option (ii) and the G1a / G1b split; see amendment 2.
 
 ## Disagreements recorded, not resolved
 - **Plan p.13: "about 50 tokens" for the example answer.** Measured 72 / 78 / 84 / 78. Ratio 1.4 to 1.7.
