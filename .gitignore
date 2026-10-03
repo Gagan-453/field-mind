@@ -9,6 +9,8 @@ results/*
 !results/board/
 results/board/tmp/
 results/board/cache/
+# the aborted first campaign (2026-10-03), kept in full: never used for a decision or a timing
+!results/board_aborted_20261003/
 
 # --- reference data: large, and not ours to redistribute
 data/reference/*.csv

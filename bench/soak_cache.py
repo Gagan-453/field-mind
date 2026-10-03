@@ -29,7 +29,7 @@ from pathlib import Path
 from bench import board
 
 ROOT = Path(__file__).resolve().parent.parent
-SRC = ROOT / "results/board/tmp/B__round2__llama32-3b__dev_B01_tube_leak.calls.jsonl"
+SRC = ROOT / "results/board_aborted_20261003/tmp/B__round2__llama32-3b__dev_B01_tube_leak.calls.jsonl"
 MODEL = "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf"
 N = 50
 CLIENT_TIMEOUT_S = 300          # long enough to SEE a >120 s call; the campaign uses 120
