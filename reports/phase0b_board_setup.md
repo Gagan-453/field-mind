@@ -174,6 +174,19 @@ One short prompt each on the NPU lane (`logs/smoke_D.json`, startup logs `logs/s
 | Gemma tokenizer check identical on every dev prompt | yes: 2,084 / 2,084 against the accepted reference |
 | the Gemma call stopped by itself | yes: stop reason `stop` at 33 of 256 tokens |
 
+## Human decisions on two runner choices (2026-10-03, before any screening or dev result)
+1. **Stage C floor = the mock run of the same 3 dev episodes.** Reason: like-for-like with the models' scores. The
+   committed 0.501 is to be printed beside it. Current runner: the mock floor is in `C/model_choice.txt`/`.json`;
+   0.501 is NOT printed by the runner (adding it is a code change, not made); compare by hand with `FLOOR_DEFAULT`.
+2. **"Measured verified-diagnosis time" = mean server time of the screening calls, short answers counted as they
+   are**, with the rate-based projection printed beside it for every model. Current runner: `A/screening.json` holds
+   `measured_verified_s` and `projected_verified_s` for all 4 models.
+
+**Proposed amendment NOT made: option C stays.** The human proposed dev rounds for every model that passes
+screening, to be made only if it were a job-list or config change. It is not: it changes the stage A selection,
+the stage B model list and its stop rule (`both dropped` -> `all dropped`), and the tests that assert option C. Per
+the human's condition, nothing was changed; the committed runner (`a75bdc1`) is unchanged.
+
 ## Campaign runner (built, tested on a fake board, not launched)
 Code: `bench/campaign.py`, `scripts/board_campaign.sh`; tests `tests/test_campaign.py` with `tests/fake_board.py`
 (a local HTTP server that speaks `/health`, `/tokenize` and `/v1/chat/completions`, with fault injection).
