@@ -1,6 +1,6 @@
 # FieldMind multi-agent starter kit
 
-Unzip this inside `~/projects/fieldmind` (the existing repo). It adds:
+Unzip this in the repo root (the existing repo). It adds:
 
 | File | What it is |
 | --- | --- |

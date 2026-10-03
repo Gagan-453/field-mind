@@ -7,6 +7,13 @@ PyYAML>=6.0
 # --- offline host-side only: the episode generator ---
 # Not needed to RUN the agent, only to REGENERATE the dataset.
 # numpy>=1.24     # currently unused; sim.py is pure Python for portability
+#
+# --- host-only, not needed for the generator, harness or tests ---
+# numpy, pandas   # data/reference/build_fingerprint.py only (rebuilds fingerprint.json)
+#
+# --- setup only: model downloads (the `hf` command), never imported by repo code ---
+# huggingface_hub # `hf auth login`, then `hf download <repo> <file>`; gated repos
+#                 # (Meta Llama, Google Gemma) need the licence accepted on the website
 
 # --- optional ---
 # The Gemini backend uses urllib from the stdlib, not the Google SDK, so there

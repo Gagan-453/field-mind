@@ -25,3 +25,6 @@ venv/
 # --- macOS
 .DS_Store
 npu/maven/
+
+# --- build, download, quantize and board logs (large; kept local)
+logs/
