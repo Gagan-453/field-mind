@@ -204,6 +204,45 @@ reboot.
   their failing calls were reconstructed from the reply cache); (c) STATUS.md's attempt number from the manifest.
   Each with a test and a caught mutation (`PYTHONDONTWRITEBYTECODE=1`). 140 tests pass.
 
+## Soak test: memory vs heat (2026-10-03, 22:15-22:53) — reading NOT CONFIRMED, stopped
+`bench/soak_cache.py` (committed before the runs, `1dda41c`). Fresh 3B NPU lane per run, campaign request body,
+the same 50 prompts in the same order: the first 50 distinct prompts of the crashed job
+`B/round2/llama32-3b/dev_B01_tube_leak` (ticks 51-81; 34 diagnostician, 16 verifier; real calls, so real sizes:
+348-2,036 prompt tokens). Client timeout 300 s, to see a stall longer than 120 s. Raw: `reports/data/soak_{A,B}.jsonl.gz`.
+Run A = current flags; run B = current flags + `--cache-ram 0` (`-cram, --cache-ram N ... 0 - disable`, confirmed in the
+pinned server's `--help`).
+
+| | run A (current flags) | run B (`--cache-ram 0`) |
+|---|---|---|
+| calls completed | 36 of 50; call 37 (tick 72 verifier, `6ec2c628324f`, the call launch 2 stalled on) got no reply in 300 s | 50 of 50 |
+| longest call | 300.05 s (stall) | 18.54 s |
+| prefill, first 5 calls (mean) | 994.2 tok/s | 920.8 tok/s |
+| prefill, lowest | 795.9 tok/s (-19.9%, call 36) | 845.6 tok/s (-8.2%) |
+| decode before the stall | 16-17 tok/s, then 14.8 and 11.2 on calls 34 and 36 | 15.8-16.3 tok/s throughout (diagnostician) |
+| server prompt cache | grew about 240 MiB per call: 1,708 MiB at call 10, 6,832 MiB at call 37 | disabled (no cache lines) |
+| server RSS | 512 -> 6,598 MB (call 33), then fell to 908 MB as the kernel paged it out | 512 -> 535 MB, a steady ~0.5 MB per call |
+| board MemAvailable | 3.5 GB -> 0 at the stall | 6.29 -> 6.24 GB |
+| CPU / NPU peak | 72.1 / 66.8 C | 67.4 / 64.8 C |
+| idle reference, thermal wait | 32.5 C, 0 s | **40.5 C**, 0 s (measured while the board was still warm from run A) |
+
+**Reading (rule fixed by the human before the runs):** run A's half holds (a call over 120 s). Run B meets three of
+four conditions (50 calls; none over 60 s; prefill within 10% of its first 5 calls, worst -8.2%) but **its server RSS
+grew** (512 -> 535 MB, monotonically). By the rule's words that is "anything else": **stop and report**. The
+committed script's own check also says NOT CONFIRMED (it allows 2% RSS growth; B grew 4.5%; the 2% was my choice,
+written before the runs). Part 3 (cache-off flag, restart from stage A, moving `results/board`) has NOT been done.
+
+What the data shows, for the human's decision (not acted on):
+- Run A stalled at the same call as launch 2, at the moment board MemAvailable reached 0, with the chip at 70 C;
+  run B at the same calls and similar temperatures (66-67 C) never slowed. Heat alone does not reproduce the stall.
+- Run B's RSS growth is about 23 MB over 50 calls, against about 6 GB in run A. Cause not investigated.
+- Run B started warmer: its idle reference was re-measured right after run A (40.5 C against 32.5 C), so "within
+  5 C of idle" was a looser gate for B. B's first-5 prefill is 7% below A's; not separated from this.
+- **The replies are not identical across the two runs** at temperature 0, seed 0: decoded-token counts differ on 10
+  of the 37 calls both runs completed (e.g. tick 68: 256 vs 169 tokens). Cause not investigated (server flags differ
+  between the runs; the smoke test's 6 repeats on one lane were identical). This bears on the campaign's reply cache,
+  which assumes a reply depends only on (model, flags, sampling, prompt): the flags are in the key, so a cache built
+  under one flag set is not reused under the other.
+
 ## Human decisions on two runner choices (2026-10-03, before any screening or dev result)
 1. **Stage C floor = the mock run of the same 3 dev episodes.** Reason: like-for-like with the models' scores. The
    committed 0.501 is to be printed beside it. Current runner: the mock floor is in `C/model_choice.txt`/`.json`;

@@ -141,3 +141,6 @@ Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunc
 - Part 1c DONE: STATUS.md shows the manifest's attempt number (code in `b2e0a6e`, test in the next commit; mutation
   caught). Full suite: 140 passed.
 - Next: Part 2 soak test on the board.
+- Part 2 DONE, reading NOT CONFIRMED (run B's server RSS grew 512 -> 535 MB; all other conditions met). STOPPED as
+  the rule requires. Part 3 NOT done: no flag change, `results/board` not moved, campaign not relaunched.
+  Board: no llama-server running. Data: `reports/data/soak_{A,B}.jsonl.gz`; table in `reports/phase0b_board_setup.md`.
