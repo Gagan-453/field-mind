@@ -84,7 +84,10 @@ def lane_command(lane: str, model_file: str, threads: int = 6) -> str:
     LD_LIBRARY_PATH and ADSP_LIBRARY_PATH both point at the package's lib/
     folder: it holds libggml-hexagon.so (host side) and libggml-htp-v75.so (the
     code the DSP loads; without ADSP_LIBRARY_PATH the NPU lane cannot start it).
-    -fit off: nothing is silently adjusted to "fit" (HTP0 reports 0 MiB free)."""
+    -fit off: nothing is silently adjusted to "fit" (HTP0 reports 0 MiB free).
+    -lv 4: at the default level this build prints no loader lines; level 4 adds
+    the tensor-type counts, "offloaded N/N layers" and the HTP0 buffer sizes
+    that the NPU-confirmation rule reads from the startup log."""
     if lane == "npu":
         offload = "--device HTP0 -ngl 99"
     elif lane == "cpu":
@@ -94,7 +97,7 @@ def lane_command(lane: str, model_file: str, threads: int = 6) -> str:
     return (f"cd {DEVICE_PKG} && LD_LIBRARY_PATH={DEVICE_PKG}/lib "
             f"ADSP_LIBRARY_PATH={DEVICE_PKG}/lib ./bin/llama-server "
             f"-m {DEVICE_MODELS}/{model_file} --host 0.0.0.0 --port {LANE_PORT[lane]} "
-            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off")
+            f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off -lv 4")
 
 
 def _adb(*args: str, serial: str = "", timeout: float = 60) -> subprocess.CompletedProcess:

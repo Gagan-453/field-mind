@@ -60,3 +60,5 @@ def test_lane_command_env_and_offload():
     assert "--device HTP0 -ngl 99" in npu and "--port 8080" in npu
     assert "--device none -ngl 0 -t 6" in cpu and "--port 8081" in cpu
     assert "HTP0" not in cpu
+    # loader lines (type counts, offloaded layers, HTP0 buffer) need log level 4
+    assert npu.endswith("-fit off -lv 4") and cpu.endswith("-fit off -lv 4")
