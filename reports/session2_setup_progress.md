@@ -86,3 +86,46 @@ smoke test with `Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`; step 6 commit the 
   (`logs/push_gguf.log`). Board free space after the push: 4,581,412 KiB.
 - Next: step 5 smoke test (B offload/logits placement, C `-lv 4` cost, D Gemma stop), then docs commit, then the
   campaign runner (items 1-9 of the human's message; nothing built yet).
+
+## EXACT STATE, 2026-10-03 18:25 (laptop time) — written on the human's request before a possible usage limit
+**Board:** connected (`ab8f6592`). **No llama-server is running** (checked with `pgrep`). `adb forward tcp:8080` is still
+set (harmless). Nothing is running on the laptop either. The campaign has NOT been launched (the human launches it).
+
+**Everything finished is committed. Uncommitted: nothing** except the untracked `episodes.sha256` (never commit it).
+
+| item | state | commit |
+|---|---|---|
+| Setup steps 0-6 (decisions, small fixes, llama.cpp builds, 4 GGUFs, push, smoke test B/C/D, CLAUDE.md + /board-up) | DONE | up to `e7661c4` |
+| Gemma tokenizer check (step A) | DONE, passes 2,084 / 2,084 against the accepted reference | `11ac80b` |
+| Go-ahead conditions | all three hold (recorded in the report) | `e7661c4` |
+| Campaign runner items 1-9 (`bench/campaign.py`, `scripts/board_campaign.sh`, `tests/fake_board.py`, `tests/test_campaign.py`, `bench/harness.py` on_tick hook, `.gitignore` for `results/board/`) | BUILT and committed. 135 tests pass. 24 of 24 mutations caught (PYTHONDONTWRITEBYTECODE=1) | `a75bdc1` |
+| Mock baseline after the harness hook | reproduced: 0 differences outside latency vs `single_v3_summary.json` | (checked, nothing to commit) |
+| Real-board interface check of the runner (NOT the campaign: header check, lane start, `/tokenize`, one 700/60 and one 350/30 call on the 3B, stop) | DONE, works; prompt tokens exactly 700 and 350 | scratch only |
+
+**Half-done / still to do (in this order):**
+1. Write the campaign runner section into `reports/phase0b_board_setup.md` (what was built, verification table,
+   mutation list, decisions taken, limits). NOT written yet.
+2. Give the human the launch command (below). Then stop. Do not launch it.
+
+**Launch command (from the repo root, once):**
+
+    tmux new -s campaign 'scripts/board_campaign.sh all'
+
+Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunch with the same command after any stop.
+
+**Facts a resuming session needs:**
+- `-lv 4` is kept everywhere (`bench.board.TIMED_LOG_LEVEL = 4`): measured -0.09% prefill, +1.37% decode.
+- Measured on the pure 3B, NPU lane: about 900 tok/s prefill, 16.1 tok/s decode at a 2,081-token prompt, 13.6 s per
+  diagnostician call. One 700/60 call took 3.89 s and one 350/30 call 1.85 s (single calls, not a screening result).
+- Planning estimate from mock call counts x 13.6 s per call (NOT measured): stage B 294 calls per model (1.1 h for
+  the 3B), stage D 2,335 calls (8.8 h), stage E 1,186 calls (4.5 h): about 14.4 h if the 3B is chosen, plus the
+  second model's dev runs, thermal waits and repair calls. A smaller chosen model is faster.
+- Decisions I took in the runner that the report must list: a cache hit replays the reply and its timings are nulled
+  in the run record (so `model_choice`, unchanged, skips them); screening calls bypass the cache and start with one
+  excluded warm-up call; screening prompts are real mock prompts cut to exactly 700 / 350 server tokens; "measured
+  verified-diagnosis time" = mean server time of the five 700/60 calls + mean of the five 350/30 calls; idle
+  temperature is measured once at campaign start with no lane running; HTTP 4xx/5xx, timeouts, malformed bodies and a
+  failed temperature read all count as infrastructure; Qwen3 fails screening on a `<think>` tag OR any
+  `reasoning_content`; the reporting baseline is written as `results/baselines/single_v3_real_<model>_npu_summary.json`.
+- Finding to keep visible: at the pinned llama.cpp the Hexagon backend accepts K-quants by source, so the stated
+  reason for the Q4_0/Q8_0 rule does not hold for this build (recorded in the report, rule unchanged).
