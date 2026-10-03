@@ -204,6 +204,13 @@ reboot.
   their failing calls were reconstructed from the reply cache); (c) STATUS.md's attempt number from the manifest.
   Each with a test and a caught mutation (`PYTHONDONTWRITEBYTECODE=1`). 140 tests pass.
 
+## Campaign launch of 2026-10-03 23:07 (after the fixes): NOT the offline proof
+Launched by the human in tmux (session `campaign`, wrapper `~/campaign_loop.sh`: waits for adb, sleeps 10 minutes,
+runs `scripts/board_campaign.sh all`, relaunches only on exit code 2, at most 12 times). **The laptop's Wi-Fi is on
+for this run, so it is not evidence of offline operation.** Model calls go over USB (adb forward) and the campaign
+itself uses no network, but that is by construction, not shown by this run; each episode summary records the laptop's
+network state. Overnight watch log: `reports/campaign_watch.md`.
+
 ## Human decisions after the soak test (2026-10-03, recorded before any further board run)
 **Override of the pre-set reading, decided AFTER seeing the result.** The rule said run B's server RSS must be "not
 growing", with no tolerance. The human calls that wording a drafting error: run B grew about 0.5 MB per call against
