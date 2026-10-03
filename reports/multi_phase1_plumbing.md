@@ -8,6 +8,86 @@ and re-gated. Tagged `multi-phase1`.
 figures measure the deterministic and retrieval layers only. They are not an agent result. All timings are **laptop timings**
 (Apple M5, agent code on the laptop, no board), not board timings.
 
+## Close-out (after acceptance; report only, no code changes; on top of tag `multi-phase1`)
+
+### 1. Timings: audit state, what each one spans, and the single agent beside it
+All laptop timings (Apple M5), mock backend, in ms. "Audit" is `multi.audit_writes`, the fingerprinting of every blackboard
+section around each agent step.
+
+**What each number spans.**
+- **Deterministic-assessment time (P0)**: from the start of `MultiOrchestrator.tick` (before `gate.begin_tick`) to the moment
+  the gate's deterministic assessment exists.
+  - On a non-QUIET tick that covers: status reset, sensor (L1 checks, trust, findings, baselines), triage, opening the
+    assessment, signature, retrieval, belief update, and the gate's `approve` on belief's claims.
+  - On a QUIET tick it covers the whole tick, up to the gate publishing.
+  - With the audit on, it also includes the audit's fingerprinting around each of those steps.
+  - It does not include the model jobs, folding their answers, or the final approve and assembly.
+- **Hard-stage time**: the single agent's own `hard_ms`, i.e. the L1 check run plus the L6 `approve` call. This is what its
+  S7 deadline test uses. The multi path computes the same two timers (`multi.hard_ms`); the audit's fingerprinting falls
+  outside both timers, so it is not counted in either arch's S7.
+- **Plumbing overhead**: per-tick `tick_latency_ms` of multi minus single, paired by tick, whole tick.
+
+**Dev, 5,850 ticks (1,982 non-QUIET).**
+
+| quantity | audit | mean | p50 | p95 | max | over 200 ms |
+|---|---|---|---|---|---|---|
+| single: hard-stage time (L1+L6), all ticks | n/a | 0.276 | 0.252 | 0.436 | 0.778 | 0 |
+| single: hard-stage time, non-QUIET ticks | n/a | 0.317 | 0.344 | 0.442 | 0.778 | 0 |
+| single: whole tick | n/a | 0.416 | 0.457 | 0.771 | 1.138 | 0 |
+| multi: hard-stage time (same two timers), non-QUIET, rep 1 / rep 2 | off | 0.315 / 0.314 | 0.319 / 0.299 | 0.437 / 0.441 | 1.96 / 1.76 | 0 |
+| multi: hard-stage time, non-QUIET, rep 1 / rep 2 | on | 0.347 / 0.324 | 0.360 / 0.301 | 0.466 / 0.461 | 23.4 / 0.587 | 0 |
+| multi: P0 deterministic-assessment time, all ticks, rep 1 / rep 2 | off | 0.376 / 0.377 | 0.377 / 0.376 | 0.644 / 0.646 | 2.20 / 2.01 | **0 / 0** |
+| multi: P0 deterministic-assessment time, all ticks, rep 1 / rep 2 | on | 5.04 / 5.04 | 3.25 / 3.29 | 15.4 / 15.4 | 100.5 / 27.6 | **0 / 0** |
+| multi: P0, gate run (also `--log-prompts`) | on | 6.13 | 4.14 | 17.1 | 29.3 | **0** |
+| plumbing overhead (multi − single, whole tick), rep 1 / rep 2 | off | 0.020 / 0.005 | 0.012 / 0.008 | 0.060 / 0.059 | 1.90 / 1.64 | n/a |
+| plumbing overhead, rep 1 / rep 2 | on | 6.36 / 6.33 | 2.65 / 2.68 | 22.0 / 22.1 | 121.2 / 50.6 | n/a |
+
+- **The 200 ms check was measured with the audit on as well as off.** P0 over 200 ms: 0 of 5,850 ticks in two audit-off runs
+  and in three audit-on dev runs (two timing repetitions plus the gate run). S7 deadline misses: 0 in every run, both arches.
+  No new run was needed for this.
+- The reporting run (5,160 ticks) ran with the **audit on**: P0 mean 7.12, p50 4.90, p95 21.2, max 34.3; over 200 ms: 0.
+- Earlier tables in this report that say "P0 never exceeded 200 ms" without an audit state refer to both states.
+- The single-arch hard-stage row was measured for this close-out by timing the single agent's `CheckLayer.run` and
+  `Gate.approve` from a scratch script (one dev run, nothing in the repo changed). The single agent does not write its
+  `hard_ms` to the run file.
+- Unexplained: the one 23.4 ms multi hard-stage maximum (audit on, rep 1; rep 2's maximum is 0.587). The two timers do not
+  include fingerprinting. Not investigated; a single outlier against a 200 ms budget.
+
+### 2. HUMAN DECISIONS taken in this phase
+- **(a) Commit `10ce4df`: the single agent's tick glue was moved into importable functions.** Decided by the human at
+  planning time. Reason: the multi agents then reuse that glue by import instead of re-typing about 40 lines, so the two
+  paths cannot drift apart in later phases. It is the one change to `fieldmind/agent/` on this branch, made as its own
+  commit and shown to change nothing (0 decision differences against `main` on dev, prompt log byte-identical).
+- **(b) Lane choice in Phase 1 is earliest predicted finish, not the plan's fixed placement.** Decided by the human in the
+  session prompt. Reason: Phase 1 is where the scheduler and the lane-choice rule get built and tested without hardware, on
+  the simulated clock. On the mock backend both lanes call the same backend, so lane choice cannot change a decision.
+
+### 3. HUMAN DECISION for later phases
+With a real model, **the accuracy gates in Phases 2 and 3 use the plan's fixed placement.** Reason: NPU and CPU numerics can
+give different answers to the same prompt, and an accuracy change must have one cause. **Lane disagreement is measured
+separately**, by sending the same recorded prompts to both lanes. Free lane choice (earliest predicted finish and the other
+policies) returns in the Phase 5 scheduling study.
+
+Not built yet: the scheduler has no fixed-placement mode today (`multi.placement` is a label only). It has to be added
+before the first real-model accuracy gate.
+
+### 4. Simulated lane timings are expectations, not results
+The simulated lane timings, the lane split, and "every P1 diagnosis misses its 10 s deadline" are **expectations computed
+from placeholder rates**. The rates were measured on two different models, one of them an impure GGUF (the human's close-out
+note; the Phase 0b GGUF purity check was blocked, so this report does not confirm it independently). They are relabelled
+where they appear below.
+
+### 5. Open items carried out of Phase 1
+- **The write audit must be out of the timed hard path before board timings (Session 6).** Today it runs inside the P0 span
+  and costs about 5 ms mean and up to 100 ms of it on the laptop.
+- **The placeholder lane rates are replaced after Session 2**, with rates measured for the chosen model on both lanes.
+
+### 6. Mutation checks: confirmed run with `PYTHONDONTWRITEBYTECODE=1`
+All 15 mutations (9 at the gate, 6 after review) were run by one script that, for each mutation: edits the file, deletes
+every `__pycache__` outside `.venv`, runs pytest in a subprocess with `PYTHONDONTWRITEBYTECODE=1` in its environment and
+`-p no:cacheprovider`, restores the file, and deletes `__pycache__` again. The phase-reviewer's own mutations also ran with
+`PYTHONDONTWRITEBYTECODE=1`, in a separate copy of the tree.
+
 ## Phase 1 gate (pre-registered, committed before any Phase 1 code: `0404b04`)
 
 Backend: mock only. The phase is model-agnostic: no model is chosen and there is no real-model baseline, because the Session 2
@@ -86,7 +166,11 @@ final one; the P0 assessment is telemetry.
 it fingerprints every section (including the growing event log and the assessment) around each agent step. On a slower board
 CPU this could approach the 200 ms budget. See Decisions taken, item 3.
 
-### Lane and job telemetry (dev, multi, simulated clock; rates are ASSUMED placeholders, see Constants)
+### Lane and job telemetry: EXPECTATIONS from placeholder rates, not results
+Dev, multi, simulated clock. Every timing in this table (queue wait, deadline misses, finish times, lane busy seconds) and
+the lane split itself are computed from the placeholder lane rates. Those rates were measured on two different models, one
+of them an impure GGUF, and neither is the model both lanes will run. They are what the plumbing predicts under those rates;
+nothing here was measured on a lane. Job counts, stale drops and prompt-token estimates do not depend on the rates.
 | | value |
 |---|---|
 | jobs | 2,174 = 1,982 diagnostician + 192 verifier. This equals `diag_calls + ver_calls`; stale drops 0; replaced 0 |
@@ -99,7 +183,7 @@ CPU this could approach the 200 ms budget. See Decisions taken, item 3.
 | lane busy (simulated) | NPU 36,093 s, CPU 6,508 s |
 | prompt tokens (estimate) | diagnostician mean 2,036, max 2,285, **1,980 of 1,982 over 1,280**; verifier max 2,095, 170 of 192 over 1,280 |
 
-All P1 jobs miss the 10 s P1 deadline, because a ~2,000-token prompt plus a 256-token answer cap does not fit 10 s at either
+**Expectation, not a result:** all P1 jobs miss the 10 s P1 deadline on the simulated clock, because a ~2,000-token prompt plus a 256-token answer cap does not fit 10 s at either
 lane's planning rate (NPU ≈ 2.2 + 18.4 s). That is the expected Phase 1 outcome: the prompt shrink (Phase 2) and the
 60-token cap are what make P1 feasible. These are simulated-clock numbers on placeholder rates, so they are not a measurement.
 
@@ -304,8 +388,9 @@ Saved as `results/baselines/multi_p1_summary.json`. Mock numbers measure the det
   byte-identical to the single agent's. Shrinking them is Phase 2's job. Prompt and answer tokens are logged per call.
 - **Answer caps.** The plan's caps (diagnostician 60, verifier 30) are not applied; the single agent's `agent.max_tokens` of 256
   is kept, for the same reason.
-- **P1 is infeasible at these sizes.** On the simulated clock every P1 job misses its 10 s deadline. That is consistent with
-  the plan's own arithmetic for a ~2k-token prompt and a 256-token cap.
+- **P1 is expected to be infeasible at these sizes.** On the simulated clock every P1 job misses its 10 s deadline. This is an
+  expectation from placeholder rates (two models, one an impure GGUF), not a measured result. It is consistent with the plan's
+  own arithmetic for a ~2k-token prompt and a 256-token cap.
 
 ## Blocked / needs a decision
 - None blocking Phase 1.
