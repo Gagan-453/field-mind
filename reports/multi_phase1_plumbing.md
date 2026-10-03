@@ -50,6 +50,22 @@ section around each agent step.
 - The single-arch hard-stage row was measured for this close-out by timing the single agent's `CheckLayer.run` and
   `Gate.approve` from a scratch script (one dev run, nothing in the repo changed). The single agent does not write its
   `hard_ms` to the run file.
+- **Reproducibility (added in Phase 2, commit 1).** That script is now in the repo, logic unchanged:
+  `.venv/bin/python bench/time_single_hard.py` (dev set, mock, laptop timing). Two re-runs on 2026-10-03:
+
+  | single, dev, 5,850 ticks | mean | p50 | p95 | max | over 200 ms |
+  |---|---|---|---|---|---|
+  | hard-stage, all ticks: original | 0.276 | 0.252 | 0.436 | 0.778 | 0 |
+  | hard-stage, all ticks: re-run 1 / 2 | 0.299 / 0.290 | 0.256 / 0.257 | 0.519 / 0.463 | 1.808 / 1.609 | 0 / 0 |
+  | hard-stage, non-QUIET: original | 0.317 | 0.344 | 0.442 | 0.778 | 0 |
+  | hard-stage, non-QUIET: re-run 1 / 2 | 0.355 / 0.320 | 0.346 / 0.342 | 0.651 / 0.451 | 1.808 / 1.264 | 0 / 0 |
+  | whole tick: original | 0.416 | 0.457 | 0.771 | 1.138 | 0 |
+  | whole tick: re-run 1 / 2 | 0.460 / 0.434 | 0.460 / 0.462 | 0.903 / 0.778 | 5.918 / 2.229 | 0 / 0 |
+
+  Mean and p50 reproduce within 8% and 2%. **The maximum does not reproduce**: 0.778 originally against 1.808 and
+  1.609 (2.3x and 2.1x). It is one tick in 5,850 on a laptop running other work; the cause was not investigated, so it
+  is recorded as unexplained. Every value is under 1% of the 200 ms budget, and the count over 200 ms is 0 in all
+  three runs. Wall-clock timings do not reproduce to the digit; the original row stands as measured.
 - Unexplained: the one 23.4 ms multi hard-stage maximum (audit on, rep 1; rep 2's maximum is 0.587). The two timers do not
   include fingerprinting. Not investigated; a single outlier against a 200 ms budget.
 
