@@ -1,7 +1,9 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-PARTIAL. The pre-registration below (human decisions, dev gate, expected-change statement) was committed before
+BLOCKED at commit 3 on a stop rule: the ID-only answer format does not fit the 60-token cap on any of the four
+tokenizers (see "Commit 3" and "Blocked / needs a decision" at the end). Commits 0 to 3 are done; commits 4 to
+7 have not started. The pre-registration below (human decisions, dev gate, expected-change statement) was committed before
 any Phase 2 measurement or code (`595180b`). Results are added under "Results by commit" as commits land.
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
@@ -195,3 +197,125 @@ Constants introduced:
 | `multi.fixed_placement` diag_water / diag_heat / verifier | npu / cpu / cpu | CITED: plan, "Policies to compare", fixed placement (p.11) | none | lane of each job in fixed mode |
 | `multi.fixed_placement` text_reader / query | cpu / cpu | CITED: plan, "Model agents", default lane (p.5) | none | same |
 | `multi.fixed_placement` diagnostician (unsplit) | npu | HUMAN DECISION (plan review); the plan names only the two halves | npu or cpu | lane of the Phase 2 diagnostician; with a real model, which numerics produce the diagnosis |
+
+## Commit 3: real tokenizer counts (`bench/token_count.py`)
+
+### How each tokenizer got onto this machine
+`tokenizers` 0.23.2 and `jinja2` 3.1.6 were installed into `.venv` (used by `bench/` only). `HF_TOKEN` is not
+set, so the two gated models come from ungated mirrors. `bench/token_count.py --fetch` downloads
+`tokenizer.json`, `tokenizer_config.json` and, where the repo has one, `chat_template.jinja` at a pinned revision
+into `bench/tokenizers/<name>/` (gitignored). `bench/tokenizers/manifest.json` (committed) holds repo, revision
+and sha256, and every count refuses to run if a file's sha256 differs.
+
+| candidate | repo used | revision | mirror | template adds |
+|---|---|---|---|---|
+| Llama 3.2 3B | `unsloth/Llama-3.2-3B-Instruct` (official `meta-llama/...` returns HTTP 401) | `006f5dcd13` | yes | 35 tokens: BOS, a system header with two date lines, user and assistant headers |
+| Qwen3 1.7B | `Qwen/Qwen3-1.7B` | `70d244cc86` | no | 12 tokens with thinking off (an empty `<think></think>` block); 8 with thinking on |
+| Gemma 3 1B | `unsloth/gemma-3-1b-it` (official `google/...` returns HTTP 401) | `5b11413a10` | yes | 9 tokens |
+| Qwen2.5 0.5B | `Qwen/Qwen2.5-0.5B-Instruct` | `7ae557604a` | no | 29 tokens: a default system prompt the template inserts |
+
+A count is the prompt as one user message inside the model's chat template, generation prompt included, BOS
+counted once. That is what `LlamaServerBackend` sends. Qwen3 is counted with thinking off, which is the larger
+prompt; with thinking on the model would also spend answer tokens on thinking, so any answer cap assumes it is off.
+
+### Phase 1 prompts in real tokens (dev, 2,174 prompts, the "before" column)
+Mock run; the prompts are the single agent's. Budget column uses the Phase 2 caps (60 / 30) for comparison.
+
+| tokenizer | agent | n | mean | p95 | max | >= 1,280 | prompt + cap >= 1,280 |
+|---|---|---|---|---|---|---|---|
+| Llama 3.2 3B | diagnostician | 1,982 | 1,865.5 | 2,021 | 2,103 | 1,980 | 1,980 |
+| Llama 3.2 3B | verifier | 192 | 1,449.4 | 1,672 | 1,836 | 164 | 169 |
+| Qwen3 1.7B | diagnostician | 1,982 | 1,877.0 | 2,032 | 2,126 | 1,980 | 1,980 |
+| Qwen3 1.7B | verifier | 192 | 1,442.9 | 1,666 | 1,830 | 163 | 168 |
+| Gemma 3 1B | diagnostician | 1,982 | 1,891.5 | 2,042 | 2,150 | 1,980 | 1,980 |
+| Gemma 3 1B | verifier | 192 | 1,461.2 | 1,688 | 1,841 | 164 | 169 |
+| Qwen2.5 0.5B | diagnostician | 1,982 | 1,894.0 | 2,049 | 2,143 | 1,980 | 1,980 |
+| Qwen2.5 0.5B | verifier | 192 | 1,459.9 | 1,683 | 1,847 | 164 | 169 |
+
+Numbers that changed: the Phase 1 report's chars/4 estimate was diagnostician mean 2,036 / max 2,285 and verifier
+max 2,095 with 170 of 192 over. Real counts are 7 to 8% lower for the diagnostician (mean 1,866 to 1,894, max
+2,103 to 2,150) and 12% lower for the verifier maximum (1,830 to 1,847; 163 or 164 of 192 over). The conclusion
+does not change: 1,980 of 1,982 diagnostician prompts are over on every tokenizer. Lowest chars per token on
+these prompts: 3.961 (Gemma 3), 4.057 (both Qwen), 4.150 (Llama 3.2).
+
+### The 60-token answer check: FAILS on all four tokenizers
+Bare answer text, compact JSON (no spaces), tick 143 (three digits; dev runs to about tick 170).
+
+| answer | chars | Llama 3.2 | Qwen3 | Gemma 3 | Qwen2.5 |
+|---|---|---|---|---|---|
+| **worst case in the plan's format: 3 cases, 2 stamped citations each, 1 note** | 159 | **89** | **105** | **111** | **105** |
+| same, with 4 notes and 2 unexplained facts | 193 | 107 | 127 | 135 | 127 |
+| same as the first row, default `json.dumps` spacing | 179 | 102 | 118 | 125 | 118 |
+| the plan's own example exactly as printed on p.13 (2 cases, 3 citations) | 126 | 72 | 78 | 84 | 78 |
+
+The plan describes its example as "about 50 tokens". It is 72 to 84. Where the tokens go: `"RCA-11"` is 6 or 7
+tokens, `"t143.F1"` is 6 to 9, `0.6` is 3, and `"sep":"RCA-11","n":["N3"],"x":[]}` is 16 or 17.
+
+The verifier has the same problem at its cap of 30: three case IDs with pass/fail plus a stamped fact ID is 33
+to 41 tokens. The text reader fits its cap of 50: 30 to 32 tokens for two tags, 36 to 40 for three.
+
+### Verification
+| step | result |
+|---|---|
+| ran the module | `bench/token_count.py --prompts results/multi_phase2/prompts_dev_fixed.jsonl --answers`: 2,174 prompts on 4 tokenizers, exit 0 |
+| self-tests | `tests/test_token_count.py`: 28 passed; full suite 197 passed |
+| independent re-derivation | llama.cpp's own tokenizer (`llama-tokenize`, Homebrew llama.cpp 0.5.0, build 11146) on the vocab-only GGUFs from the llama.cpp repo, over 73 dev prompts (every 30th) and the 8 answer cases. Llama 3.2, templated: 132,127 tokens by both, 0 of 81 texts differ. Qwen2.5, templated: 134,112 by both, 0 differ. Qwen3, bare text: 131,995 by both, 0 differ. Relative difference 0 in all three |
+| mutation check | 8 mutations, 8 caught (table below) |
+
+| mutation (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared) | caught by |
+|---|---|
+| prompt cap 1,280 -> 1,300 | `test_budget_is_prompt_plus_answer_cap_under_1280[*]` (4), `test_count_prompts_flags_only_the_prompt_over_budget` |
+| diagnostician answer cap 60 -> 50 | `test_answer_caps_per_agent[*]` (2), the budget test, the count test |
+| budget ignores the answer cap | budget test (3 cases), count test |
+| no generation prompt in the template | `test_generation_prompt_is_part_of_the_count`, `test_prompt_is_counted_inside_the_chat_template[*]` (4), `test_qwen3_is_counted_with_thinking_off` |
+| prompt counted without its template | template test (4), `test_bos_is_counted_once`, Qwen3 test |
+| special tokens added a second time | `test_bos_is_counted_once`, template test (Gemma, Llama) |
+| Qwen3 counted with thinking on | template test (Qwen3), Qwen3 test |
+| sha256 check skipped | `test_file_that_does_not_match_the_manifest_is_refused` |
+
+### What I could not verify
+- **Gemma 3 has no independent count.** llama.cpp ships no Gemma 3 vocab file, so its numbers rest on the
+  Hugging Face tokenizer alone.
+- **Qwen3's template was not cross-checked**, only its bare-text tokenization (the Qwen2 vocab file has no
+  `<think>` token).
+- The mirrors' files were not compared with the gated official repos.
+- Whether the board's GGUF files tokenize the same way, and whether `llama-server` renders the same template
+  (it has its own template engine). To check against each lane's `/tokenize` or `timings.prompt_n`.
+- The Llama 3.2 template writes today's date; a different date could move the count by a token.
+
+## Blocked / needs a decision
+**The ID-only answer format and the answer caps conflict (stop rules 2 and 6).** The plan's format needs up to
+111 tokens for a legal 3-case answer and 72 to 84 for its own example, against a cap of 60; the plan's estimate
+of "about 50" is off by more than the cap allows. Commits 4 to 7 are not started, because the answer format
+fixes the parser, the gate's expansion, the mock roles and the prompts' ID scheme.
+
+Options, each measured on all four tokenizers (Llama 3.2 / Qwen3 / Gemma 3 / Qwen2.5):
+
+| option | worst-case answer | tokens | fits 60 | what it gives up |
+|---|---|---|---|---|
+| A. keep the plan's format, raise the cap | 3 cases x 2 stamped citations, 4 notes, 2 unexplained | 107 / 127 / 135 / 127 | no; needs a cap near 136 | the 60 rule; G3 becomes prompt + ~136 < 1,280; writing time roughly doubles (9.8 s against 4.3 s at the plan's 13.9 tok/s planning rate, an expectation, not a measurement) |
+| B. line numbers for everything: cases 1..4, facts and notes by their line in the prompt, confidence in tenths | `{"g":"A","r":[[1,6,[1,2]],[2,3,[1,2]],[3,2,[1,2]]],"sep":1,"n":[1,2,3,4],"x":[3,4]}` | 55 / 55 / 55 / 55 | yes, by 5 (62 on three tokenizers if a cited fact line is two digits, so it also needs at most 9 fact lines) | the model no longer writes `t84.F1` or `RCA-11`; code maps line numbers to the stamped IDs of the job's evidence tick |
+| B'. as B, without confidences | `{"g":"A","r":[[1,[1,2]],[2,[1,2]],[3,[1,2]]],"sep":1,"n":[1,2,3,4],"x":[3,4]}` | 49 / 49 / 49 / 49 | yes, by 11 | as B, plus the model's confidence |
+| C. real case IDs, fact and note line numbers, no confidences | `{"g":"A","r":[["RCA-11",[1,2]],...],"sep":"RCA-11","n":[1,2,3,4],"x":[3,4]}` | 61 / 65 / 65 / 65 | no (52 to 56 with one note and nothing unexplained) | would need limits on notes and unexplained facts as well |
+| D. keep stamped IDs, shrink the content to 2 cases x 1 citation | `{"g":"A","r":[["RCA-11",0.6,["t143.F1"]],["RCA-07",0.3,["t143.F2"]]],...}` | 57 / 64 / 66 / 64 | no | and loses the third case |
+
+Facts that bear on the choice:
+- **The model's confidence is already mostly unused.** In the single agent's `merge`, a case that is in belief's
+  top 3 keeps belief's confidence and the model's number is discarded; the model's number is used only for a
+  case outside belief's top 3, capped at 0.5. On the dev mock run that was 3,170 of the published hypotheses.
+- With B or B', the gate still checks every citation against the facts of the answer's evidence tick, and
+  published citations are still `t84.F1`; only what the model types changes. This does change the letter of the
+  CLAUDE.md rule "Fact IDs carry their tick", so it is a human decision.
+- Verifier at cap 30: real case IDs plus a stamped fact ID is 33 to 41 tokens (over). Line numbers
+  (`{"v":[[1,"p"],[2,"f"],[3,"p"]],"c":2}`) is 21 to 23. Listing only the failed line numbers is 13.
+
+Questions:
+1. Which answer format: A, B, B', or something else?
+2. If B or B': is at most 9 fact lines in a diagnosis prompt acceptable? Dev's maximum is 7 facts on a tick.
+3. Does the verifier follow the same choice?
+
+## Disagreements recorded, not resolved
+- **Plan p.13: "about 50 tokens" for the example answer.** Measured 72 / 78 / 84 / 78. Ratio 1.4 to 1.7.
+  Not resolved by changing the format; brought to the human as the blocked item above.
+- **Phase 1 hard-stage maximum** did not reproduce (0.778 ms against 1.808 and 1.609); mean and p50 did.
+  Unexplained; recorded in the Phase 1 report.

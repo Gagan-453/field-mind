@@ -25,3 +25,7 @@ venv/
 # --- macOS
 .DS_Store
 npu/maven/
+
+# --- tokenizer files (licence terms): fetched by bench/token_count.py --fetch;
+#     bench/tokenizers/manifest.json (repo, revision, sha256) IS committed
+bench/tokenizers/*/
