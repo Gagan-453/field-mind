@@ -35,6 +35,9 @@ from fieldmind.agent.l4_diagnose import Diagnostician
 from fieldmind.agent.l5_verify import Verifier
 from fieldmind.agent.l6_gate import ActionCatalogue, Gate
 from fieldmind.agent.orchestrator import Orchestrator
+from fieldmind.multi.lanes import LaneBackend
+from fieldmind.multi.orchestrator import MultiOrchestrator, make_lanes
+from fieldmind.multi.scheduler import Scheduler
 from fieldmind.agent.world_model import new_world_model
 from fieldmind.kb.stores import (AssetModel, CaseLibrary, ExperienceStore,
                                  NotesStore)
@@ -111,6 +114,27 @@ def build_agent(cfg: dict, notes: list[dict], records: dict | None = None,
     return orch, asset, cases, experience, backend, diag, ver
 
 
+def build_multi_agent(cfg: dict, notes: list[dict], records: dict | None = None,
+                      wrap_backend=None):
+    """Same components as bench.harness.build_agent (built BY it, so nothing is
+    duplicated), with the model agents' backend replaced by the lane facade.
+    `wrap_backend` wraps the facade, so a prompt recorder sees every call in
+    the order it is made, whichever lane runs it."""
+    box = {}
+
+    def wrap(backend):
+        sched = Scheduler(make_lanes(cfg, backend), cfg["multi"])
+        box["scheduler"] = sched
+        facade = LaneBackend(sched)
+        return wrap_backend(facade) if wrap_backend is not None else facade
+
+    orch, asset, cases, experience, backend, diag, ver = build_agent(
+        cfg, notes, records, wrap_backend=wrap)
+    multi = MultiOrchestrator(orch.checks, orch.retriever, diag, ver, orch.gate,
+                              cfg["agent"], cfg["multi"], box["scheduler"])
+    return multi, asset, cases, experience, backend, diag, ver
+
+
 def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                 verbose: bool = False, arch: str = "single",
                 record_prompts: str | None = None) -> dict:
@@ -139,7 +163,6 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
         orch, asset, cases, experience, backend, diag, ver = build_agent(
             cfg, notes, ep.records, wrap_backend=wrap)
     elif arch == "multi":
-        from fieldmind.multi.orchestrator import build_multi_agent
         orch, asset, cases, experience, backend, diag, ver = build_multi_agent(
             cfg, notes, ep.records, wrap_backend=wrap)
     else:

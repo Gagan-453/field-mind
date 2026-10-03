@@ -118,6 +118,34 @@ agent:
       URGENT: 1024
 
 # ---------------------------------------------------------------------------
+#  Multi-agent (fieldmind/multi, run_demo.py --arch multi). Read ONLY by the
+#  multi path; the single agent never sees this block.
+# ---------------------------------------------------------------------------
+multi:
+  mode: lockstep                    # lockstep only in Phase 1; realtime is Session 6
+  placement: earliest_finish        # plan p.10; the other study policies are Phase 5
+  adapt_rates: false                # rate update from measured timings: not built (Phase 1)
+  # Single-writer audit: fingerprint every blackboard section around each agent
+  # step and raise if a non-owner changed one. Costs hard-path time (measured
+  # in reports/multi_phase1_plumbing.md); the API-level check is always on.
+  audit_writes: true
+  # Deadlines per priority, seconds after the evidence tick. CITED: plan
+  # "Priorities and deadlines" (p.10): P1 10 s, P2 30 s, P3 60 s, P4 none.
+  # P0 is the hard path, agent.hard_stage_deadline_ms (200 ms).
+  deadlines_s: {P1: 10, P2: 30, P3: 60, P4: null}
+  # Lanes, in tie-break order. Rates CITED: plan "Rates used for planning"
+  # (p.14-15): NPU llama.cpp, Llama 3.2 3B Q4_0, ~1150-token prompt, prefill
+  # ~909 / decode ~13.9 tok/s; CPU, Gemma 3 1B on LiteRT-LM, ~126 / ~42.
+  # ASSUMED as this project's lane rates: two DIFFERENT models, not the one GGUF
+  # both lanes will run; range unknown until Session 2 measures the chosen
+  # model on both lanes (then replace). Affects: lane choice and the simulated
+  # clock (queue wait, sim finish) only -- never a mock decision, since both
+  # lanes call the same backend.
+  lanes:
+    npu: {prefill_tok_s: 909, decode_tok_s: 13.9, url: "http://localhost:8080"}
+    cpu: {prefill_tok_s: 126, decode_tok_s: 42, url: "http://localhost:8081"}
+
+# ---------------------------------------------------------------------------
 #  Deterministic check thresholds  (Plan Appendix A.5)
 #  RE-TUNED IN STAGE 4 against the regenerated episodes: sub-model-4 dropped
 #  bed/ms emit noise ~20x but added an OU load driver + independent per-
