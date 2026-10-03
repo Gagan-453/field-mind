@@ -48,3 +48,11 @@ with `-c 4096 -np 1`, the same for every model and both lanes.
   quietly when the Hub is unreachable (a false "done"); use `fetch_weights.py`, which verifies sha256.
 - Resume the fetch with: `cd ~/fieldmind-build && env -u PYTHONPATH venv-convert/bin/python fetch_weights.py`.
 - Lane launch needs `-lv 4`: at the default log level this build prints no offload / buffer / tensor-type lines.
+
+## Step 3 results (one row per finished model)
+Built by `bench/build_candidate_gguf.sh` at llama.cpp `99b9548`; files in `~/fieldmind-build/gguf/`. Type counts are
+from `bench.gguf_types` and agree with llama.cpp's own `gguf-py` reader (`~/fieldmind-build/types_gguf_py.py`).
+
+| model | source precision | candidate file | bytes | sha256 | matrices | verdict |
+|---|---|---|---|---|---|---|
+| Qwen2.5 0.5B Instruct | BF16 | `Qwen2.5-0.5B-Instruct-Q4_0-pure-embq8.gguf` | 352,154,624 | `00d3bb3f9210f132ef246cc5db2a7d8c9f8b63785679a95aef3558875b50e341` | 168 Q4_0 + token_embd Q8_0 (output tied) | OK |
