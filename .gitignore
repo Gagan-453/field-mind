@@ -4,6 +4,11 @@ data/episodes_dev/
 data/experience/
 results/*
 !results/baselines/
+# board campaign results are tracked (summaries, gzipped call logs, manifest, status);
+# its scratch folders are not
+!results/board/
+results/board/tmp/
+results/board/cache/
 
 # --- reference data: large, and not ours to redistribute
 data/reference/*.csv

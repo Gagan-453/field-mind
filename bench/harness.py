@@ -106,10 +106,14 @@ def build_agent(cfg: dict, notes: list[dict], records: dict | None = None):
 
 
 def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
-                verbose: bool = False) -> dict:
+                verbose: bool = False, on_tick=None) -> dict:
     """Replay one episode. `ablate_text` removes every note -- that is the T8
     modality ablation, and tier B/C accuracy MUST collapse under it or the
-    episode is mislabelled."""
+    episode is mislabelled.
+
+    `on_tick(k)`, if given, is called just before tick k is processed. It is
+    telemetry only (the board campaign uses it to stamp each model call with
+    its tick) and must not touch the agent."""
     notes = [] if ablate_text else ep.notes
     # records.json is a separate modality from notes -- text ablation (T8)
     # removes notes, not the coal lab report / conductivity log.
@@ -137,6 +141,8 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
             continue                       # still filling; do not guess
 
         ts = (EPOCH + timedelta(seconds=t_end)).isoformat()
+        if on_tick is not None:
+            on_tick(k)
         asmt = orch.tick(wm, window, k, ts, now_s=t_end)
         assessments.append(asmt.to_dict())
 
