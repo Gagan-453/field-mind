@@ -32,6 +32,23 @@ They are not comparable with any rate from the recipe above and must not be mixe
 single-agent prompt is ~2484 tokens and context size changes NPU speed. Code: `bench/board.py` (`CTX_SIZE`,
 `N_PARALLEL`, `lane_command`); test: `tests/test_board_env.py::test_lanes_always_use_ctx_4096_np_1`.
 
+## Human decisions on the mirror, EOS and launch flags (2026-10-03, after the laptop-side build)
+1. **Safetensors mirrors accepted for the two gated models.** Reason: the weights are the official files. How the
+   identity was established: the Hub's API (`model_info(..., files_metadata=True)`) returns the LFS sha256 of every
+   file even for a gated repo that cannot be downloaded. Those published hashes were read for the official repos and
+   compared with the mirrors' published hashes, then `~/fieldmind-build/fetch_weights.py` recomputed sha256 over the
+   downloaded bytes and required equality (`logs/fetch_weights.log`, `OK` lines):
+   - `meta-llama/Llama-3.2-3B-Instruct` == `unsloth/Llama-3.2-3B-Instruct`:
+     `model-00001-of-00002.safetensors` `13cbd6d16e927a0c5bad54102514e6e18b4a47b3a6eb911e39d678d328d19f55`,
+     `model-00002-of-00002.safetensors` `7b770216613ac5c34d7c54bdff1fa616bc4e338a9d0b20af6303e48c295ee23c`;
+   - `google/gemma-3-1b-it-qat-q4_0-unquantized` == `unsloth/gemma-3-1b-it-qat`:
+     `model.safetensors` `6d571889049c5550a2cdcc3e1846646e595b683ce0d3c7bea904ed8874cf8ef2`,
+     `tokenizer.model` `1299c11d7cf632ef3b4e11937501358ada021bbdf7c47638d13c0ee982f2e79c`.
+   Limit: the identity covers those LFS files only. The mirrors' small JSON files differ from the official ones.
+2. **Gemma EOS id = 1 accepted**, to match Google's own GGUF.
+3. **`-fit off` accepted on both lanes**, so the server cannot change the context size or the offload on its own.
+   **`-lv 4` is NOT yet accepted**: it waits for the measured cost (smoke test, step C).
+
 ## What was built
 - **llama.cpp pin:** `ggml-org/llama.cpp` tag `b11371`, commit `99b95488cac0f00ce3f05af113a8c1e287753f87`.
 - **Android package:** container `ghcr.io/snapdragon-toolchain/arm64-android:v0.7` (digest `sha256:c012b817...`,
@@ -106,7 +123,6 @@ None: no physical response was modelled in this stage.
 
 ## Blocked / needs a decision
 - Board steps (push GGUFs, smoke test) wait for the human to reconnect the board and say continue.
-- Decision 2 (safetensors mirrors instead of GGUF mirrors) is the human's to confirm or reverse.
 
 ## What I could not verify
 - That every operation runs on the NPU. The dry run (impure on-board file, launch mechanics only, no request sent, no
