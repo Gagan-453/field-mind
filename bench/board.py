@@ -15,14 +15,41 @@ Host side only: shells out to adb and talks HTTP to the forwarded lanes.
 
   .venv/bin/python -m bench.board temp
   .venv/bin/python -m bench.board speed http://localhost:8080 [prompt_file]
+  .venv/bin/python -m bench.board env      (what the board scripts run with)
+
+Two host rules for every board script (bench.board, bench.probe_device):
+  * PYTHONPATH is unset. This laptop exports PYTHONPATH into the QAIRT SDK's
+    python folder, which can shadow or satisfy imports the venv should own.
+    drop_pythonpath() re-executes the interpreter without it; clean_env() is
+    the environment handed to every adb subprocess.
+  * Timestamps are LAPTOP time (laptop_time()). The board's clock is wrong
+    (it read 2023-09-20 on 2026-10-03), so board time is never logged.
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.request
+
+
+def clean_env() -> dict:
+    """The host environment minus PYTHONPATH; pass as env= to every subprocess."""
+    return {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+
+
+def drop_pythonpath() -> None:
+    """Re-execute this interpreter without PYTHONPATH if it is set. Call first
+    thing in a board script's __main__; a no-op once it is unset."""
+    if "PYTHONPATH" in os.environ:
+        os.execve(sys.executable, [sys.executable] + sys.orig_argv[1:], clean_env())
+
+
+def laptop_time() -> str:
+    """ISO local time with UTC offset, from the laptop's clock."""
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 # Qualcomm thermal zone type names: CPU clusters are cpu*/cpuss*; the Hexagon
 # NPU/DSP shows as nsp*, cdsp*, q6* depending on the kernel. Recorded raw too.
@@ -57,7 +84,7 @@ def summarise(zones: list[tuple[str, float]]) -> dict:
         v = [t for name, t in zones if any(k in name.lower() for k in keys)
              and -20.0 < t < 150.0]
         return round(max(v), 1) if v else None
-    return {"t": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    return {"t": laptop_time(),
             "cpu_max_c": mx(_CPU_KEYS), "npu_max_c": mx(_NPU_KEYS),
             "n_zones": len(zones)}
 
@@ -65,7 +92,8 @@ def summarise(zones: list[tuple[str, float]]) -> dict:
 def chip_temperature(adb_serial: str = "", raw: bool = False) -> dict:
     cmd = ["adb"] + (["-s", adb_serial] if adb_serial else []) + ["shell", _ZONE_CMD]
     try:
-        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20,
+                           env=clean_env())
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"error": str(e)}
     zones = parse_zones(p.stdout)
@@ -138,7 +166,11 @@ def decode_rate_wallclock(url: str, prompt: str, n1: int = 16, n2: int = 80) -> 
 
 
 if __name__ == "__main__":
-    if len(sys.argv) >= 2 and sys.argv[1] == "temp":
+    drop_pythonpath()
+    if len(sys.argv) >= 2 and sys.argv[1] == "env":
+        print(json.dumps({"laptop_time": laptop_time(),
+                          "PYTHONPATH": os.environ.get("PYTHONPATH")}))
+    elif len(sys.argv) >= 2 and sys.argv[1] == "temp":
         print(json.dumps(chip_temperature(raw=True), indent=1))
     elif len(sys.argv) >= 3 and sys.argv[1] == "speed":
         pr = open(sys.argv[3]).read() if len(sys.argv) > 3 else "Say hello in five words."

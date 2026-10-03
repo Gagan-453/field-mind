@@ -31,6 +31,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fieldmind.runtime.llm_backend import LiteRTBackend   # noqa: E402
+from bench.board import clean_env, drop_pythonpath, laptop_time   # noqa: E402
 
 DEVICE_DIR = "/data/local/tmp/llm"
 
@@ -42,7 +43,8 @@ ACCELERATOR = "cpu"
 
 def sh(*args) -> tuple[int, str]:
     try:
-        p = subprocess.run(args, capture_output=True, text=True, timeout=60)
+        p = subprocess.run(args, capture_output=True, text=True, timeout=60,
+                           env=clean_env())
         return p.returncode, (p.stdout + p.stderr).strip()
     except Exception as e:
         return 1, str(e)
@@ -51,6 +53,7 @@ def sh(*args) -> tuple[int, str]:
 def main():
     ok = True
 
+    print(f"laptop time {laptop_time()} (board time is never logged: its clock is wrong)")
     print("1. adb devices")
     rc, out = sh("adb", "devices")
     print("  ", out.replace("\n", "\n   "))
@@ -122,4 +125,5 @@ def main():
 
 
 if __name__ == "__main__":
+    drop_pythonpath()
     sys.exit(main())
