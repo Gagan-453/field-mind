@@ -204,6 +204,23 @@ reboot.
   their failing calls were reconstructed from the reply cache); (c) STATUS.md's attempt number from the manifest.
   Each with a test and a caught mutation (`PYTHONDONTWRITEBYTECODE=1`). 140 tests pass.
 
+## HUMAN DECISION 2026-10-04: dev runs for every model that passes screening (replaces option C)
+**Decided AFTER the campaign's stage C result was seen** (no model passed; `reports/campaign_watch.md`). Option C
+(dev runs only for Llama 3.2 3B plus the fastest other model) is replaced: **every model that passes screening gets
+the 3 dev rounds, interleaved by episode, with the same early-drop rule (0.30 / 0.10 after round 1), then
+`bench/model_choice.py` is applied unchanged to all survivors.** No limit is changed. Reason (human, as proposed on
+2026-10-03 before any result and adopted now): the speed-only pick left two candidates, Qwen3 1.7B and Gemma 3 1B,
+untested, and the measured 3B call time makes the extra dev runs affordable.
+
+- The stage A screening and the dev results already in `results/board` for the 3B and Qwen2.5 0.5B are kept and reused
+  (same flags, same sampling, same code paths for the agent); only the missing episodes are run.
+- The first stage C record (no pick, two models) is kept in the manifest under `superseded`, and its
+  `C/model_choice.*` files are kept under a `.superseded-1` name; stage C is then recomputed on all survivors.
+- Known before this run, for the record: 10 of the 3B's 11 after-repair failures were first replies cut off at the
+  256-token answer cap (13 first replies hit the cap; the repair prompt shows only the first 800 characters of the
+  failed answer and rescued 3). 1 failure was not cap-related. The cap and the limits are unchanged by this decision,
+  so the 3B's stage C result is expected to stay as it is.
+
 ## Campaign launch of 2026-10-03 23:07 (after the fixes): NOT the offline proof
 Launched by the human in tmux (session `campaign`, wrapper `~/campaign_loop.sh`: waits for adb, sleeps 10 minutes,
 runs `scripts/board_campaign.sh all`, relaunches only on exit code 2, at most 12 times). **The laptop's Wi-Fi is on
