@@ -252,11 +252,13 @@ def _stage_a(tmp_path, models):
     return c, b, stop
 
 
-def test_screening_shapes_and_second_model_rule(tmp_path):
+def test_screening_shapes_and_every_passing_model_gets_dev_runs(tmp_path):
     c, b, stop = _stage_a(tmp_path, MODELS_PLAN)
     a = c.manifest["stages"]["A"]
     assert stop is None and a["passing"] == ["llama32-3b", "qwen3-1.7b", "gemma3-1b-qat"]
-    assert a["second"] == "gemma3-1b-qat"                 # lowest measured among the passers
+    # HUMAN DECISION 2026-10-04 (replaces option C): every passing model, in candidate order
+    assert a["dev_models"] == ["llama32-3b", "qwen3-1.7b", "gemma3-1b-qat"] and "second" not in a
+    assert c.dev_models() == a["dev_models"]
     assert a["checks"]["qwen25-0.5b"] == {"htp0_all_layers": False, "gguf_all_q4_0_q8_0": True}
     s = json.loads(Path(c.prefix("A", "A", LLAMA, "screen") + ".summary.json").read_text())
     by = {}
@@ -280,7 +282,7 @@ def test_qwen3_think_block_fails_its_screening(tmp_path):
     plan = dict(MODELS_PLAN, **{"qwen3-1.7b": {"decode_tok_s": 99, "prefill_tok_s": 2000, "think": True}})
     c, b, stop = _stage_a(tmp_path, plan)
     a = c.manifest["stages"]["A"]
-    assert "qwen3-1.7b" not in a["passing"] and a["second"] == "gemma3-1b-qat"
+    assert "qwen3-1.7b" not in a["passing"] and c.dev_models() == ["llama32-3b", "gemma3-1b-qat"]
     s = json.loads(Path(c.prefix("A", "A", "qwen3-1.7b", "screen") + ".summary.json").read_text())
     assert s["think_ok"] is False and s["think_blocks_in_calls"]
     assert s["thinking_off_mechanism"] == {"chat_template_kwargs": {"enable_thinking": False}}
@@ -314,27 +316,28 @@ def test_rounds_are_interleaved_and_a_model_is_dropped_after_round_1(tmp_path):
                                                   "broken_first": 0.35}})
     c, b, stop = _through_b(tmp_path, plan)
     bj = [j for j in c.manifest["jobs"] if j.startswith("B/")]
-    assert bj[:2] == ["B/round1/llama32-3b/dev_A01_fcv_seize", "B/round1/gemma3-1b-qat/dev_A01_fcv_seize"]
+    assert bj[:3] == ["B/round1/llama32-3b/dev_A01_fcv_seize", "B/round1/qwen3-1.7b/dev_A01_fcv_seize",
+                      "B/round1/gemma3-1b-qat/dev_A01_fcv_seize"]
     st = c.manifest["stages"]["B"]
     assert stop is None and list(st["dropped"]) == ["gemma3-1b-qat"]
     assert 0.30 < st["round1"]["gemma3-1b-qat"]["broken_json_first_reply"] < 0.60
-    assert st["survivors"] == [LLAMA]
-    assert bj[2:] == ["B/round2/llama32-3b/dev_B01_tube_leak", "B/round3/llama32-3b/dev_C02_feeder_trip"]
+    assert st["survivors"] == [LLAMA, "qwen3-1.7b"]
+    assert bj[3:] == ["B/round2/llama32-3b/dev_B01_tube_leak", "B/round2/qwen3-1.7b/dev_B01_tube_leak",
+                      "B/round3/llama32-3b/dev_C02_feeder_trip", "B/round3/qwen3-1.7b/dev_C02_feeder_trip"]
 
 
 def test_interleaving_without_a_drop(tmp_path):
     c, b, stop = _through_b(tmp_path, MODELS_PLAN)
     bj = [j.split("/", 1)[1] for j in c.manifest["jobs"] if j.startswith("B/")]
     assert bj == [f"round{r}/{t}/{e}" for r, e in enumerate(C.ROUNDS, 1)
-                  for t in (LLAMA, "gemma3-1b-qat")]
+                  for t in (LLAMA, "qwen3-1.7b", "gemma3-1b-qat")]
 
 
-def test_stop_if_both_models_are_dropped(tmp_path):
-    plan = dict(MODELS_PLAN, **{LLAMA: {"broken_first": 0.6, "broken_repair": 0.9},
-                                "gemma3-1b-qat": {"decode_tok_s": 46, "prefill_tok_s": 600,
-                                                  "broken_first": 0.6}})
+def test_stop_if_every_model_is_dropped(tmp_path):
+    bad = {"broken_first": 0.6, "broken_repair": 0.9}
+    plan = dict(MODELS_PLAN, **{LLAMA: bad, "qwen3-1.7b": bad, "gemma3-1b-qat": bad})
     c, b, stop = _through_b(tmp_path, plan)
-    assert stop and "both models dropped" in stop
+    assert stop and "every model dropped" in stop
     assert not any("round2" in j for j in c.manifest["jobs"])
 
 
@@ -345,7 +348,7 @@ def test_stage_c_stops_when_model_choice_passes_no_model(tmp_path):
     plan = {m["tag"]: dict(slow) for m in C.MODELS}
     c, b, stop = _through_b(tmp_path, plan)
     surv = c.manifest["stages"]["B"]["survivors"]
-    assert stop is None and len(surv) == 2 and surv[0] == LLAMA      # nobody dropped after round 1
+    assert stop is None and surv == [m["tag"] for m in C.MODELS]     # all 4 pass screening, nobody dropped
     with pytest.raises(C.CampaignStop, match="no model passes"):
         c.stage_c()
     st = c.manifest["stages"]["C"]
@@ -375,9 +378,11 @@ def test_full_dry_run_stages_a_to_e(full_run):
     m = json.loads((d / "out/manifest.json").read_text())
     assert all(m["stages"][s]["done"] for s in "ABCDE")
     assert all(j["status"] == "complete" for j in m["jobs"].values())
-    assert m["stages"]["A"]["second"] == "gemma3-1b-qat"
+    assert m["stages"]["A"]["dev_models"] == [LLAMA, "qwen3-1.7b", "gemma3-1b-qat"]
+    assert m["stages"]["B"]["survivors"] == [LLAMA, "qwen3-1.7b", "gemma3-1b-qat"]
+    assert sum(k.startswith("B/") for k in m["jobs"]) == 9           # 3 models x 3 rounds
     pick = m["stages"]["C"]["pick"]
-    assert pick in (LLAMA, "gemma3-1b-qat") and (d / "out/C/model_choice.txt").exists()
+    assert pick in (LLAMA, "qwen3-1.7b", "gemma3-1b-qat") and (d / "out/C/model_choice.txt").exists()
     # D: 30 reporting episodes, round-robin, baseline written under a new name
     dj = [j.rsplit("/", 1)[1] for j in m["jobs"] if j.startswith("D/")]
     assert len(dj) == 30 and dj[:6] == ["ep_N01_normal", "ep_A01_fcv_seize", "ep_B01_tube_leak",
@@ -537,3 +542,40 @@ def test_peak_in_episode_temperature_is_reported(tmp_path):
     p = s["meta"]["chip_temp_peak"]
     assert p["cpu_max_c"] == 93.8 and p["npu_max_c"] == 92.8
     assert p["n_reads"] == s["meta"]["n_calls"] + 2           # start + every call + end
+
+
+# ---- resuming a results folder made under option C (two dev models, stage C: no pick) ----
+def test_option_c_results_are_extended_not_rerun(tmp_path, monkeypatch):
+    slow = {"prefill_tok_s": 100, "decode_tok_s": 5}                 # too slow for model_choice: no pick
+    plan = {"models": {LLAMA: slow, "qwen25-0.5b": dict(slow, decode_tok_s=6)}}   # qwen3, gemma: fast
+    # 1. the old rule: only the 3B and one other model get dev runs; stage C then stops
+    monkeypatch.setattr(C.Campaign, "dev_models", lambda self: [LLAMA, "qwen25-0.5b"])
+    old = C.Campaign(tmp_path / "out", FakeBoard(plan), commit=False, baseline_dir=tmp_path / "base")
+    assert old.run_all() == C.EXIT_STOP
+    m0 = json.loads(old.mpath.read_text())
+    assert m0["stages"]["B"]["models"] == [LLAMA, "qwen25-0.5b"] and m0["stages"]["C"]["pick"] is None
+    old_c = (tmp_path / "out/C/model_choice.json").read_text()
+    monkeypatch.undo()
+    # 2. relaunch with the new rule on the same folder
+    b = FakeBoard(plan)
+    new = C.Campaign(tmp_path / "out", b, commit=False, baseline_dir=tmp_path / "base")
+    rc = new.run_all()
+    m = json.loads(new.mpath.read_text())
+    # the 4 screenings and the 6 finished dev episodes were not run again
+    assert all(j["attempts"] == 1 for j in m["jobs"].values())
+    done_before = {k for k in m0["jobs"]}
+    ran_models = {f for f, _ in b.starts}
+    assert ran_models == {C.MODELS[1]["file"], C.MODELS[2]["file"]} or rc == C.EXIT_OK and \
+        {C.MODELS[1]["file"], C.MODELS[2]["file"]} <= ran_models     # qwen3, gemma (+ the pick, later stages)
+    new_b = sorted(k for k in m["jobs"] if k.startswith("B/") and k not in done_before)
+    assert new_b == sorted(f"B/round{r}/{t}/{e}" for r, e in enumerate(C.ROUNDS, 1)
+                           for t in ("qwen3-1.7b", "gemma3-1b-qat"))
+    # stage B now covers all four; the old round-1 rates were kept, the new ones added
+    assert m["stages"]["B"]["models"] == [x["tag"] for x in C.MODELS]
+    assert set(m["stages"]["B"]["round1"]) == set(m["stages"]["B"]["models"])
+    assert m["stages"]["B"]["round1"][LLAMA] == m0["stages"]["B"]["round1"][LLAMA]
+    # the first stage C result is kept, in the manifest and on disk, and stage C was recomputed
+    assert m["superseded"][0]["stage"] == "C" and m["superseded"][0]["record"]["pick"] is None
+    assert (tmp_path / "out/C/model_choice.superseded-1.json").read_text() == old_c
+    assert set(m["stages"]["C"]["gates"]) == set(m["stages"]["B"]["models"])
+    assert m["stages"]["C"]["pick"] in ("qwen3-1.7b", "gemma3-1b-qat") and rc == C.EXIT_OK

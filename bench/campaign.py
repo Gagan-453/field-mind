@@ -70,7 +70,7 @@ MODELS = [
     {"tag": "gemma3-1b-qat", "file": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf", "extra_body": {}},
     {"tag": "qwen25-0.5b", "file": "Qwen2.5-0.5B-Instruct-Q4_0-pure-embq8.gguf", "extra_body": {}},
 ]
-PRIMARY = "llama32-3b"              # option C: always gets a full dev run
+PRIMARY = "llama32-3b"              # must pass screening, or the campaign stops
 # Model-choice dev episodes = the 3 rounds (round 3 = dev_C02).
 ROUNDS = ["dev_A01_fcv_seize", "dev_B01_tube_leak", "dev_C02_feeder_trip"]
 # Pre-registered follow-up: dev fault episodes whose truth is a library case.
@@ -892,50 +892,59 @@ class Campaign:
         self.begin("A", len(self.model_order))
         res = {tag: self.screen_model(tag) for tag in self.model_order}
         passing = [t for t in self.model_order if res[t]["pass"]]
-        others = [t for t in passing if t != PRIMARY and res[t]["measured_verified_s"] is not None]
-        second = min(others, key=lambda t: res[t]["measured_verified_s"]) if others else None
-        out = {"passing": passing, "primary": PRIMARY, "second": second,
+        out = {"passing": passing, "primary": PRIMARY, "dev_models": list(passing),
                "measured_verified_s": {t: res[t]["measured_verified_s"] for t in self.model_order},
                "projected_verified_s": {t: res[t]["projected_verified_s"] for t in self.model_order},
                "checks": {t: {"htp0_all_layers": res[t]["htp0_all_layers"],
                               "gguf_all_q4_0_q8_0": res[t]["gguf_all_q4_0_q8_0"]} for t in self.model_order},
-               "rule": "option C: Llama 3.2 3B plus the passing model (GGUF + offload checks) with the "
-                       "lowest measured verified-diagnosis time"}
+               "rule": "HUMAN DECISION 2026-10-04 (replaces option C): every model that passes screening "
+                       "(GGUF + offload checks) gets the dev rounds"}
         atomic_write(self.out / "A" / "screening.json", json.dumps(out, indent=1))
         self.finish("A", out)
         if PRIMARY not in passing:
             raise CampaignStop(f"stage A: {PRIMARY} failed screening")
-        if second is None:
+        if len(passing) < 2:
             raise CampaignStop("stage A: no other model passed screening")
 
     # ---- stage B: dev runs, interleaved --------------------------------------
+    def dev_models(self) -> list[str]:
+        """HUMAN DECISION 2026-10-04 (replaces option C): every model that passed
+        screening gets the dev rounds, in the committed candidate order."""
+        passing = self.manifest["stages"]["A"]["passing"]
+        return [t for t in self.model_order if t in passing]
+
     def stage_b(self) -> None:
-        a = self.manifest["stages"]["A"]
-        pair = [a["primary"], a["second"]]
+        pair = self.dev_models()
         self.begin("B", len(pair) * len(ROUNDS))
         b = self.manifest["stages"].setdefault("B", {"models": pair, "dropped": {}})
+        # a stage B record from an earlier model list (option C ran two models) is
+        # extended, never restarted: finished episodes and their round-1 rates stay
+        b["models"] = pair
+        b.pop("done", None)
+        b.pop("survivors", None)
+        b.setdefault("round1", {})
         alive = [t for t in pair if t not in b["dropped"]]
         for r, ep in enumerate(ROUNDS, 1):
             for tag in pair:
                 if tag not in alive:
                     continue
                 self.run_episode_job("B", f"round{r}", tag, ep, "data/episodes_dev")
-            if r == 1 and "round1" not in b:
-                rates = {}
+            if r == 1:
                 for tag in pair:
+                    if tag in b["round1"]:
+                        continue                      # decided when that model ran round 1
                     cs = call_stats([self.load_run("B", "round1", tag, ep)])
-                    rates[tag] = {"broken_json_first_reply": cs["broken_json_first_reply"],
-                                  "broken_json_after_repair": cs["broken_json_after_repair"]}
+                    b["round1"][tag] = {"broken_json_first_reply": cs["broken_json_first_reply"],
+                                        "broken_json_after_repair": cs["broken_json_after_repair"]}
                     f, g = cs["broken_json_first_reply"], cs["broken_json_after_repair"]
                     if (f is not None and f > DROP_FIRST) or (g is not None and g > DROP_AFTER):
-                        b["dropped"][tag] = rates[tag]
-                b["round1"] = rates
+                        b["dropped"][tag] = b["round1"][tag]
                 self.save()
                 alive = [t for t in pair if t not in b["dropped"]]
                 if not alive:
                     b["survivors"] = []
                     self.finish("B", b)
-                    raise CampaignStop("stage B: both models dropped after round 1")
+                    raise CampaignStop("stage B: every model dropped after round 1")
         b["survivors"] = alive
         self.finish("B", b)
 
@@ -951,6 +960,13 @@ class Campaign:
         (d / "checks.json").write_text(json.dumps(checks))
         out_dir.mkdir(parents=True, exist_ok=True)
         js = out_dir / f"{name}.json"
+        if js.exists():                               # keep an earlier result, never overwrite it
+            n = 1
+            while (out_dir / f"{name}.superseded-{n}.json").exists():
+                n += 1
+            for ext in ("json", "txt"):
+                if (out_dir / f"{name}.{ext}").exists():
+                    os.replace(out_dir / f"{name}.{ext}", out_dir / f"{name}.superseded-{n}.{ext}")
         p = subprocess.run([sys.executable, "-m", "bench.model_choice", *paths, "--checks",
                             str(d / "checks.json"), "--json", str(js)], cwd=ROOT,
                            capture_output=True, text=True, env=_board.clean_env())
@@ -1053,7 +1069,20 @@ class Campaign:
         self.commit(f"Board campaign: stage {stage} results", extra)
 
     def stage_done_flag(self, stage: str) -> bool:
-        return bool(self.manifest["stages"].get(stage, {}).get("done"))
+        s = self.manifest["stages"].get(stage, {})
+        if stage == "B" and s.get("done") and s.get("models") != self.dev_models():
+            return False                              # the dev-model list changed: extend stage B
+        return bool(s.get("done"))
+
+    def supersede_after(self, stage: str) -> None:
+        """A stage is being (re)run: results of LATER stages were computed from its
+        old output. Keep them in the manifest under `superseded`, and recompute."""
+        for later in "ABCDE"["ABCDE".index(stage) + 1:]:
+            if later in self.manifest["stages"]:
+                self.manifest.setdefault("superseded", []).append(
+                    {"stage": later, "superseded_at": now(), "because": f"stage {stage} was rerun",
+                     "record": self.manifest["stages"].pop(later)})
+        self.save()
 
     def run_all(self) -> int:
         try:
@@ -1064,6 +1093,7 @@ class Campaign:
                 if self.stage_done_flag(stage):
                     self._reapply_stop(stage)
                     continue
+                self.supersede_after(stage)
                 fn()
             self.stage = "finished"
             self.write_status(note="campaign finished: stages A-E done")
@@ -1088,10 +1118,10 @@ class Campaign:
 
     def _reapply_stop(self, stage: str) -> None:
         s = self.manifest["stages"][stage]
-        if stage == "A" and (PRIMARY not in s["passing"] or s["second"] is None):
+        if stage == "A" and (PRIMARY not in s["passing"] or len(s["passing"]) < 2):
             raise CampaignStop("stage A: screening left fewer than two models")
         if stage == "B" and not s.get("survivors"):
-            raise CampaignStop("stage B: both models dropped after round 1")
+            raise CampaignStop("stage B: every model dropped after round 1")
         if stage == "C" and s.get("pick") is None:
             raise CampaignStop("stage C: no model passes bench.model_choice (stop and ask)")
 

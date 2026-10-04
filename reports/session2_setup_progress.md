@@ -155,3 +155,16 @@ Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunc
   `-c 4096 -np 1 --device HTP0 -ngl 99 -fit off --cache-ram 0 -lv 4`.
 - Board: connected, no llama-server running, adb forwards cleared.
 - Launch (human only): `tmux new -s campaign 'scripts/board_campaign.sh all'`
+
+## 2026-10-04 evening: option C replaced (human decision), runner updated, NOT launched
+- Campaign of 23:37 stopped at stage C at 02:41:54 (exit 3, no model passes); summary in `reports/campaign_watch.md`.
+- HUMAN DECISION (after seeing that result): every model that passes screening gets the dev rounds; same drop rule;
+  `model_choice` unchanged on all survivors (`42d594c`).
+- Runner change (this commit): `Campaign.dev_models()`; stage B extends an existing record (finished episodes and
+  round-1 rates are kept); later stages are moved to `manifest.superseded` and recomputed; an existing
+  `C/model_choice.*` is renamed `.superseded-N`, never overwritten. 145 tests pass; 5 mutations caught.
+- Checked on a COPY of the real `results/board` with the fake board: 0 of the 10 real jobs rerun; 6 new stage B jobs
+  (qwen3-1.7b and gemma3-1b-qat x 3 rounds); old stage C kept. The real folder is untouched.
+- Board: not connected at 22:18. Nothing running. To continue: connect the board, then
+  `tmux new -s campaign '~/campaign_loop.sh'` (the human's wrapper) or `tmux new -s campaign 'scripts/board_campaign.sh all'`.
+- Expected board time (scaled from last night, not measured): ~3 h for the 6 dev episodes, then stage C.
