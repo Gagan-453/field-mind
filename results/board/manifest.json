@@ -71,6 +71,20 @@
    "started": "2026-10-04T02:24:56+0530",
    "summary": "B/qwen25-0.5b/round3.dev_C02_feeder_trip.summary.json",
    "finished": "2026-10-04T02:41:54+0530"
+  },
+  "B/round1/qwen3-1.7b/dev_A01_fcv_seize": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T22:43:21+0530",
+   "summary": "B/qwen3-1.7b/round1.dev_A01_fcv_seize.summary.json",
+   "finished": "2026-10-04T23:00:32+0530"
+  },
+  "B/round1/gemma3-1b-qat/dev_A01_fcv_seize": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-04T23:00:32+0530",
+   "summary": "B/gemma3-1b-qat/round1.dev_A01_fcv_seize.summary.json",
+   "finished": "2026-10-04T23:24:23+0530"
   }
  },
  "stages": {
@@ -120,9 +134,20 @@
   "B": {
    "models": [
     "llama32-3b",
+    "qwen3-1.7b",
+    "gemma3-1b-qat",
     "qwen25-0.5b"
    ],
-   "dropped": {},
+   "dropped": {
+    "qwen3-1.7b": {
+     "broken_json_first_reply": 0.368,
+     "broken_json_after_repair": 0.053
+    },
+    "gemma3-1b-qat": {
+     "broken_json_first_reply": 0.456,
+     "broken_json_after_repair": 0.333
+    }
+   },
    "round1": {
     "llama32-3b": {
      "broken_json_first_reply": 0.035,
@@ -131,44 +156,22 @@
     "qwen25-0.5b": {
      "broken_json_first_reply": 0.14,
      "broken_json_after_repair": 0.088
+    },
+    "qwen3-1.7b": {
+     "broken_json_first_reply": 0.368,
+     "broken_json_after_repair": 0.053
+    },
+    "gemma3-1b-qat": {
+     "broken_json_first_reply": 0.456,
+     "broken_json_after_repair": 0.333
     }
    },
+   "finished": "2026-10-04T23:24:23+0530",
    "survivors": [
     "llama32-3b",
     "qwen25-0.5b"
    ],
-   "done": true,
-   "finished": "2026-10-04T02:41:54+0530"
-  },
-  "C": {
-   "pick": null,
-   "pick_reason": "NO MODEL PASSES: stop and ask",
-   "passing": [],
-   "flags": [
-    "qwen25-0.5b: library group top-1 0.418 is BELOW the deterministic floor 0.501 (evidence for the ranking question: the model's order loses to the no-reasoning order)"
-   ],
-   "gates": {
-    "llama32-3b": {
-     "broken_json_first_reply": true,
-     "broken_json_after_repair": false,
-     "projected_verified_s": true,
-     "htp0_all_layers": true,
-     "gguf_all_q4_0_q8_0": true,
-     "pass": false
-    },
-    "qwen25-0.5b": {
-     "broken_json_first_reply": false,
-     "broken_json_after_repair": false,
-     "projected_verified_s": true,
-     "htp0_all_layers": true,
-     "gguf_all_q4_0_q8_0": true,
-     "pass": false
-    }
-   },
-   "ranking_verdict_3_episodes": null,
-   "code_hash": "10627556e0969a28",
-   "done": true,
-   "finished": "2026-10-04T02:41:54+0530"
+   "done": true
   }
  },
  "idle_temp": {
@@ -182,5 +185,42 @@
    33.3
   ],
   "t": "2026-10-03T23:39:40+0530"
- }
+ },
+ "superseded": [
+  {
+   "stage": "C",
+   "superseded_at": "2026-10-04T22:43:21+0530",
+   "because": "stage B was rerun",
+   "record": {
+    "pick": null,
+    "pick_reason": "NO MODEL PASSES: stop and ask",
+    "passing": [],
+    "flags": [
+     "qwen25-0.5b: library group top-1 0.418 is BELOW the deterministic floor 0.501 (evidence for the ranking question: the model's order loses to the no-reasoning order)"
+    ],
+    "gates": {
+     "llama32-3b": {
+      "broken_json_first_reply": true,
+      "broken_json_after_repair": false,
+      "projected_verified_s": true,
+      "htp0_all_layers": true,
+      "gguf_all_q4_0_q8_0": true,
+      "pass": false
+     },
+     "qwen25-0.5b": {
+      "broken_json_first_reply": false,
+      "broken_json_after_repair": false,
+      "projected_verified_s": true,
+      "htp0_all_layers": true,
+      "gguf_all_q4_0_q8_0": true,
+      "pass": false
+     }
+    },
+    "ranking_verdict_3_episodes": null,
+    "code_hash": "10627556e0969a28",
+    "done": true,
+    "finished": "2026-10-04T02:41:54+0530"
+   }
+  }
+ ]
 }
