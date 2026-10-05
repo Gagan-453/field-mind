@@ -138,7 +138,8 @@ def build_multi_agent(cfg: dict, notes: list[dict], records: dict | None = None,
 def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                 verbose: bool = False, arch: str = "single",
                 record_prompts: str | None = None, wrap_backend=None,
-                mode: str = "lockstep", tick_s: float | None = None) -> dict:
+                mode: str = "lockstep", tick_s: float | None = None,
+                on_assessment=None) -> dict:
     """Replay one episode. `ablate_text` removes every note -- that is the T8
     modality ablation, and tier B/C accuracy MUST collapse under it or the
     episode is mislabelled.
@@ -146,7 +147,10 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
     `arch`: "single" (fieldmind/agent, the baseline) or "multi"
     (fieldmind/multi, lockstep). `record_prompts`: path of a JSONL file every
     backend call is appended to (bench/prompt_log.py), for the Phase 1
-    prompt-identity check. `wrap_backend`: a bench tool's wrapper put between
+    prompt-identity check. `on_assessment(d)`: called after every tick with that
+    tick's published assessment as a dict (the same dict the run file stores),
+    in lockstep and real time; for a live UI. Telemetry only: it must not touch
+    the agent, and an exception in it stops the run. `wrap_backend`: a bench tool's wrapper put between
     the model and the agent (e.g. bench/verifier_wrong_answer.py), inside the
     prompt recorder; None leaves the backend untouched."""
     notes = [] if ablate_text else ep.notes
@@ -233,6 +237,8 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
         if arch == "multi":
             d["multi"] = orch.last_telemetry   # jobs, lanes, P0 time; not compared
         assessments.append(d)
+        if on_assessment is not None:          # live UI hook (telemetry only)
+            on_assessment(d)
 
         if verbose and (asmt.triage != "QUIET" or k % 40 == 0):
             top = asmt.hypotheses[0]["cause"][:46] if asmt.hypotheses else "-"

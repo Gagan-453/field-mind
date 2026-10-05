@@ -297,3 +297,19 @@ def test_realtime_summary_reports_lanes_and_flags_calls_slower_than_a_tick(rt_ru
     # verifier calls (0.3 s) are slower than the 0.2 s tick; diagnoses (0.15 s) are not
     assert "verifier@cpu" in s["calls_slower_than_a_tick"]
     assert "diag_water@npu" not in s["calls_slower_than_a_tick"]
+
+
+@needs_dev
+def test_on_assessment_hook_sees_every_tick_live_and_changes_nothing():
+    ep = Episode(DEV / "dev_B02_tube_leak_fast")
+    seen = []
+    a = run_episode(ep, _cfg(), arch="multi")
+    b = run_episode(ep, _cfg(), arch="multi", on_assessment=lambda d: seen.append(d["tick"]))
+    assert seen == [x["tick"] for x in b["assessments"]] and seen
+    keep = ("tick", "state", "triage", "hypotheses", "actions", "escalate")
+    assert [{k: x.get(k) for k in keep} for x in a["assessments"]] == \
+           [{k: x.get(k) for k in keep} for x in b["assessments"]]
+    live = []
+    run_episode(ep, _cfg(), arch="multi", mode="realtime", tick_s=0.05,
+                on_assessment=lambda d: live.append((d["tick"], time.monotonic())))
+    assert len(live) == len(seen) and all(t2 > t1 for (_, t1), (_, t2) in zip(live, live[1:]))
