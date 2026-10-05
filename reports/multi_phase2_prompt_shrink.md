@@ -939,6 +939,38 @@ the tables above.
   until a real model runs; the Phase 3 known-wrong-answer test covers it.
 - Token counts on the board's own tokenizers (as for commit 5).
 
+## Commit 7: the dev gate, the reporting run, the report
+### How each check is run (committed BEFORE any gate run; the gate itself is "Phase 2 dev gate" above and the G1a predictions are amendment 2's, unchanged)
+Mock backend, lockstep, fixed placement, dev set (36 episodes) unless stated. Code at `ae98b4e`.
+
+| run | arch | switches |
+|---|---|---|
+| R0 reference | multi | all off (= Phase 1: commits 4 to 6 each showed 0 differences and a byte-identical prompt log against it) |
+| R1 G1a | multi | `schema` only (the diagnostician's answer format; every other section and every verifier section off) |
+| R2 G1b | multi | all eight sections on (`--compact all`) |
+| R3 G2 | multi | as R2, `--placement earliest_finish` |
+| R4 G4 | single | (no switches exist on the single path) |
+
+| gate | command / rule | pass |
+|---|---|---|
+| G1a | `bench/gate_phase2.py R0 R1 --g1a --expect model_only=3170,unchanged=19,rank1=580,ver=327` with summaries | 0 differences outside the confidence-derived fields, and all four counts MATCH. Also counted, predicted 0: ticks where a fact the mock cites is not on a shown fact line |
+| G1b | `bench/gate_phase2.py R1 R2` strict, with summaries | 0 differences outside the moving-by-construction fields |
+| G1 comparator check | inject one `supports` change and one `cited_facts` change into a copy of R2 and run G1b again | both injections reported as differences |
+| G2 | `bench/gate_phase2.py R2 R3` strict; prompt logs `cmp` | 0 differences; byte-identical |
+| G3 | `bench/token_count.py` on R2's prompt log; every answer (the mock's reply text, `json.dumps` of the logged answer) counted on the four tokenizers | every prompt + its cap < 1,280 for diagnostician (60), verifier (30), text reader (50) on all four; every answer within its cap; guard firings and over-limit flags 0 |
+| G4 | R4 vs the single run made on this machine at `fa6ee08` (before commit 5): `bench/gate_phase2.py` strict; R4's prompt log sha256 = `6e9b748a` (the Phase 1 value); `git diff multi-phase1 -- fieldmind/agent` empty | 0 / equal / empty |
+| G5 | S7 deadline-miss rate in R1, R2, R4; P0 time over 200 ms in R1, R2 (laptop timing) | 0 / 0 |
+| G6 | full suite; the commit 5 and commit 6 mutation sets re-run on the final tree | green; every mutation caught |
+
+Any mismatch: stop, record, adjust nothing (amendment 2 item 2.3). Only if G1a to G6 all pass: the 30 reporting
+episodes run once (single; multi all on), then:
+- single vs `results/baselines/single_v3_summary.json`: summary and per-episode, 0 differences outside timing;
+- multi all on vs `results/baselines/multi_p1_summary.json` under the G1a field rule for summaries (the
+  confidence-derived keys `low_conf_rate*` allowed; `Q3_rel` keys extra);
+- reporting prompts' token max and p95, guard firings, and the count of empty-ranking (`NO_CASE_FITS`) ticks,
+  reported, not tuned against;
+- the multi summary saved as `results/baselines/multi_p2_summary.json`.
+
 ## Blocked / needs a decision
 **Resolved earlier:** the answer format (amendment 1), gate G1 under B' (amendment 2) and the note-fact
 coverage stop below (amendment 3: option (c), keep the schema, record the partial losses as a known limit).
