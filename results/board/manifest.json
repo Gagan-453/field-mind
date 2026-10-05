@@ -85,6 +85,18 @@
    "started": "2026-10-04T23:00:32+0530",
    "summary": "B/gemma3-1b-qat/round1.dev_A01_fcv_seize.summary.json",
    "finished": "2026-10-04T23:24:23+0530"
+  },
+  "D/D/llama32-3b/ep_N01_normal": {
+   "status": "complete",
+   "attempts": 1,
+   "started": "2026-10-05T13:04:55+0530",
+   "summary": "D/llama32-3b/ep_N01_normal.summary.json",
+   "finished": "2026-10-05T13:05:11+0530"
+  },
+  "D/D/llama32-3b/ep_A01_fcv_seize": {
+   "status": "incomplete",
+   "attempts": 1,
+   "started": "2026-10-05T13:05:11+0530"
   }
  },
  "stages": {
