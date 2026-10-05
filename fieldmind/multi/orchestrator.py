@@ -130,17 +130,26 @@ class MultiOrchestrator:
         submit_s = now_s
         if self.rung < 5 and level in MODEL_LEVELS:
             with bb.step("scheduler"):
-                job = self.diag.make_job(bb, self.scheduler, tick_no, level,
-                                         self.rung, submit_s)
-                self.scheduler.submit(job)
-                bb.write("jobs", [job.to_dict()], "scheduler")
+                jobs = self.diag.make_jobs(bb, self.scheduler, tick_no, level,
+                                           self.rung, submit_s)
+                for job in jobs:
+                    self.scheduler.submit(job)
+                bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
                 got = self.scheduler.run_lockstep(now_s)
             llm_used = True
             results += got
-            for r in got:
+            if self.diag.split:
+                # Phase 3: both sides' answers, checked one by one, merged once
                 with bb.step("gate"):
-                    claims = self.gate.fold_diagnosis(bb, asmt, claims, r, tick_no)
-                submit_s = r.finish_s if r.finish_s is not None else submit_s
+                    claims = self.gate.fold_sides(bb, asmt, claims, got, tick_no)
+            else:
+                for r in got:
+                    with bb.step("gate"):
+                        claims = self.gate.fold_diagnosis(bb, asmt, claims, r, tick_no)
+            # the verifier is submitted when the LAST side answer is in
+            for r in got:
+                if r.finish_s is not None:
+                    submit_s = max(submit_s, r.finish_s)
 
         top_conf = top_confidence(claims)
         if self.ver.should_run(level, top_conf, self.rung):
@@ -208,6 +217,7 @@ class MultiOrchestrator:
         pct = (lambda q: round(p[min(len(p) - 1, int(q * len(p)))], 4)) if p else (lambda q: None)
         return {"placement": self.scheduler.placement,
                 "compact_switches": dict(self.diag.sw),
+                "split": self.diag.split,
                 "ver_incomplete_verdicts": self.gate.ver_incomplete,
                 "ver_over_limit": self.gate.ver_over_limit,
                 "lanes": [l.telemetry() for l in self.scheduler.lanes],

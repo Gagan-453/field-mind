@@ -25,10 +25,18 @@ from types import SimpleNamespace
 from ...agent.l1_symbolize import evidence_packet
 from ...agent.orchestrator import evidence_max_facts, wm_summary
 from ...schemas import TAGS
-from .. import compact
+from .. import compact, sides
 from ._call import call_model
 
 NAME = "diagnostician"
+# Phase 3: a side's job is placed by `diag_<side>` (multi.fixed_placement);
+# its envelope keeps agent "diagnostician", so the bench tools read it as one.
+SIDE_FACT_LINES = 8     # CITED: plan p.15 token budget, "this side's facts (up to 8 lines)"
+SIDE_NOTE = {           # one line naming the side; plan p.5 agent table
+    "water": "This prompt covers the WATER side only: drum level, feed water flow, steam flow.",
+    "heat": "This prompt covers the HEAT side only: bed temperature, drum pressure, main "
+            "steam temperature, with steam flow as the load.",
+}
 
 
 def priority_for(level: str) -> int:
@@ -47,6 +55,10 @@ class DiagnosticianAgent:
         self.letters = letters or {}
         self.cap = (mcfg.get("answer_caps") or {}).get("diagnostician", 60)
         self.guard_cpt = mcfg.get("compact_guard_cpt")
+        self.split = bool(mcfg.get("split", False))
+        if self.split and not self.sw["schema"]:
+            raise ValueError("multi.split needs multi.compact.schema on: the side "
+                             "prompts are the compact (B') prompts")
         if self.sw["schema"]:
             self.templates = {"body": compact.load_prompt("diag_compact.txt"),
                               "rules_full": compact.load_prompt("diag_rules_full.txt"),
@@ -75,23 +87,57 @@ class DiagnosticianAgent:
                                  max_answer_tokens=self.cfg["max_tokens"],
                                  submit_s=submit_s, work=work)
 
+    def sides_to_run(self, bb, tick: int) -> list[str]:
+        """The active sides (non-INFO fact or open finding); both when neither
+        side has evidence (Phase 3 decision 5)."""
+        return (sides.active_sides(bb.read("facts").facts_of(tick), bb.read("findings"))
+                or list(sides.SIDES))
+
+    def make_jobs(self, bb, scheduler, tick: int, level: str, rung: int,
+                  submit_s: float) -> list:
+        """Phase 3: one job per side to run (`multi.split` on); else one job."""
+        if not self.split:
+            return [self.make_job(bb, scheduler, tick, level, rung, submit_s)]
+        return [self._compact_job(bb, scheduler, tick, level, rung, submit_s, side=s)
+                for s in self.sides_to_run(bb, tick)]
+
     # ------------------------------------------------------------------
-    def _compact_job(self, bb, scheduler, tick, level, rung, submit_s):
-        facts = bb.read("facts").facts_of(tick)
-        retrieved = bb.read("retrieval")
+    def _compact_job(self, bb, scheduler, tick, level, rung, submit_s, side=None):
+        all_facts = bb.read("facts").facts_of(tick)
+        retrieved = dict(bb.read("retrieval"))
+        notefacts = dict(bb.read("notefacts"))
         belief = bb.read("belief")
         trust = bb.read("trust")
         summary_view = SimpleNamespace(open_findings=bb.read("findings"),
                                        hypotheses=belief, trusted_tags=trust)
+        facts, extra = all_facts, {}
+        if side is not None:
+            # the side's view: its facts, its cases, its notes; retrieval and
+            # belief themselves are not split (decision 4)
+            facts = sides.facts_for_side(all_facts, side)
+            retrieved["cases"] = sides.cases_for_side(retrieved.get("cases", []), side)
+            if self.sw["notes"]:
+                # note-facts: by the note-fact's own subjects (commit 0 design)
+                notefacts = {k: v for k, v in notefacts.items()
+                             if v.get("status") != "ok" or side in sides.notefact_sides(v)}
+            else:
+                # raw notes (the notes-section ablation): by the note's tags
+                retrieved["notes"] = [n for n in retrieved.get("notes", [])
+                                      if side in sides.note_sides(n)]
+            extra = {"max_fact_lines": SIDE_FACT_LINES, "side_note": SIDE_NOTE[side],
+                     "other_line": sides.other_side_line(all_facts, side)}
         prompt, line_map, hint, info = compact.build_diagnosis(
             self.sw, self.templates, facts=facts,
-            level_cap=evidence_max_facts(level, rung), retrieved=dict(retrieved),
-            notefacts=dict(bb.read("notefacts")),
+            level_cap=evidence_max_facts(level, rung), retrieved=retrieved,
+            notefacts=notefacts,
             recordfacts=list(bb.read("recordfacts")), belief=list(belief),
             untrusted=sorted(set(TAGS) - set(trust)),
             wm_text=wm_summary(summary_view), now_s=submit_s,
             evidence_tick=tick, letters=self.letters, cap=self.cap,
-            guard_cpt=self.guard_cpt)
+            guard_cpt=self.guard_cpt, **extra)
+        line_map["side"] = side
+        info.update(side=side, fact_ids=list(line_map["facts"]),
+                    case_ids=[c["case_id"] for c in line_map["cases"]])
         line_map["info"] = info
         diag = self.diag
 
@@ -107,9 +153,10 @@ class DiagnosticianAgent:
                 env.retrieved_cases = list(line_map["retrieved_cases"])
                 return env
 
-        job = scheduler.new_job(NAME, evidence_tick=tick,
-                                priority=priority_for(level),
+        job = scheduler.new_job(NAME if side is None else f"diag_{side}",
+                                evidence_tick=tick, priority=priority_for(level),
                                 max_answer_tokens=self.cap,
-                                submit_s=submit_s, work=work)
+                                submit_s=submit_s, work=work,
+                                side="all" if side is None else side)
         job.line_map = line_map
         return job

@@ -117,6 +117,12 @@ def signature_for_side(signature: dict, side: str) -> dict:
             if (PSEUDO.get(t[0]) == side) or t[0] in SIDE_TAGS[side]}
 
 
+def note_sides(note: dict) -> set[str]:
+    """A raw note (its metadata tags) goes to the sides of its tags; a note
+    with no tag goes to both."""
+    return _sides_of_tags(note.get("tags") or []) or set(SIDES)
+
+
 def notefact_sides(nf: dict) -> set[str]:
     """A note-fact goes to the sides of the tags among its subjects; one that
     names no tag (equipment only, or nothing) goes to both."""

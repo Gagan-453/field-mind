@@ -27,11 +27,11 @@ import time
 from types import SimpleNamespace
 
 from ...agent.l1_symbolize import headline
-from ...agent.orchestrator import (fold_diagnosis, initial_claims,
+from ...agent.orchestrator import (fold_diagnosis, initial_claims, merge,
                                    quiet_deadline_miss, rung_marker,
                                    stamp_shown_confidence, tick_deadline_miss)
 from ...schemas import Assessment
-from .. import compact
+from .. import compact, sides
 
 NAME = "gate"
 
@@ -130,6 +130,54 @@ class GateMemoryAgent:
                                                 result.evidence_tick)
         claims, degraded = fold_diagnosis(claims, env, evidence_facts,
                                           self.gate, self.cfg)
+        bb.write("diagnosis", claims, NAME)
+        if degraded is not None:
+            bb.write("status", {"degraded_mode": degraded}, NAME)
+            asmt.degraded_mode = degraded
+        return claims
+
+    def fold_sides(self, bb, asmt: Assessment, claims: dict, results,
+                   now_tick: int) -> dict:
+        """Phase 3: the water and heat answers of one tick. Each side's answer is
+        expanded, checked for staleness, for a failed call and for invented
+        citations ON ITS OWN (one bad side does not sink the other); the
+        accepted ones are combined (decision 1: the side with the more severe
+        evidence first, a case named by both once) and folded by the single
+        agent's `merge`, unchanged, once. The citation rule is NOT applied a
+        second time to the union: a fact both sides cite counts once there
+        while each side's invented ids still count, so two answers that each
+        passed could fail together (phase review, commit 2)."""
+        accepted, degraded = [], None
+        for r in results:
+            lm = r.job.line_map
+            r.envelope = self._expand(r.envelope, lm)
+            env = r.envelope
+            asmt.envelopes.append(env.to_dict())
+            if self._drop_if_stale(r, now_tick):
+                continue
+            ev = bb.read("facts").facts_of(r.evidence_tick)
+            if r.evidence_tick != now_tick:
+                env, ev = self._stamped(env, ev, r.evidence_tick)
+            if env.status != "ok":
+                degraded = f"llm_{env.status}"
+                continue
+            cit = self.gate.check_citations(env.cited_facts, ev)
+            if cit["faithfulness"] < self.cfg.get("min_faithfulness", 0.5):
+                # the single agent's rule, applied per side
+                claims["unexplained"].append(
+                    f"{lm['side']} diagnostician cited non-existent facts "
+                    f"{cit['invalid']}; its answer was not used")
+                continue
+            accepted.append((lm["side"], env, ev))
+        if accepted:
+            primary = sides.primary_side(bb.read("facts").facts_of(now_tick),
+                                         bb.read("findings"))
+            accepted.sort(key=lambda a: a[0] != primary)
+            payload = compact.combine_side_payloads([e.payload for _, e, _ in accepted])
+            claims = merge(claims, payload)
+            self.compact_log.append({"agent": "merge", "now_tick": now_tick,
+                                     "evidence_ticks": [e.tick for _, e, _ in accepted],
+                                     "order": [a[0] for a in accepted]})
         bb.write("diagnosis", claims, NAME)
         if degraded is not None:
             bb.write("status", {"degraded_mode": degraded}, NAME)

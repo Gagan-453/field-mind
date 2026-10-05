@@ -1,7 +1,8 @@
 # Multi-agent Phase 3: split by plant side: report
 
 ## Status
-PARTIAL. Commit 0 (this plan, the decisions, predictions and pass rules) only. Branch `multi-agent-p3`, made from
+PARTIAL. Commits 0 to 2 done (plan; side definitions; two side diagnosticians behind `multi.split`). Commits 3 to 5
+not started. Branch `multi-agent-p3`, made from
 `multi-agent` at `a672af7`.
 
 **Mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers measure the
@@ -164,6 +165,92 @@ coarse, is a question for the advisor. No data, threshold or check was changed.
 | RCA-14 / RCA-18 (fuel-cap faults where steam falls as a consequence) go to both sides only because `steam_flow` is a water tag | **recorded**: showing them to both is the inclusive reading of "steam flow as load", not a statement of the plan's intent |
 | most note-facts name equipment only, so they go to both sides | **recorded**: the side filter on note-facts does little on this vocabulary |
 | `world_model._fact_ids` maps the SUSPENDED water fact to `energy_balance` | already an open item for `main` (deviation 2) |
+
+## Commit 2: two side diagnosticians (`multi.split`). KEPT.
+Mock, dev (36 episodes, 5,850 ticks), lockstep, fixed placement, every compact section on. **The mock does no
+reasoning: none of the numbers below is an accuracy result.**
+
+What was built: `DiagnosticianAgent.make_jobs` makes one job per active side (`diag_water` -> NPU, `diag_heat` ->
+CPU); each side's prompt is the Phase 2 compact prompt restricted to the side (its facts, at most 8 lines; its cases
+from the shared retrieval; its raw notes or note-facts; record-facts to both), with a side header and one
+code-written line about the other side (`compact.build_diagnosis` gained three optional inputs whose defaults leave
+the Phase 2 prompt unchanged). The gate's `fold_sides` checks each side's answer on its own (expansion, staleness,
+failed call, invented citations by the single agent's rule), combines the accepted ones
+(`compact.combine_side_payloads`, decision 1) and folds them once through the single agent's `fold_diagnosis` /
+`merge`, unchanged. The verifier is submitted when the last side answer is in. `run_demo.py --split`.
+
+| check | rule | measured | result |
+|---|---|---|---|
+| split off vs Phase 2 all-on (`a672af7`) | 0 differences, byte-identical prompts | 0 differences, summary 0; `cmp` identical | PASS |
+| split on: deterministic layer | `state`, `triage`, `facts`, `belief_ranking`, `belief_supports` identical | 0 of 5,850 ticks differ | PASS |
+| split on: side prompts hold only their side | checked on every call | 2,005 side jobs; facts off-side 0, cases off-side 0 | PASS |
+| split on: tokens | prompt + 60 < 1,280, four tokenizers | max 915 / 927 / 951 / 944 (Llama / Qwen3 / Gemma / Qwen2.5); 0 over | PASS |
+| split on: health | 0 | parse failures 0; out-of-range case / fact / x / note lines 0; guard and over-limit 0 | PASS |
+| timing | S7 0 | 0.0 | PASS |
+| tests | green, mutation-checked | `tests/test_split.py` 15 passed; full suite 301 (286 before); 21 / 21 mutations caught (6 added after the review) | PASS |
+
+Reported, not gated (independent check: diagnosis jobs 2,005 = 1,982 Phase 2 calls + the 23 cross-side ticks of
+the commit 1 table, relative difference 0):
+
+| quantity | Phase 2 all-on | split |
+|---|---|---|
+| diagnosis calls | 1,982 | 2,005 (water 995, heat 1,010) |
+| model calls per non-QUIET tick | — | mean 1.17, max 2 |
+| verifier calls | 327 | 319 |
+| side prompt tokens, mean (Llama / Qwen3 / Gemma / Qwen2.5) | 749.7 / 755.0 / 772.9 / 772.0 | 755.9 / 760.6 / 777.6 / 777.6 |
+| **SIMULATED** diagnosis latency, mean / p95 (placeholder lane rates, an expectation, not a result) | 2.10 / 2.28 s | 3.90 / 6.40 s (water on NPU 1.99 s, heat on CPU 5.73 s) |
+| mock library top-1 / group top-1 | 0.434 / 0.489 | 0.503 / 0.562 |
+| mock group top-1 by family A / B / C / D | 0.250 / 0.668 / 0.397 / 0.819 | 0.268 / 0.885 / 0.397 / 0.819 |
+
+**Causes, tested:**
+- **Mock top-1 rises because the side filter changes which cases the mock ranks, not because anything diagnoses
+  better. Mock: a retrieval-layer effect of the side case filter; not an accuracy result; not attributable to two
+  calls versus one** (the same filter on one unsplit prompt would very likely give the same rise; that control was
+  not run). The reviewer re-scored it against ground truth: of the 295 changed ticks, 109 went wrong to right, 0
+  right to wrong, 186 wrong to wrong; the true case was never removed from every side's view. The mock ranks the top 3 cases it is SHOWN by retrieval score. Of the 295 ticks whose rank 1 changed,
+  290 are ticks where Phase 2's rank-1 case was not shown to any active side (a case that moves only the other
+  side is filtered out); the other 5 are cross-side ticks (B03 141 to 143, C04 77 and 81) where the two sides tie
+  on severity and water goes first (decision 1). A real model's accuracy on the split is unmeasured; this number
+  must not be quoted as a gain.
+- **Verifier calls 327 -> 319**: the verifier trigger reads rank 1's confidence, and rank 1 changed on 295 ticks.
+- **Simulated latency rises**: under fixed placement every heat-only tick (about half the ticks, commit 1) runs on
+  the CPU lane, whose placeholder prefill rate is 126 tok/s against the NPU's 909; heat jobs average 5.73 s against
+  water's 1.99 s. On these episodes the split mostly replaces one NPU call by one CPU call. This is the plan's own
+  estimate shape (heat diagnostician on the CPU ~7.0 s, p.15) applied to a dataset with almost no cross-side ticks.
+  Open item for Phase 5: under "earliest finish" a heat-only tick would take the idle NPU.
+- **Side prompts are not smaller than the unsplit one**: the cases (up to 4) and the record-facts dominate the
+  prompt and are not split; the side header and the other-side line add about 6 tokens on average. The plan's
+  ~700 estimate assumed a smaller case list per side.
+
+#### Decisions taken (conservative option)
+1. **The per-side citation rule is the single agent's** (`min_faithfulness` 0.5 on that side's answer); a rejected
+   side is recorded in `unexplained` and the other side still counts. The combined fold then re-checks the union
+   with the same rule (it cannot fall below 0.5 when every accepted side is at or above it).
+2. **A failed side marks the tick degraded** (`llm_<status>`), as a failed call did in Phase 2, even when the
+   other side answered.
+3. **Raw notes and note-facts are side-filtered by one rule each, never both**: with note-facts on, a note-fact
+   goes by its own subjects (the commit 0 design); with the notes section off (the ablation), a raw note goes by its
+   metadata tags. A first version filtered note-facts by both, which the review caught (below).
+4. **Envelopes of both sides keep `agent: diagnostician`**; the side is in the run file's `multi` telemetry, so
+   the bench tools (`bench/model_choice.py` filters on that name) read them unchanged.
+
+#### Phase-reviewer findings (commit 2) and what was done
+The reviewer ran the suite (297 passed), probed the gate with hand-built answers and ran monkeypatch mutations.
+Checklist: single agent untouched PASS, shared code imported PASS (one copied rule, below), hard path PASS, single
+writer PASS, answers reach belief only through the gate PASS, tick stamps PASS in code / untested, token caps PASS,
+no tuning PASS, tests PARTIAL FAIL, metric causes PASS.
+
+| finding | done |
+|---|---|
+| 1. The combined fold re-checked citations on the de-duplicated union, so two side answers that each passed (water [F1, line7] 0.5, heat [F1, line9] 0.5) failed together (union 0.33) and the tick fell back to belief while telemetry logged a merge. Cannot happen on the mock; would on the board, where shared `steam_flow` facts are common | **fixed**: after the per-side checks the combined payload goes to the single agent's `merge` directly (no second check); tested with the reviewer's example, mutation caught. Dev: 0 decision differences against the first version |
+| 2. The mock top-1 rise is easy to misread as a gain from the split | **report wording fixed** (causes above) |
+| 3. Note-facts were filtered by the raw note's tags AND by their own subjects (not in the design); `note_sides`, the cross-tick path, records to both sides and the tie rule were untested | **fixed and tested** (decision 3); 6 mutations added, all caught. On dev the fix changed 0 of 2,005 prompts: the mock text reader echoes a note's metadata tags as its subjects, so the two filters agree on the mock; with a real reader they can differ |
+| the per-side citation rule is a second copy of the single agent's (`fold_diagnosis`) | **recorded**: it is three lines and the single agent's function cannot check one side without also merging it; a test fails if a side with invented citations is let through |
+| `merge` keeps at most 6 supports per case, so a case named by both sides can lose the second side's citations | **recorded** (single-agent code) |
+| "degraded" now also marks a tick where one side failed and the other answered | **recorded** (decision 2) |
+| the merge telemetry said `evidence_tick: now` | **fixed**: it records `now_tick` and each answer's evidence tick |
+| the guard covers only the fully compact prompt, while `split` needs only `schema` | **recorded**: a partial-compact split prompt over the limit is flagged (`over_limit_unguarded`), not cut, as in Phase 2 |
+| "0 differences" with split off: the run file's `multi` telemetry gains `side`, `fact_ids`, `case_ids` | **recorded**: the comparator excludes the `multi` telemetry by name (Phase 1 rule); decisions, summaries and prompts are what is compared |
 
 ---
 

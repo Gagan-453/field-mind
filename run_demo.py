@@ -75,6 +75,9 @@ def main():
                          "multi): all | none | comma list of schema,rules,"
                          "cases,notes,world,ver_schema,ver_rules,ver_claims "
                          "(the rest off); overrides multi.compact")
+    ap.add_argument("--split", action="store_true",
+                    help="Phase 3: water and heat diagnosticians (sets multi.split; "
+                         "needs the compact schema, e.g. --compact all)")
     ap.add_argument("--case-order", default=None, choices=["score", "shuffled"],
                     help="overrides multi.compact.case_order")
     ap.add_argument("--record-prompts", default=None,
@@ -107,6 +110,8 @@ def main():
         if on - set(ALL_SECTIONS):
             ap.error(f"--compact: unknown section(s) {sorted(on - set(ALL_SECTIONS))}")
         cfg["multi"]["compact"].update({s: s in on for s in ALL_SECTIONS})
+    if args.split:
+        cfg["multi"]["split"] = True
     if args.case_order:
         cfg["multi"]["compact"]["case_order"] = args.case_order
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])

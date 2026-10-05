@@ -241,16 +241,24 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
                     retrieved: dict, notefacts: dict, recordfacts: list,
                     belief: list, untrusted: list, wm_text: str, now_s: float,
                     evidence_tick: int, letters: dict, cap: int,
-                    guard_cpt: float | None = None) -> tuple[str, dict, dict, dict]:
+                    guard_cpt: float | None = None,
+                    max_fact_lines: int = MAX_FACT_LINES,
+                    side_note: str | None = None,
+                    other_line: str | None = None) -> tuple[str, dict, dict, dict]:
     """The compact diagnosis prompt (sw["schema"] must be on). Returns
     (prompt, line_map, mock hint, info). The line map is what the gate expands
-    the answer through: fixed here, never recomputed when the answer arrives."""
+    the answer through: fixed here, never recomputed when the answer arrives.
+
+    Phase 3 (a side's prompt): `max_fact_lines` (8, plan p.15), `side_note` (one
+    line naming the side, put before the rules) and `other_line` (the code-written
+    line about the other side, put after the world line). Their defaults leave
+    the Phase 2 prompt byte for byte."""
     if not sw["schema"]:
         raise ValueError("build_diagnosis is the schema-on path")
     # ---- facts: evidence_packet order, the level cap, then at most 9 lines
     ranked = sorted(facts, key=lambda f: (SEV_ORDER.get(f.severity, 9), f.id))
     by_level = ranked[:level_cap]
-    shown_facts = by_level[:MAX_FACT_LINES]
+    shown_facts = by_level[:max_fact_lines]
     fact_lines = [f"[{f.check}/{f.severity}] {f.detail}" for f in shown_facts]
     omitted = len(ranked) - len(shown_facts)
 
@@ -289,12 +297,16 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
             world += " | UNTRUSTED TAGS: " + ", ".join(untrusted)
     else:
         world = wm_text
+    if other_line:
+        world += f"\nOTHER SIDE (from code): {other_line}"
 
     if sw["rules"]:
         rules = templates["rules_compact"]
     else:
         rules = templates["rules_full"].format(
             operator_question=retrieved.get("operator_query") or "(none stated)")
+    if side_note:
+        rules = side_note + "\n" + rules
 
     def case_line(c):
         cid = c.get("case_id", "EXP")
@@ -361,7 +373,7 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
             "fact_lines": list(line_map["facts"]),
             "letters": list(line_map["letters"])}
     info = {"fact_lines": len(shown_facts),
-            "facts_dropped_by_line_cap": [f.id for f in by_level[MAX_FACT_LINES:]],
+            "facts_dropped_by_line_cap": [f.id for f in by_level[max_fact_lines:]],
             "notes_dropped": notes_dropped, "records_dropped": recs_dropped,
             "guard_fired": bool(guard_dropped), "guard_dropped": guard_dropped,
             # estimate still over the limit: an ablation prompt (never cut), or
@@ -374,6 +386,30 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
                                            math.ceil(len(prompt) / guard_cpt) + cap
                                            >= PROMPT_LIMIT)}
     return prompt, line_map, hint, info
+
+
+def combine_side_payloads(payloads: list[dict]) -> dict:
+    """Phase 3 decision 1: expanded side answers, in side order (the side with
+    the more severe evidence first), into one payload for the single agent's
+    merge. A case named by both sides appears once, at its first place, with
+    both sides' citations (first side's first); `unexplained` lines are kept
+    once each. Confidence stays the code-supplied value (option (ii))."""
+    hyps, at = [], {}
+    unexplained = []
+    for p in payloads:
+        for h in p.get("hypotheses", []):
+            key = h.get("case_ref") or h.get("cause")
+            if key in at:
+                kept = hyps[at[key]]
+                kept["supports"] += [x for x in h.get("supports", [])
+                                     if x not in kept["supports"]]
+                continue
+            at[key] = len(hyps)
+            hyps.append(dict(h, supports=list(h.get("supports", []))))
+        unexplained += [u for u in p.get("unexplained", []) if u not in unexplained]
+    for i, h in enumerate(hyps):
+        h["rank"] = i + 1
+    return {"headline": "", "hypotheses": hyps, "unexplained": unexplained}
 
 
 def _is_int(x) -> bool:

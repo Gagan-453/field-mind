@@ -183,6 +183,10 @@ multi:
     ver_schema: false
     ver_rules: false
     ver_claims: false
+  # Phase 3: split the diagnostician by plant side (diag_water on the NPU,
+  # diag_heat on the CPU, multi.fixed_placement). Needs compact.schema on.
+  # DESIGN (reports/multi_phase3_split.md); off = Phase 2 exactly.
+  split: false
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json
   # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5
