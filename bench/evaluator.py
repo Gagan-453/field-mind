@@ -182,12 +182,21 @@ def t3_faithfulness(run: dict) -> dict:
     imposing. It is the cheapest hallucination metric available.
     """
     cited = valid = 0
+    # Multi-agent Phase 3: a citation stamped with an earlier tick ("t80.F1",
+    # a re-used side answer) is valid if that fact existed AT THAT TICK. An
+    # unstamped id is checked against this tick's facts, as before (the single
+    # agent and Phase 1/2 runs never stamp, so their scores cannot move).
+    by_tick = {a["tick"]: {f["id"] for f in a["facts"]} for a in run["assessments"]}
     for a in run["assessments"]:
-        ids = {f["id"] for f in a["facts"]}
+        ids = by_tick[a["tick"]]
         for h in a["hypotheses"]:
             for c in h.get("supports", []):
                 cited += 1
-                valid += (c in ids)
+                head, dot, local = c.partition(".")
+                if dot and head[:1] == "t" and head[1:].isdigit():
+                    valid += local in by_tick.get(int(head[1:]), set())
+                else:
+                    valid += (c in ids)
     return {"n_citations": cited,
             "faithfulness": round(valid / cited, 3) if cited else 1.0,
             **t3_rel(run)}

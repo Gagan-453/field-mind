@@ -1,8 +1,8 @@
 # Multi-agent Phase 3: split by plant side: report
 
 ## Status
-PARTIAL. Commits 0 to 2 done (plan; side definitions; two side diagnosticians behind `multi.split`). Commits 3 to 5
-not started. Branch `multi-agent-p3`, made from
+PARTIAL. Commits 0 to 3 done (plan; side definitions; two side diagnosticians behind `multi.split`; call only on
+change behind `multi.split_on_change`). Commits 4 and 5 not started. Branch `multi-agent-p3`, made from
 `multi-agent` at `a672af7`.
 
 **Mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers measure the
@@ -251,6 +251,74 @@ no tuning PASS, tests PARTIAL FAIL, metric causes PASS.
 | the merge telemetry said `evidence_tick: now` | **fixed**: it records `now_tick` and each answer's evidence tick |
 | the guard covers only the fully compact prompt, while `split` needs only `schema` | **recorded**: a partial-compact split prompt over the limit is flagged (`over_limit_unguarded`), not cut, as in Phase 2 |
 | "0 differences" with split off: the run file's `multi` telemetry gains `side`, `fact_ids`, `case_ids` | **recorded**: the comparator excludes the `multi` telemetry by name (Phase 1 rule); decisions, summaries and prompts are what is compared |
+
+## Commit 3: call a side only when its evidence changed (`multi.split_on_change`). KEPT.
+Mock, dev, lockstep, fixed placement, every compact section on, split on. **Not an accuracy result.**
+
+What was built: a board section `side_answers` (owner: gate) holds each side's last ACCEPTED answer, its fact ids
+stamped with its evidence tick, and the fingerprint of the evidence it answered (`sides.side_fingerprint`: the
+side's signature triples, its open findings with their severity, its checked note-facts, and **the cases it is
+shown**, added after the phase review). `make_jobs` makes no job for a side whose fingerprint equals its cached
+one; `fold_sides(reuse=True)` re-uses that answer, drops the entry of a side no longer to run or whose new answer
+failed, and caches each newly accepted one. `llm_invoked` is True when any model (diagnosis or verifier) was called
+that tick. `run_demo.py --split --on-change`. `bench/evaluator.py` Q3 now checks a stamped citation against the
+facts of the tick it names (review fix; single-agent and Phase 2 scores unchanged, below).
+
+| check | rule | measured (after the review fixes) | result |
+|---|---|---|---|
+| switch off vs commit 2 | 0 differences, prompts byte-identical | 0 differences, summary 0; `cmp` identical (measured before the fixes, which touch only the switch-on path and the evaluator) | PASS |
+| evaluator change | single-agent and Phase 2 scores unchanged | single dev and Phase 2 all-on dev re-run with the new evaluator: 0 differences in runs and summaries against `a672af7` | PASS |
+| deterministic layer vs Phase 2 | identical | 0 ticks differ | PASS |
+| no job on unchanged evidence with a cached answer (commit 0 prediction) | 0 such jobs | side jobs by cache state at creation: none 34, changed 1,015, **same 0** | PASS |
+| health | 0 | parse failures 0; out-of-range lines 0 | PASS |
+| timing | S7 0 | 0.0 | PASS |
+| tests | green, mutation-checked | `tests/test_on_change.py` 8 passed; full suite 310; 16 / 16 mutations caught (one after extending the episode test to dev_B01) | PASS |
+
+| quantity (reported) | Phase 2 | split (commit 2) | split + on change |
+|---|---|---|---|
+| diagnosis calls | 1,982 | 2,005 | **1,049** |
+| model calls per non-QUIET tick, mean / max | — | 1.17 / 2 | 0.69 / 2 |
+| non-QUIET ticks without a diagnosis call | 0 | 0 | 946 of 1,982 |
+| re-used side answers | — | — | water 482, heat 474 |
+| verifier calls | 327 | 319 | 318 |
+| S4 (share of ticks with a model call) | 0.337 | 0.337 | 0.203 |
+| Q3 faithfulness / Q3_rel | 1.0 / 0.573 | 1.0 / 0.592 | 1.0 / 0.590 |
+| mock library top-1 / group top-1 | 0.434 / 0.489 | 0.503 / 0.562 | 0.503 / 0.572 |
+
+Q3_rel is computed from fresh model answers only (a re-used answer has no envelope; it was scored when it was
+fresh), so its sample shrinks with the call count.
+
+**Causes, tested.** Against commit 2, hypotheses differ only on ticks that re-used an answer (950 ticks):
+- 2,559 citation fields differ by the tick stamp alone (`t80.F1` for `F1`); 51 cite other facts (a fresh answer cites
+  this tick's facts);
+- 665 `confidence` (and 128 `confidence_shown`) values differ: a re-used answer carries the confidence belief had
+  when its prompt was built (amendment 2 option (ii) at build time), not today's;
+- 17 ticks differ in order: on all 17 the re-used side was shown the SAME cases in a different retrieval-score
+  order (checked tick by tick). The fingerprint compares the case SET; the mock re-ranks by score. A real model's
+  order is not tied to the score order, so the set is kept.
+
+#### Deviation from commit 0, recorded
+**The side-aware stale rule is not built.** Commit 0 listed it in commit 3 (the plan: an answer more than one tick
+old is accepted "if that side's evidence hasn't changed since"). In lockstep every answer is folded in its own tick,
+so the rule cannot be reached, and the board keeps the facts of the last 2 ticks only (`FactsBook(keep=2)`), so an
+older answer's citations could not be checked anyway. It belongs to real-time mode: deferred to Phase 4, where the
+fact history must grow for it.
+
+#### Phase-reviewer findings (commit 3) and what was done
+The reviewer ran the suite (308 passed) and its own measurements on 6 dev episodes. Checklist: single agent
+untouched PASS, shared code PASS, hard path PASS, single writer PASS, belief PASS (re-used answers skipped today's
+checks), tick stamps PARTIAL, token caps PASS, no tuning PASS, tests PARTIAL, metric causes **FAIL**.
+
+| finding | done |
+|---|---|
+| 1. **Q3 faithfulness collapsed with the switch on (C01 1.0 -> 0.48, B01 -> 0.155) and was not reported**: the evaluator scored re-used stamped citations (`t80.F1`) against the current tick's facts | **fixed in the evaluator**: a stamped citation is valid if that fact existed at the tick it names (the run file holds every tick's facts); single-agent and Phase 2 scores re-measured unchanged; Q3 is 1.0 with the switch on. Tested, mutation caught. The first version of this section would have quoted numbers without this; it was rewritten |
+| 2. **A re-used answer could name cases retrieval no longer returns** (rank-1/2 outside retrieval 3 -> 102 on 6 episodes; `approve` dropped their actions). The reviewer judged it blocking | **fixed**: the fingerprint includes the cases the side is shown, so a side whose case list changed is asked again (calls 764 -> 1,049). Tested on dev: every published model hypothesis on a re-use tick names a case shown that tick. The open decision first recorded here is settled by this |
+| 3. **`llm_invoked` became False on ticks where only the verifier was called** (53 on B01), changing S4's meaning | **fixed**: True when any model was called that tick; S4 reported above |
+| the episode test asserted an equality that held only by coincidence on C01; the re-used answer's evidence tick was untested (a mutation survived) | **fixed**: set inclusion (no-call ticks within re-use ticks), run on C01 and B01; evidence-tick test added; both mutation-checked |
+| re-used answers are published up to ~19 ticks after their evidence tick, while the board keeps 2 ticks of facts | **recorded**: their citations name their tick (stamped) and are checked against the run file's facts of that tick by Q3; the board copy is not needed after the answer was checked |
+| the fingerprint still omits the other-side line, belief top 3, record-facts and triage level | **recorded**: belief values move almost every tick, so including them would end re-use; record-facts change only with time windows; the case list was the input that changed published decisions |
+| a side's cache survives QUIET ticks (`fold_sides` does not run on them) | **recorded**: the fingerprint then guards it (findings resolve on quiet ticks, which changes it) |
+| the gate imported the diagnostician inside a function | **fixed**: module-level import |
 
 ---
 

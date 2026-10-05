@@ -136,12 +136,15 @@ class MultiOrchestrator:
                     self.scheduler.submit(job)
                 bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
                 got = self.scheduler.run_lockstep(now_s)
-            llm_used = True
+            # Phase 3 with split_on_change: a tick whose sides are all unchanged
+            # makes no diagnosis call; llm_invoked is then set by the verifier
+            llm_used = bool(jobs)
             results += got
             if self.diag.split:
                 # Phase 3: both sides' answers, checked one by one, merged once
                 with bb.step("gate"):
-                    claims = self.gate.fold_sides(bb, asmt, claims, got, tick_no)
+                    claims = self.gate.fold_sides(bb, asmt, claims, got, tick_no,
+                                                  reuse=self.diag.on_change)
             else:
                 for r in got:
                     with bb.step("gate"):
@@ -160,6 +163,9 @@ class MultiOrchestrator:
                 bb.write("jobs", [job.to_dict()], "scheduler")
                 got = self.scheduler.run_lockstep(now_s)
             results += got
+            # a verifier call is a model call: llm_invoked keeps its Phase 2
+            # meaning ("a model was called this tick")
+            llm_used = llm_used or bool(got)
             for r in got:
                 with bb.step("gate"):
                     claims = self.gate.apply_verdict(bb, asmt, claims, r, tick_no)
@@ -218,6 +224,7 @@ class MultiOrchestrator:
         return {"placement": self.scheduler.placement,
                 "compact_switches": dict(self.diag.sw),
                 "split": self.diag.split,
+                "split_on_change": self.diag.on_change,
                 "ver_incomplete_verdicts": self.gate.ver_incomplete,
                 "ver_over_limit": self.gate.ver_over_limit,
                 "lanes": [l.telemetry() for l in self.scheduler.lanes],

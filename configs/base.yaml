@@ -187,6 +187,10 @@ multi:
   # diag_heat on the CPU, multi.fixed_placement). Needs compact.schema on.
   # DESIGN (reports/multi_phase3_split.md); off = Phase 2 exactly.
   split: false
+  # Phase 3 commit 3: call a side's diagnostician only when its evidence
+  # (side signature, open findings with severity, note-facts) changed; re-use
+  # the side's last checked answer otherwise. Needs split. Off = commit 2.
+  split_on_change: false
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json
   # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5

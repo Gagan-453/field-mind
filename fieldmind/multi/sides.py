@@ -91,6 +91,11 @@ def active_sides(facts, findings) -> list[str]:
     return [s for s in SIDES if s in act]
 
 
+def sides_to_run(facts, findings) -> list[str]:
+    """The active sides; both when neither has evidence (decision 5)."""
+    return active_sides(facts, findings) or list(SIDES)
+
+
 def case_sides(case: dict) -> set[str]:
     """The sides a case's MOVING (non-FLAT) signature triples touch. A case
     that moves nothing (all-FLAT: RCA-09, 10, 15) belongs to both."""
@@ -160,14 +165,18 @@ def primary_side(facts, findings=()) -> str:
     return "heat" if best["heat"] < best["water"] else "water"
 
 
-def side_fingerprint(signature: dict, findings, notefacts, side: str) -> tuple:
+def side_fingerprint(signature: dict, findings, notefacts, side: str,
+                     case_ids=()) -> tuple:
     """What a side's diagnosis depends on (plan: "its signature, its open
     findings or its note-facts"). Equal fingerprints = unchanged evidence.
     A finding counts with its severity, so an escalation is a change; only the
     side's own open findings and its own note-facts (`notefacts`: the board's
-    checked note-fact dicts) count."""
+    checked note-fact dicts) count. `case_ids`: the cases the side is shown
+    (phase review, commit 3: without them a re-used answer could rank a case
+    list retrieval no longer returns)."""
     return (frozenset(signature_for_side(signature, side)),
             frozenset((f.signature_key, f.severity) for f in findings
                       if not f.resolved and side in finding_sides(f)),
             frozenset(nf["id"] for nf in notefacts
-                      if nf.get("status") == "ok" and side in notefact_sides(nf)))
+                      if nf.get("status") == "ok" and side in notefact_sides(nf)),
+            frozenset(case_ids))

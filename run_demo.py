@@ -78,6 +78,9 @@ def main():
     ap.add_argument("--split", action="store_true",
                     help="Phase 3: water and heat diagnosticians (sets multi.split; "
                          "needs the compact schema, e.g. --compact all)")
+    ap.add_argument("--on-change", action="store_true",
+                    help="Phase 3: with --split, call a side only when its evidence "
+                         "changed (sets multi.split_on_change)")
     ap.add_argument("--case-order", default=None, choices=["score", "shuffled"],
                     help="overrides multi.compact.case_order")
     ap.add_argument("--record-prompts", default=None,
@@ -112,6 +115,8 @@ def main():
         cfg["multi"]["compact"].update({s: s in on for s in ALL_SECTIONS})
     if args.split:
         cfg["multi"]["split"] = True
+    if args.on_change:
+        cfg["multi"]["split_on_change"] = True
     if args.case_order:
         cfg["multi"]["compact"]["case_order"] = args.case_order
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])

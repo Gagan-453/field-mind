@@ -56,6 +56,9 @@ class DiagnosticianAgent:
         self.cap = (mcfg.get("answer_caps") or {}).get("diagnostician", 60)
         self.guard_cpt = mcfg.get("compact_guard_cpt")
         self.split = bool(mcfg.get("split", False))
+        self.on_change = bool(mcfg.get("split_on_change", False))
+        if self.on_change and not self.split:
+            raise ValueError("multi.split_on_change needs multi.split on")
         if self.split and not self.sw["schema"]:
             raise ValueError("multi.split needs multi.compact.schema on: the side "
                              "prompts are the compact (B') prompts")
@@ -90,16 +93,44 @@ class DiagnosticianAgent:
     def sides_to_run(self, bb, tick: int) -> list[str]:
         """The active sides (non-INFO fact or open finding); both when neither
         side has evidence (Phase 3 decision 5)."""
-        return (sides.active_sides(bb.read("facts").facts_of(tick), bb.read("findings"))
-                or list(sides.SIDES))
+        return sides.sides_to_run(bb.read("facts").facts_of(tick), bb.read("findings"))
+
+    @staticmethod
+    def fingerprint(bb, side: str) -> tuple:
+        """The evidence a side's diagnosis depends on, as on the board now."""
+        retrieved = bb.read("retrieval")
+        shown = ([c.get("case_id") for c in
+                  sides.cases_for_side(retrieved.get("cases", []), side)]
+                 + [e.get("case_id") for e in retrieved.get("experience", [])])
+        return sides.side_fingerprint(bb.read("signature").get("signature", {}),
+                                      bb.read("findings"),
+                                      list(bb.read("notefacts").values()), side,
+                                      case_ids=shown)
 
     def make_jobs(self, bb, scheduler, tick: int, level: str, rung: int,
                   submit_s: float) -> list:
-        """Phase 3: one job per side to run (`multi.split` on); else one job."""
+        """Phase 3: one job per side to run (`multi.split` on); else one job.
+        With `multi.split_on_change`, no job for a side whose evidence is
+        unchanged since its cached answer (plan: "a side's diagnosis is
+        requested only if its signature, its open findings or its note-facts
+        changed"); the gate re-uses that answer."""
         if not self.split:
             return [self.make_job(bb, scheduler, tick, level, rung, submit_s)]
-        return [self._compact_job(bb, scheduler, tick, level, rung, submit_s, side=s)
-                for s in self.sides_to_run(bb, tick)]
+        cached = bb.read("side_answers")
+        jobs = []
+        for s in self.sides_to_run(bb, tick):
+            fp = self.fingerprint(bb, s)
+            if self.on_change and s in cached and cached[s]["fingerprint"] == fp:
+                continue
+            job = self._compact_job(bb, scheduler, tick, level, rung, submit_s, side=s)
+            job.line_map["fingerprint"] = fp
+            # telemetry: the cache this job was made against ("same" is only
+            # possible with split_on_change off)
+            job.line_map["info"]["cache"] = ("none" if s not in cached else
+                                             "same" if cached[s]["fingerprint"] == fp
+                                             else "changed")
+            jobs.append(job)
+        return jobs
 
     # ------------------------------------------------------------------
     def _compact_job(self, bb, scheduler, tick, level, rung, submit_s, side=None):

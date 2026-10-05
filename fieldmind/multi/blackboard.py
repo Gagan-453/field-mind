@@ -71,6 +71,9 @@ OWNERS: dict[str, str] = {
     # written by code from records.json, no model call (human decision a).
     "notefacts": "text_reader",
     "recordfacts": "retriever",
+    # Phase 3 (call only on change): each side's last CHECKED answer and the
+    # fingerprint of the evidence it answered. Written by the gate only.
+    "side_answers": "gate",
 }
 
 # Every agent that takes a step. The diagnostician and verifier own no section:
@@ -202,6 +205,7 @@ class Blackboard:
             "assessment": None,
             "notefacts": {},            # note id -> note-fact (or a rejection)
             "recordfacts": [],
+            "side_answers": {},         # side -> {fingerprint, payload, evidence_tick}
         }
         self._active: str | None = None
         self.writes: dict[str, int] = {s: 0 for s in OWNERS}

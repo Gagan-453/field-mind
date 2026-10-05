@@ -30,8 +30,9 @@ from ...agent.l1_symbolize import headline
 from ...agent.orchestrator import (fold_diagnosis, initial_claims, merge,
                                    quiet_deadline_miss, rung_marker,
                                    stamp_shown_confidence, tick_deadline_miss)
-from ...schemas import Assessment
+from ...schemas import AgentEnvelope, Assessment
 from .. import compact, sides
+from .diagnostician import DiagnosticianAgent
 
 NAME = "gate"
 
@@ -137,7 +138,7 @@ class GateMemoryAgent:
         return claims
 
     def fold_sides(self, bb, asmt: Assessment, claims: dict, results,
-                   now_tick: int) -> dict:
+                   now_tick: int, reuse: bool = False) -> dict:
         """Phase 3: the water and heat answers of one tick. Each side's answer is
         expanded, checked for staleness, for a failed call and for invented
         citations ON ITS OWN (one bad side does not sink the other); the
@@ -146,7 +147,13 @@ class GateMemoryAgent:
         agent's `merge`, unchanged, once. The citation rule is NOT applied a
         second time to the union: a fact both sides cite counts once there
         while each side's invented ids still count, so two answers that each
-        passed could fail together (phase review, commit 2)."""
+        passed could fail together (phase review, commit 2).
+
+        `reuse` (multi.split_on_change, commit 3): an accepted answer is kept in
+        `side_answers` with the fingerprint of the evidence it answered, its
+        fact ids stamped with its evidence tick; a side to run that made no call
+        this tick takes its cached answer when the fingerprint still matches;
+        a side that is no longer to run, or whose new answer failed, loses it."""
         accepted, degraded = [], None
         for r in results:
             lm = r.job.line_map
@@ -169,6 +176,9 @@ class GateMemoryAgent:
                     f"{cit['invalid']}; its answer was not used")
                 continue
             accepted.append((lm["side"], env, ev))
+        reused = []
+        if reuse:
+            accepted, reused = self._reuse(bb, accepted, results, now_tick)
         if accepted:
             primary = sides.primary_side(bb.read("facts").facts_of(now_tick),
                                          bb.read("findings"))
@@ -177,12 +187,50 @@ class GateMemoryAgent:
             claims = merge(claims, payload)
             self.compact_log.append({"agent": "merge", "now_tick": now_tick,
                                      "evidence_ticks": [e.tick for _, e, _ in accepted],
-                                     "order": [a[0] for a in accepted]})
+                                     "order": [a[0] for a in accepted],
+                                     "reused": reused,
+                                     "reused_shown": dict(getattr(self, "_reused_shown", {}))
+                                     if reused else {}})
         bb.write("diagnosis", claims, NAME)
         if degraded is not None:
             bb.write("status", {"degraded_mode": degraded}, NAME)
             asmt.degraded_mode = degraded
         return claims
+
+    def _reuse(self, bb, accepted, results, now_tick):
+        """Keep `side_answers` and add the cached answers of sides that made no
+        call. Returns (accepted + reused entries, the reused sides)."""
+        facts_now = bb.read("facts").facts_of(now_tick)
+        run = sides.sides_to_run(facts_now, bb.read("findings"))
+        called = {r.job.line_map["side"] for r in results}
+        cache = {s: v for s, v in bb.read("side_answers").items()
+                 if s in run and s not in called}          # stale sides dropped
+        by_side = {r.job.line_map["side"]: r for r in results}
+        for side, env, _ in accepted:
+            tick = env.tick
+            stamp = lambda x: x if x.startswith("t") and "." in x else f"t{tick}.{x}"
+            payload = copy.deepcopy(env.payload)
+            for h in payload.get("hypotheses", []):
+                h["supports"] = [stamp(x) for x in h.get("supports", [])]
+            cache[side] = {"fingerprint": by_side[side].job.line_map["fingerprint"],
+                           "payload": payload, "evidence_tick": tick}
+        reused = []
+        self._reused_shown = {}
+        for side in run:
+            if side in called or side not in cache:
+                continue
+            fp = DiagnosticianAgent.fingerprint(bb, side)
+            if cache[side]["fingerprint"] != fp:
+                del cache[side]                             # evidence moved on
+                continue
+            self._reused_shown[side] = sorted(fp[3])        # cases shown now
+            env = dataclasses.replace(
+                AgentEnvelope(agent="diagnostician", tick=cache[side]["evidence_tick"]),
+                payload=cache[side]["payload"])
+            accepted.append((side, env, []))
+            reused.append(side)
+        bb.write("side_answers", cache, NAME)
+        return accepted, reused
 
     def _expand(self, env, lm: dict):
         """B' -> the single agent's payload (compact.expand_diag_answer), with
