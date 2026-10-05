@@ -608,6 +608,65 @@ Dev episodes that need notes (`required_modalities` contains `notes`: 7 tier B, 
 Reading "tier-2" as tier B (notes required). The verdicts are my judgement of each note against its episode's
 fault, not a measurement.
 
+## Commit 5: compact diagnostician with per-section switches
+### Plan, predictions and keep-or-revert rule (committed BEFORE the code and before any measurement)
+Written under amendment 4 (no plan-mode approval for this commit). Mock backend; no accuracy claim.
+
+**Switches** (`multi.compact`, all `false` by default in this commit, so every existing run is unchanged;
+`run_demo.py --compact all|none|schema,rules,...` turns them on for a run):
+
+| switch | off (Phase 1 text) | on |
+|---|---|---|
+| `schema` | single-agent output schema and rules 2/6/8, candidate causes listed, fact ids `F1` | answer format B' (`{"g","r":[[case line,[fact lines]]],"sep","n","x"}`, no confidences); facts, cases and context are numbered lists; at most 9 fact lines, most severe first (`evidence_packet` order, and never more than `evidence_max_facts(level, rung)`); candidate-cause section removed (B' can only name shown cases); answer cap `multi.answer_caps.diagnostician` (60) |
+| `rules` | the single agent's 8 rules + operator question | short rules for B' only; the operator-question line is dropped (open item: no consumer until the query agent) |
+| `cases` | `- RCA-xx (score) title: cause=...; discriminator=...` | `k. RCA-xx [group letter] signature triples; check: first sentence of discriminating_evidence` |
+| `notes` | raw note text and the single agent's record lines | note-facts of the notes the retriever selected this tick (`note_fact_text`, newest first, at most 4) and record-facts (at most 4) |
+| `world` | `wm_summary` (open findings, top-2 hypotheses, untrusted tags) | belief top 3 (case id and belief confidence) and untrusted tags |
+| `case_order` | `score` (retrieval order) | `shuffled`, seeded by the evidence tick |
+
+`rules`, `cases`, `notes` and `world` require `schema` (a config error otherwise): their compact text speaks in
+line numbers. G1a = `schema` only; G1b = all five.
+
+**Expansion (code, in the gate, from the job's line map built with the prompt; never recomputed later):**
+case line -> that case's record (cause = `root_cause`, `discriminator` = full `discriminating_evidence`,
+`case_ref`); fact lines -> the evidence tick's fact ids (local `F3`; the gate's existing stamping path stamps
+them for a cross-tick answer); confidence by amendment 2 option (ii), taken from belief when the prompt is
+built (live entry: belief's confidence, which `merge` caps at 0.5 for a model-only case; no live entry: 0.3).
+`x` lines -> `unexplained` strings written by code. `g`, `sep`, `n` -> the run file's `multi` telemetry only.
+An out-of-range fact line becomes an id that matches no fact (an invented citation, amendment 1 item 4); an
+out-of-range or repeated case line is dropped and counted. Shape check (decides the one repair call): `r` a
+list of at most 3 `[int, [int...]]`, `n` and `x` lists of int, `sep` int or null, `g` string.
+
+**Mock:** with `schema` on, the mock answers in B' from the line map in its hint: the top 3 retrieved cases by
+score (found through the map, so `shuffled` still gives the same ranking), citing the lines of the tick's first
+two facts, `n` and `x` empty. Same rule as its Phase 1 answer; it does not read the prompt.
+
+**Guard:** prompt tokens are estimated as `ceil(chars / r)`; if estimate + 60 >= 1,280 the builder drops record
+lines, then note lines (oldest first), then case lines from the bottom (never below 2), and every firing is
+logged and counted. `r` is FITTED once on the dev all-on prompts: the lowest chars-per-token of any
+diagnostician prompt on the worst tokenizer, rounded down to 0.01. It is a safety net, not a shrink.
+
+**Records cap, decision taken:** "newest first" (amendment 4 item 3) cannot be applied across record kinds,
+because the records view carries no common timestamp. The cap keeps the first 4 in the view's order (the single
+agent's order: lab report, maintenance newest first, conductivity, alarms) and logs what it drops.
+**Notes shown, decision taken:** only note-facts of notes the retriever already selected this tick, so the
+retrieval layer stays the one that decides relevance (no new selection logic).
+
+**Predictions and pass rules (dev, 36 episodes, mock, lockstep, fixed placement):**
+| check | prediction / pass rule |
+|---|---|
+| all switches off vs the commit 4 dev run (reference re-run on this machine: prompt log sha256 without text-reader lines `6e9b748a`, the Phase 1 value) | `bench/gate_phase2.py` strict: 0 differences, summary 0; prompt log byte-identical (whole file, text-reader lines included) |
+| all switches on, G3 tokens | every diagnostician prompt + 60 < 1,280 on all four tokenizers; max and p95 per tokenizer reported (the plan's estimate is ~700; reported, not gated) |
+| all switches on, health | parse failures 0, repair calls 0, out-of-range lines 0, Q3 faithfulness 1.0 (mock) |
+| all switches on, guard firings | 0 |
+| fact lines dropped by the 9 cap | 0 on dev (dev's maximum is 7 facts on a tick); notes/records dropped by the 4 caps: reported, not predicted |
+| decisions with switches on | NOT compared in this commit: that is G1a / G1b in commit 7 (predictions already committed in amendment 2) |
+| tests | full suite green; every new test mutation-checked with `PYTHONDONTWRITEBYTECODE=1` |
+
+**Keep or revert:** kept only if the all-off identity holds and G3 holds with all on. A failure of either is a
+stop for this commit (amendment 4 item 2): recorded, nothing adjusted, and work continues on commit 6 only where
+it does not depend on it.
+
 ## Blocked / needs a decision
 **Resolved earlier:** the answer format (amendment 1), gate G1 under B' (amendment 2) and the note-fact
 coverage stop below (amendment 3: option (c), keep the schema, record the partial losses as a known limit).
