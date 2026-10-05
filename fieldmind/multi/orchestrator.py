@@ -55,7 +55,15 @@ class MultiOrchestrator:
         self.sensor = SensorAgent(checks)
         self.triage = TriageAgent(acfg)
         self.retriever = RetrieverAgent(retriever, acfg)
-        self.diag = DiagnosticianAgent(diag, acfg)
+        sw = compact.compact_switches(mcfg.get("compact"))
+        letters = {}
+        if sw["schema"]:
+            import json
+            from pathlib import Path
+            letters, _ = compact.group_letters(
+                json.loads(Path(mcfg["case_groups"]).read_text()),
+                [c["case_id"] for c in retriever.cases.cases])
+        self.diag = DiagnosticianAgent(diag, acfg, mcfg, letters)
         self.ver = VerifierAgent(ver, acfg)
         self.gate = GateMemoryAgent(gate, ver, acfg)
         self.compact = mcfg.get("compact") or {}
@@ -191,12 +199,15 @@ class MultiOrchestrator:
             "deterministic": p0_asmt,
             "results": [r.telemetry() for r in results],
             "text": text or [],
+            "compact": list(self.gate.compact_log),
         }
+        self.gate.compact_log.clear()
 
     def run_telemetry(self) -> dict:
         p = sorted(self.p0_ms)
         pct = (lambda q: round(p[min(len(p) - 1, int(q * len(p)))], 4)) if p else (lambda q: None)
         return {"placement": self.scheduler.placement,
+                "compact_switches": dict(self.diag.sw),
                 "lanes": [l.telemetry() for l in self.scheduler.lanes],
                 "jobs_dispatched": len(self.scheduler.dispatched),
                 "jobs_replaced": len(self.scheduler.replaced),

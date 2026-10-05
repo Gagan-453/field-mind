@@ -70,6 +70,13 @@ def main():
     ap.add_argument("--placement", default=None,
                     choices=["fixed", "earliest_finish"],
                     help="overrides multi.placement (--arch multi only)")
+    ap.add_argument("--compact", default=None,
+                    help="compact diagnostician sections for this run (--arch "
+                         "multi): all | none | comma list of schema,rules,"
+                         "cases,notes,world (the rest off); overrides "
+                         "multi.compact")
+    ap.add_argument("--case-order", default=None, choices=["score", "shuffled"],
+                    help="overrides multi.compact.case_order")
     ap.add_argument("--record-prompts", default=None,
                     help="append every backend call (role, max_tokens, prompt, "
                          "mock-hint hash) to this JSONL file")
@@ -93,6 +100,15 @@ def main():
     cfg.setdefault("agent", {})["log_prompts"] = args.log_prompts
     if args.placement:
         cfg["multi"]["placement"] = args.placement
+    if args.compact is not None:
+        from fieldmind.multi.compact import SECTIONS
+        on = (set(SECTIONS) if args.compact == "all" else set() if
+              args.compact == "none" else set(filter(None, args.compact.split(","))))
+        if on - set(SECTIONS):
+            ap.error(f"--compact: unknown section(s) {sorted(on - set(SECTIONS))}")
+        cfg["multi"]["compact"].update({s: s in on for s in SECTIONS})
+    if args.case_order:
+        cfg["multi"]["compact"]["case_order"] = args.case_order
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)

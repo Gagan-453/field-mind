@@ -165,6 +165,25 @@ multi:
   # Phase 1 path (the single agent's prompts, byte for byte).
   compact:
     text_reader: true               # notes -> note-facts (one model call per note)
+    # Compact diagnostician (commit 5). DESIGN: all off = the single agent's
+    # prompt byte for byte; `schema` = answer format B' (amendment 1) with
+    # numbered lines, at most 9 fact lines, no candidate causes, cap 60; the
+    # other four shrink one section each and need `schema`. Off by default in
+    # commit 5; run_demo.py --compact all|none|schema,rules,... per run.
+    schema: false
+    rules: false
+    cases: false
+    notes: false                    # note-facts (max 4) + record-facts (max 4)
+    world: false
+    case_order: score               # score | shuffled (seeded by the evidence tick)
+  # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
+  case_groups: data/kb/case_groups.json
+  # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5
+  # report): the lowest chars per TEMPLATED prompt token of any dev all-on
+  # diagnostician prompt over the four tokenizers (Qwen2.5 0.5B, 2.9105),
+  # rounded down to 0.01. Dev only. Affects: only whether the guard drops
+  # lines (dev maximum estimate 1,021 + 60 < 1,280). null = guard off.
+  compact_guard_cpt: 2.91
   # Answer caps, tokens. CITED: plan "Model agents" (p.5) and CLAUDE.md.
   answer_caps: {diagnostician: 60, verifier: 30, text_reader: 50, query: 120}
   # The text reader's vocabulary. DESIGN CHOICE (not derived): the kinds, the

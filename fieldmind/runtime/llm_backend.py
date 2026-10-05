@@ -156,6 +156,8 @@ class MockBackend(LLMBackend):
     @staticmethod
     def _mock_diagnosis(hint: dict) -> dict:
         """Rank the retrieved cases by their retrieval score. No reasoning."""
+        if hint.get("compact"):
+            return MockBackend._mock_diagnosis_compact(hint)
         cases = hint.get("cases", [])
         facts = [f["id"] for f in hint.get("facts", [])]
         candidates = hint.get("candidates", [])
@@ -178,6 +180,24 @@ class MockBackend(LLMBackend):
             "hypotheses": hyps,
             "unexplained": [],
         }
+
+    @staticmethod
+    def _mock_diagnosis_compact(hint: dict) -> dict:
+        """The same rule as _mock_diagnosis, answered in format B' (multi-agent
+        Phase 2): the top 3 retrieved cases BY SCORE, each citing the tick's
+        first two facts, all as line numbers looked up in the hint's line map
+        (so a shuffled case order still gives the same ranking). A fact that
+        is not on a shown line is not cited. No confidences, no notes, nothing
+        unexplained. It does not read the prompt."""
+        lines = hint.get("case_lines", [])
+        flines = hint.get("fact_lines", [])
+        cites = [flines.index(f) + 1 for f in hint.get("facts", [])[:2]
+                 if f in flines]
+        r = [[lines.index(cid) + 1, list(cites)]
+             for cid in hint.get("cases_by_score", [])[:3] if cid in lines]
+        letters = hint.get("letters", [])
+        g = letters[r[0][0] - 1] if r and letters else ""
+        return {"g": g, "r": r, "sep": r[0][0] if r else None, "n": [], "x": []}
 
     @staticmethod
     def _mock_text_read(hint: dict) -> dict:

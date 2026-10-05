@@ -44,6 +44,9 @@ class GateMemoryAgent:
         self.hard_deadline_ms = cfg.get("hard_stage_deadline_ms", 200)
         self.tick_budget_ms = cfg.get("tick_period_s", 30) * 1000
         self.stale_dropped: list[dict] = []
+        # Compact-answer expansion records of the current tick (telemetry;
+        # the orchestrator takes and clears them when it records the tick).
+        self.compact_log: list[dict] = []
 
     # ------------------------------------------------------------------
     def begin_tick(self, bb, rung: int) -> None:
@@ -105,6 +108,11 @@ class GateMemoryAgent:
 
     def fold_diagnosis(self, bb, asmt: Assessment, claims: dict, result,
                        now_tick: int) -> dict:
+        lm = getattr(result.job, "line_map", None)
+        if lm and lm.get("kind") == "diagnosis":
+            # Compact answer (B'): expanded through the line map the prompt
+            # was built with, BEFORE anything else reads it.
+            result.envelope = self._expand(result.envelope, lm)
         env = result.envelope
         asmt.envelopes.append(env.to_dict())
         if self._drop_if_stale(result, now_tick):
@@ -123,6 +131,24 @@ class GateMemoryAgent:
             bb.write("status", {"degraded_mode": degraded}, NAME)
             asmt.degraded_mode = degraded
         return claims
+
+    def _expand(self, env, lm: dict):
+        """B' -> the single agent's payload (compact.expand_diag_answer), with
+        cited facts and cases set the way Diagnostician.run sets them. A failed
+        call is left as it is (merge never sees it). The expansion record goes
+        to telemetry only."""
+        record = {"evidence_tick": lm["evidence_tick"], **lm.get("info", {})}
+        if env.status == "ok":
+            payload, info = compact.expand_diag_answer(env.payload, lm)
+            record.update(info, answer=env.payload)
+            env = dataclasses.replace(
+                env, payload=payload,
+                cited_facts=sorted({s for h in payload["hypotheses"]
+                                    for s in h["supports"]}),
+                cited_cases=sorted({h["case_ref"] for h in payload["hypotheses"]
+                                    if h.get("case_ref")}))
+        self.compact_log.append(record)
+        return env
 
     @staticmethod
     def _stamped(env, facts, tick: int):
