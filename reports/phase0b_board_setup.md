@@ -204,6 +204,26 @@ reboot.
   their failing calls were reconstructed from the reply cache); (c) STATUS.md's attempt number from the manifest.
   Each with a test and a caught mutation (`PYTHONDONTWRITEBYTECODE=1`). 140 tests pass.
 
+## HUMAN OVERRIDE 2026-10-05: the model-choice stop is overridden; Llama 3.2 3B is the chosen model
+**Decided AFTER both stage C results were seen. The rule itself is unchanged and passed no model, twice.**
+- 2026-10-04 22:43-23:24 (second launch, dev runs for every passing model): Qwen3 1.7B and Gemma 3 1B were dropped
+  after round 1 by the committed drop rule (first reply / after repair: 0.368 / 0.053 and 0.456 / 0.333; limits
+  0.30 / 0.10). Stage C on the survivors (3B, Qwen2.5 0.5B) again passed no model: 3B fails only "broken JSON after
+  repair" (0.042 > 0.02); Qwen2.5 fails both JSON limits. Exit 3.
+- Cause of the broken JSON, read from the call logs (not a model run): first replies cut off at the 256-token answer
+  cap. 3B: 13 at the cap, all unparseable, 3 repaired, 10 of its 11 final failures. Qwen3: 21 of 21 unparseable first
+  replies were at the cap. Gemma: 25 of 26. The cap, the limits and the agent are unchanged.
+- **Override (human, short of board time): the campaign continues past stage C with Llama 3.2 3B as the chosen
+  model**, the only candidate that completed all 3 dev rounds and fails a single constraint. Code:
+  `bench.campaign.PICK_OVERRIDE`. The stage C record keeps the rule's own result (`rule_pick: null`) next to the
+  override, and the reporting baseline file carries the override note.
+- **What this means for every number from the reporting run:** it is the 3B at a 256-token answer cap, where about
+  4% of diagnosis ticks have a cut-off answer and fall back to the deterministic ranking. It is NOT a model that
+  passed the pre-registered rule, and must not be described as one. The other three candidates were not tested at
+  any other cap.
+- The ranking follow-up (stage E) is left as committed: it runs after the reporting run if the 3-episode verdict is
+  INCONCLUSIVE (it is, for the 3B). The human may stop the campaign after stage D; that would be recorded.
+
 ## HUMAN DECISION 2026-10-04: dev runs for every model that passes screening (replaces option C)
 **Decided AFTER the campaign's stage C result was seen** (no model passed; `reports/campaign_watch.md`). Option C
 (dev runs only for Llama 3.2 3B plus the fastest other model) is replaced: **every model that passes screening gets

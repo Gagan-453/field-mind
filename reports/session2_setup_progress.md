@@ -168,3 +168,15 @@ Status: `scripts/board_campaign.sh status` or `results/board/STATUS.md`. Relaunc
 - Board: not connected at 22:18. Nothing running. To continue: connect the board, then
   `tmux new -s campaign '~/campaign_loop.sh'` (the human's wrapper) or `tmux new -s campaign 'scripts/board_campaign.sh all'`.
 - Expected board time (scaled from last night, not measured): ~3 h for the 6 dev episodes, then stage C.
+
+## 2026-10-05: stage C stop overridden by the human (3B chosen), runner updated, NOT launched
+- Second launch (2026-10-04 22:43-23:24): qwen3-1.7b and gemma3-1b-qat dropped after round 1 (cut-off answers at the
+  256 cap); stage C again passed no model; exit 3. Results committed by the runner (`d011d96`, `c5df20a`, `d6a4149`).
+- HUMAN OVERRIDE (after seeing both stage C results): continue with Llama 3.2 3B. `bench.campaign.PICK_OVERRIDE`.
+  The rule is unchanged; stage C keeps `rule_pick: null` beside the override; the baseline file carries the note.
+- 150 tests pass; 5 mutations caught. Checked on a COPY of the real `results/board` with the fake board: override
+  applied without recomputing stage C, 0 of 12 real jobs rerun, 30 stage D jobs (3B), then 13 stage E jobs.
+- Stage E will rerun all 13 follow-up episodes (not reuse the 3 dev ones): the runner's code hash covers `bench/`,
+  which changed since stage C. Stricter than the pre-registered reuse rule needs; left as is.
+- Launch (human only): board connected, then `tmux new -s campaign '~/campaign_loop.sh'`.
+  Planning estimate, not measured: stage D ~14 h, stage E ~9 h.

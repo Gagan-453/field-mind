@@ -30,6 +30,13 @@ _TIMING = re.compile(r"latency|_ms$|temp|^t$|finished|started|network|thermal|wa
                      r"cache_hit|n_cache_hits|S1_tick|git_commit|created|^file$|rate_calls_missing")
 
 
+@pytest.fixture(autouse=True)
+def _no_pick_override(monkeypatch):
+    """The committed rule is 'no model passes -> stop'. Tests run it as committed;
+    the human override of 2026-10-05 is switched on only in its own tests."""
+    monkeypatch.setattr(C, "PICK_OVERRIDE", None)
+
+
 def strip(x):
     """Everything except timings, clocks and cache marks."""
     if isinstance(x, dict):
@@ -579,3 +586,68 @@ def test_option_c_results_are_extended_not_rerun(tmp_path, monkeypatch):
     assert (tmp_path / "out/C/model_choice.superseded-1.json").read_text() == old_c
     assert set(m["stages"]["C"]["gates"]) == set(m["stages"]["B"]["models"])
     assert m["stages"]["C"]["pick"] in ("qwen3-1.7b", "gemma3-1b-qat") and rc == C.EXIT_OK
+
+
+# ---- human override of the stage C stop (2026-10-05) --------------------------
+SLOW = {"prefill_tok_s": 100, "decode_tok_s": 5}                     # fails model_choice's 10 s limit
+
+
+def _run(tmp_path, plan, override, name="out"):
+    b = FakeBoard({"models": plan})
+    c = C.Campaign(tmp_path / name, b, commit=False, baseline_dir=tmp_path / "base")
+    return c, b, c.run_all()
+
+
+def test_committed_value_of_the_override_is_the_3b():
+    # read from the source: the autouse fixture sets the live value to None for the other tests
+    src = (ROOT / "bench/campaign.py").read_text()
+    assert '\nPICK_OVERRIDE: str | None = "llama32-3b"\n' in src
+
+
+def test_override_continues_past_a_no_pick_and_keeps_the_rule_result(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "PICK_OVERRIDE", LLAMA)
+    c, b, rc = _run(tmp_path, {m["tag"]: dict(SLOW) for m in C.MODELS}, LLAMA)
+    st = json.loads(c.mpath.read_text())["stages"]
+    assert rc == C.EXIT_OK and st["C"]["pick"] == LLAMA
+    assert st["C"]["rule_pick"] is None and st["C"]["passing"] == []          # the rule's own result
+    assert st["C"]["override"]["failed_constraints"] == ["projected_verified_s"]
+    assert st["D"]["model"] == LLAMA
+    base = json.loads((tmp_path / "base" / f"single_v3_real_{LLAMA}_npu_summary.json").read_text())
+    assert base["model_choice_override"]["model"] == LLAMA and "did not pass" in base["model_choice_override"]["note"]
+
+
+def test_override_is_ignored_when_the_rule_picks_a_model(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "PICK_OVERRIDE", LLAMA)
+    c, b, stop = _through_b(tmp_path, MODELS_PLAN)
+    c.stage_c()
+    st = c.manifest["stages"]["C"]
+    assert st["pick"] is not None and st["pick"] == st["rule_pick"] and st["override"] is None
+
+
+def test_override_cannot_pick_a_model_that_was_dropped(tmp_path, monkeypatch):
+    monkeypatch.setattr(C, "PICK_OVERRIDE", "gemma3-1b-qat")
+    plan = {m["tag"]: dict(SLOW) for m in C.MODELS}
+    plan["gemma3-1b-qat"] = dict(SLOW, broken_first=0.6, broken_repair=0.9)   # dropped after round 1
+    c, b, rc = _run(tmp_path, plan, "gemma3-1b-qat")
+    st = json.loads(c.mpath.read_text())["stages"]
+    assert rc == C.EXIT_STOP and st["C"]["pick"] is None and st["C"]["override"] is None
+    assert "gemma3-1b-qat" in st["B"]["dropped"]
+
+
+def test_override_applies_to_a_campaign_already_stopped_at_stage_c(tmp_path, monkeypatch):
+    plan = {m["tag"]: dict(SLOW) for m in C.MODELS}
+    c0, b0, rc0 = _run(tmp_path, plan, None)                          # as committed: stop, exit 3
+    assert rc0 == C.EXIT_STOP
+    mc_before = (tmp_path / "out/C/model_choice.json").read_text()
+    n_jobs = len(json.loads(c0.mpath.read_text())["jobs"])
+    monkeypatch.setattr(C, "PICK_OVERRIDE", LLAMA)
+    c1, b1, rc1 = _run(tmp_path, plan, LLAMA)                         # relaunch with the override
+    m = json.loads(c1.mpath.read_text())
+    assert rc1 == C.EXIT_OK and m["stages"]["C"]["pick"] == LLAMA and m["stages"]["C"]["rule_pick"] is None
+    assert "override_applied" in m["stages"]["C"]
+    # stage C was not recomputed and nothing finished was rerun
+    assert (tmp_path / "out/C/model_choice.json").read_text() == mc_before
+    assert not (tmp_path / "out/C/model_choice.superseded-1.json").exists() and "superseded" not in m
+    assert all(j["attempts"] == 1 for j in m["jobs"].values())
+    assert len(m["jobs"]) > n_jobs and sum(k.startswith("D/") for k in m["jobs"]) == 30
+    assert {f for f, _ in b1.starts} == {C.MODELS[0]["file"]}         # only the 3B was ever loaded

@@ -95,6 +95,12 @@ CONFIRM_LOG_LEVEL = 4
 # stricter of the two readings, so it restarts slightly earlier, never later.
 MEM_GUARD_KB = 2 * 1024 * 1024   # the offload-confirmation launch always logs at -lv 4
 EXIT_OK, EXIT_INFRA, EXIT_STOP = 0, 2, 3
+# HUMAN OVERRIDE 2026-10-05 (reports/phase0b_board_setup.md), decided after both
+# stage C results were seen: bench.model_choice passed no model, and the campaign
+# continues with this model anyway. The rule is NOT changed: its own result is
+# kept as `rule_pick`. Applies only when the rule picks nothing and this model
+# completed every dev round. None = no override (stop and ask, as committed).
+PICK_OVERRIDE: str | None = "llama32-3b"
 
 
 class InfraFailure(Exception):
@@ -987,16 +993,46 @@ class Campaign:
         for tag in b["survivors"]:
             runs[tag] = [self.load_run("B", f"round{r}", tag, ep) for r, ep in enumerate(ROUNDS, 1)]
         mc = self._model_choice("model_choice", runs, a["checks"], self.out / "C")
-        pick = mc["selection"]["pick"]
-        out = {"pick": pick, "pick_reason": mc["selection"]["pick_reason"],
+        out = self._c_record(mc, b["survivors"])
+        self.finish("C", out)
+        if out["pick"] is None:
+            raise CampaignStop("stage C: no model passes bench.model_choice (stop and ask)")
+
+    def _c_record(self, mc: dict, survivors: list[str]) -> dict:
+        rule_pick = mc["selection"]["pick"]
+        pick, override = rule_pick, None
+        if rule_pick is None and PICK_OVERRIDE is not None and PICK_OVERRIDE in survivors:
+            pick = PICK_OVERRIDE
+            override = {"model": pick, "by": "human", "decided": "2026-10-05, after the stage C result was seen",
+                        "note": "bench.model_choice passed NO model; this model did not pass the rule",
+                        "failed_constraints": [k for k, v in mc["selection"]["gates"][pick].items()
+                                               if k != "pass" and v is not True]}
+        out = {"pick": pick, "rule_pick": rule_pick, "override": override,
+               "pick_reason": ("HUMAN OVERRIDE: no model passes the rule" if override
+                               else mc["selection"]["pick_reason"]),
                "passing": mc["selection"]["passing"], "flags": mc["selection"]["flags"],
                "gates": mc["selection"]["gates"],
                "ranking_verdict_3_episodes": (mc["columns"][pick]["ranking_model_rank1"]["verdict"]
                                               if pick else None),
                "code_hash": code_hash()}
-        self.finish("C", out)
-        if pick is None:
-            raise CampaignStop("stage C: no model passes bench.model_choice (stop and ask)")
+        return out
+
+    def apply_override_to_finished_c(self) -> None:
+        """A stage C that already finished with no pick (the campaign stopped there)
+        gets the override without being recomputed: same model_choice output."""
+        c = self.manifest["stages"].get("C", {})
+        if not c.get("done") or c.get("pick") is not None or PICK_OVERRIDE is None:
+            return
+        mc = json.loads((self.out / "C" / "model_choice.json").read_text())
+        new = self._c_record(mc, self.manifest["stages"]["B"].get("survivors") or [])
+        if new["pick"] is None:
+            return
+        new.update(code_hash=c.get("code_hash"), done=True, finished=c.get("finished"),
+                   override_applied=now())
+        self.manifest["stages"]["C"] = new
+        self.save()
+        self.write_status(note=f"stage C: HUMAN OVERRIDE, chosen model {new['pick']} (the rule picked none)")
+        self.commit("Board campaign: stage C human override recorded")
 
     # ---- stage D: reporting run ----------------------------------------------
     @staticmethod
@@ -1020,6 +1056,7 @@ class Campaign:
                 "model": pick, "model_file": m["file"], "model_sha256": sums[0]["meta"]["model_sha256"],
                 "server_flags": sums[0]["meta"]["server_flags"],
                 "llamacpp_commit": sums[0]["meta"]["llamacpp_commit"],
+                "model_choice_override": self.manifest["stages"]["C"].get("override"),
                 "note": "REAL model on the QIDK NPU lane, single-agent v3 code, the 30 REPORTING "
                         "episodes, run once. Agent code ran on the laptop; only model calls ran on "
                         "the board. Energy was not measured (null). Cache hits carry no timings.",
@@ -1087,6 +1124,8 @@ class Campaign:
     def run_all(self) -> int:
         try:
             self.measure_idle()
+            if self.stage_done_flag("B"):
+                self.apply_override_to_finished_c()
             for stage, fn in (("A", self.stage_a), ("B", self.stage_b), ("C", self.stage_c),
                               ("D", self.stage_d), ("E", self.stage_e)):
                 # a finished stage is not recomputed; its stop rule is re-applied
