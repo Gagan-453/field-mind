@@ -1,9 +1,9 @@
 # FieldMind multi-agent build: one Claude Code session per step
 
-Run each session from `~/projects/fieldmind` with the venv active:
+Run each session from the repo root with the venv active:
 
-```zsh
-cd ~/projects/fieldmind && source .venv/bin/activate
+```sh
+source .venv/bin/activate
 ```
 
 Paste the prompt at the `>` line. Do not start the next session until the current one's check passes and is committed.

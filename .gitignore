@@ -4,6 +4,13 @@ data/episodes_dev/
 data/experience/
 results/*
 !results/baselines/
+# board campaign results are tracked (summaries, gzipped call logs, manifest, status);
+# its scratch folders are not
+!results/board/
+results/board/tmp/
+results/board/cache/
+# the aborted first campaign (2026-10-03), kept in full: never used for a decision or a timing
+!results/board_aborted_20261003/
 
 # --- reference data: large, and not ours to redistribute
 data/reference/*.csv
@@ -29,3 +36,6 @@ npu/maven/
 # --- tokenizer files (licence terms): fetched by bench/token_count.py --fetch;
 #     bench/tokenizers/manifest.json (repo, revision, sha256) IS committed
 bench/tokenizers/*/
+
+# --- build, download, quantize and board logs (large; kept local)
+logs/

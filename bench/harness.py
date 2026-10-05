@@ -139,7 +139,7 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                 verbose: bool = False, arch: str = "single",
                 record_prompts: str | None = None, wrap_backend=None,
                 mode: str = "lockstep", tick_s: float | None = None,
-                on_assessment=None) -> dict:
+                on_assessment=None, on_tick=None) -> dict:
     """Replay one episode. `ablate_text` removes every note -- that is the T8
     modality ablation, and tier B/C accuracy MUST collapse under it or the
     episode is mislabelled.
@@ -152,7 +152,11 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
     in lockstep and real time; for a live UI. Telemetry only: it must not touch
     the agent, and an exception in it stops the run. `wrap_backend`: a bench tool's wrapper put between
     the model and the agent (e.g. bench/verifier_wrong_answer.py), inside the
-    prompt recorder; None leaves the backend untouched."""
+    prompt recorder; None leaves the backend untouched.
+
+    `on_tick(k)`, if given, is called just before tick k is processed. It is
+    telemetry only (the board campaign uses it to stamp each model call with
+    its tick) and must not touch the agent."""
     notes = [] if ablate_text else ep.notes
     recorder = None
     wrap = wrap_backend
@@ -214,6 +218,8 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
             continue                       # still filling; do not guess
 
         ts = (EPOCH + timedelta(seconds=t_end)).isoformat()
+        if on_tick is not None:
+            on_tick(k)
         if recorder is not None:
             recorder.tick = k
         if rt is not None:
