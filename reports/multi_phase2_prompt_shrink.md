@@ -1,9 +1,8 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-BLOCKED after commit 4 on the pre-registered note-fact coverage stop rule: two tier-B dev episodes that need
-notes (A03, B03) keep their note content only in part (see "Commit 4" and "Blocked / needs a decision").
-Commits 0 to 4 are done; commits 5 to 7 (compact diagnostician, compact verifier, dev gate G1a / G1b / G3) have
+PARTIAL. Commits 0 to 4 are done. The note-fact coverage stop after commit 4 is resolved by the human (option
+(c), see "AMENDMENT 3"). Commits 5 to 7 (compact diagnostician, compact verifier, dev gate G1a / G1b / G3) have
 not started, so no G1a run has been made.
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
@@ -196,6 +195,30 @@ the 0.3 default, above 745 of the 2,016 live `model_only` cases whose belief con
 the predictions above were computed with exactly this rule. **Open item for `main`** (it is in
 `fieldmind/agent/`, so not changed here): decide whether a retired-this-tick case should take its retired belief
 confidence instead of the 0.3 default, and whether retrieval should return cases belief has retired.
+
+## AMENDMENT 3: HUMAN DECISION on the note-fact coverage stop (after commit 4, before commit 5)
+Made on 2026-10-05, on the second laptop (Mac), after seeing the coverage table under "Commit 4". No accuracy
+has been measured with any backend for note-facts at the time of this decision.
+
+**Option (c): keep the note-fact schema as committed in `fa6ee08`.** The partial losses are recorded as a known
+limit of note-facts, not fixed:
+- dev_A03_bfp_suction: "bfp A suction pr on lower side" -> `BFP_A LOW` (which quantity is low is lost);
+- dev_A03 / dev_B03 / dev_C05: "gauge glass showing normal" -> `drum_level NORMAL` (that it is an independent
+  local reading is lost);
+- D01 "feeder calib not changed" and E01 to E03 "for the same load" (episodes that do not require notes).
+
+Reasons, as put to the human before the choice (the human chose (c) without adding others):
+- On the mock the choice cannot move any number (the mock text reader echoes metadata tags), so whether the loss
+  matters can only be measured with a real model;
+- (b) adds vocabulary written for exactly the four affected dev notes, the most fitted option;
+- (a) costs answer tokens against the 50-token cap (worst case today 39 to 44) and a code change, before there
+  is evidence it is needed.
+
+How it is measured later: the per-section switches (commit 5) and the with/without-text-reader comparison on
+the real model, reported separately for A03 and B03. If that shows a loss caused by the schema (the real model
+wrote the expected note-fact and the diagnosis still lost), the fallback is option (a), which needs its own
+pre-registered rule. Not a human decision, recorded as advice given: any schema change is cheapest before
+Phase 3 (both side prompts carry note-facts) and before the Phase 2 reporting run.
 
 ## Stops
 - After every commit, `reports/multi_phase2_progress.md` is updated and committed.
@@ -573,9 +596,10 @@ Reading "tier-2" as tier B (notes required). The verdicts are my judgement of ea
 fault, not a measurement.
 
 ## Blocked / needs a decision
-**Resolved earlier:** the answer format (amendment 1) and gate G1 under B' (amendment 2).
+**Resolved earlier:** the answer format (amendment 1), gate G1 under B' (amendment 2) and the note-fact
+coverage stop below (amendment 3: option (c), keep the schema, record the partial losses as a known limit).
 
-**Open: the note-fact coverage stop rule tripped (pre-registered: "if any tier-2 dev episode loses its
+**Resolved (amendment 3): the note-fact coverage stop rule tripped (pre-registered: "if any tier-2 dev episode loses its
 discriminating note content, stop and report").** Two tier-B dev episodes that need notes keep that content
 only in part:
 - **dev_A03_bfp_suction.** "bfp A suction pr on lower side" can only be written as BFP_A LOW. The schema has a

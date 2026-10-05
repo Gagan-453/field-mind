@@ -32,3 +32,17 @@ Updated and committed after every commit. Mock backend only; no accuracy claim.
    BFP_A LOW, and the local gauge-glass reading becomes drum_level NORMAL. Nothing is lost outright; the build
    stopped rather than judge "partly" itself. The coverage table, the kind enum and three options are in the
    report. Commits 5 to 7 have not started and no G1a run has been made.
+5. **Resolved by the human (amendment 3, 2026-10-05).** Option (c): keep the note-fact schema; the partial
+   losses are a recorded limit, measured later with the real model. Next: commit 5.
+
+## Second machine (Mac, 2026-10-05): environment reproduced before commit 5
+Fresh clone; `.venv` on Python 3.13.7 with `requirements.txt` plus `tokenizers` 0.23.2 and `jinja2` 3.1.6;
+episodes regenerated with `data.generator.episode_build --set report` (30/30) and `--set dev` (36/36);
+tokenizers fetched and checked against `bench/tokenizers/manifest.json`; `data/experience/` absent (empty store).
+No committed episode checksum exists, so the episodes were checked through the runs below. Mock backend.
+
+| check | result |
+|---|---|
+| test suite at `fa6ee08` | 223 passed |
+| dev, `--arch single` vs `--arch multi --mode lockstep` | `bench/gate_phase2.py` strict: 36 episodes, 5,850 assessments, 0 differences; summary 0 differences |
+| reporting, multi lockstep vs `results/baselines/multi_p1_summary.json` | summary and per-episode: 0 differences outside timing keys; extra keys only `Q3_rel`, `n_rel_citations`, `T3_faithfulness.rel` (added in commit 4, pre-registered as extra) |
