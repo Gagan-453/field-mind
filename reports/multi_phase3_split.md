@@ -1,8 +1,9 @@
 # Multi-agent Phase 3: split by plant side: report
 
 ## Status
-PARTIAL. Commits 0 to 3 done (plan; side definitions; two side diagnosticians behind `multi.split`; call only on
-change behind `multi.split_on_change`). Commits 4 and 5 not started. Branch `multi-agent-p3`, made from
+PARTIAL. Commits 0 to 4 done (plan; side definitions; two side diagnosticians behind `multi.split`; call only on
+change behind `multi.split_on_change`; the known-wrong-answer verifier tool). Commit 5 (the dev run and the report)
+not started. Branch `multi-agent-p3`, made from
 `multi-agent` at `a672af7`.
 
 **Mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers measure the
@@ -319,6 +320,55 @@ checks), tick stamps PARTIAL, token caps PASS, no tuning PASS, tests PARTIAL, me
 | the fingerprint still omits the other-side line, belief top 3, record-facts and triage level | **recorded**: belief values move almost every tick, so including them would end re-use; record-facts change only with time windows; the case list was the input that changed published decisions |
 | a side's cache survives QUIET ticks (`fold_sides` does not run on them) | **recorded**: the fingerprint then guards it (findings resolve on quiet ticks, which changes it) |
 | the gate imported the diagnostician inside a function | **fixed**: module-level import |
+
+## Commit 4: known-wrong-answer verifier tool (`bench/verifier_wrong_answer.py`). KEPT.
+What it does (PROMPTS.md session 5: "feed the verifier one episode where rank 1 is known to be wrong and show whether
+it disagrees"): a backend wrapper between the model and the agent rewrites each diagnostician answer so that rank 1
+is a case SHOWN in the prompt but OUTSIDE the episode's true look-alike group (the model's rank-1 citations are
+kept); the verifier is forced to `always`; a control run has no rewrite. It reports, per episode, how often the
+verifier failed the rank-1 claim (detection; false alarm in the control), passed it, or left it not judged, and how
+often the known-wrong case was still published at rank 1. `run_episode` gained an optional `wrap_backend`
+(None leaves it unchanged; the full suite and the identity tests pass). The agent, gate and verifier are unchanged.
+
+**Mock run (dev, split on). The mock verifier always agrees, so detection 0 is by construction; this proves the
+plumbing, not the verifier.**
+
+| episode | forced answers (calls) | not rewritten | verifier answered (ticks; all post-onset) | detected | passed | not judged | rank 1 outside the true group | control false alarms |
+|---|---|---|---|---|---|---|---|---|
+| dev_A03_bfp_suction | 73 | 20 (no shown case outside the true group) | 87 | 0 | 87 | 0 | 70 | 0 of 87 |
+| dev_B01_tube_leak | 128 | 0 | 128 | 0 | 128 | 0 | 128 | 0 of 128 |
+| dev_C05_low_cv_coal | 134 | 5 (same) | 119 | 0 | 119 | 0 | 118 | 0 of 119 |
+
+Failed verifier calls: 0 on each. With a verifier scripted to fail ONLY the rank-1 claim, detection is 1.0; failing
+only the rank-2 claim, it is 0 (both tested), so the tool reads the right claim. Tests:
+`tests/test_verifier_wrong_answer.py` 11 passed; full suite 321; 13 / 13 mutations caught.
+
+#### Findings, recorded (for the board run and for the plan's open question "is the verifier worth keeping?")
+1. **The verifier never runs at WATCH**, even in `always` mode (the single agent's rule: QUIET and WATCH ticks are
+   not verified). dev_A01 and dev_C01, for example, reach only WATCH, so the test needs episodes that reach
+   INVESTIGATE or URGENT; its sample is those ticks only.
+2. **A verifier that disagrees does not change the ranking.** `Verifier.apply` (single agent, unchanged) caps a
+   failed claim's confidence at 0.35 and flags it; it never moves it down. So even a perfect verifier would leave a
+   known-wrong case published at rank 1 (on the mock it stayed rank 1 on 70 to 128 forced ticks per episode, which
+   is the rewrite plus an always-agreeing verifier). What a disagreement changes is the shown confidence, the
+   `verifier` flag and `unexplained`. Whether that is enough is a question for the board result and the human.
+3. The tool forces `split_on_change` off: with it on, a re-used side answer would be an earlier REWRITTEN answer
+   taken from the cache with no new call.
+
+#### Phase-reviewer findings (commit 4) and what was done
+| finding | done |
+|---|---|
+| 1. A malformed answer (`{"r":[[1]]}`, `{"r":[5,...]}`) crashed the whole run; an out-of-range answer was "repaired" into a valid one, skewing the forced run's parse and citation counts | **fixed**: only an answer that passes the gate's own shape check with every case line in range is rewritten; anything else goes through untouched and is counted (`not_rewritten`); 5 malformed shapes tested |
+| 2. The scripted verifier failed every claim, so the test could not tell rank 1 from rank 2 | **fixed**: fail only claim 1 -> detection 1.0; fail only claim 2 -> 0 |
+| 3. Denominators: forced calls reported as ticks; failed verifier calls dropped silently; pre-onset ticks counted (T2 scores from onset); "model idea" claims and the control's own misses called "wrong still rank 1" | **fixed**: `forced_answers` (calls) and `verifier_ran` (ticks) reported separately; `verifier_call_failed` counted; a `post_onset` subset with the evaluator's key (`fault_onset_t`) and rule (`tick x 30 >= onset`); `rank1_outside_true_group` counts real case ids only. A first version read the onset from a wrong key and returned 0; an episode-level assertion now fails if it does |
+| a control run that was rewritten by mistake would still report 0 rewrites | **fixed**: rewrites are counted from the wrapper's own log (a mutation caught it) |
+| `split_on_change` would re-use rewritten answers | **fixed**: the tool forces it off |
+| in real time a stale verdict would be counted against the current rank 1 (`apply_verdict` records the envelope before the stale check) | **recorded** for Phase 4 |
+| with both `wrap_backend` and `record_prompts`, the recorder logs the rewritten text as the model's answer | **recorded**: the tool does not use the recorder |
+| RCA-02 has no look-alike group, so every other shown case counts as wrong for it | **recorded**: correct for a case without look-alikes |
+
+Board command (after Phase 2's real-model numbers): `bench/verifier_wrong_answer.py --backend llamaserver --split
+--episodes dev_A03_bfp_suction,dev_B01_tube_leak,dev_C05_low_cv_coal --out results/board_multi/verifier_wrong.json`.
 
 ---
 

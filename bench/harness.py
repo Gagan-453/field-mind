@@ -137,7 +137,7 @@ def build_multi_agent(cfg: dict, notes: list[dict], records: dict | None = None,
 
 def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                 verbose: bool = False, arch: str = "single",
-                record_prompts: str | None = None) -> dict:
+                record_prompts: str | None = None, wrap_backend=None) -> dict:
     """Replay one episode. `ablate_text` removes every note -- that is the T8
     modality ablation, and tier B/C accuracy MUST collapse under it or the
     episode is mislabelled.
@@ -145,16 +145,19 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
     `arch`: "single" (fieldmind/agent, the baseline) or "multi"
     (fieldmind/multi, lockstep). `record_prompts`: path of a JSONL file every
     backend call is appended to (bench/prompt_log.py), for the Phase 1
-    prompt-identity check."""
+    prompt-identity check. `wrap_backend`: a bench tool's wrapper put between
+    the model and the agent (e.g. bench/verifier_wrong_answer.py), inside the
+    prompt recorder; None leaves the backend untouched."""
     notes = [] if ablate_text else ep.notes
     recorder = None
-    wrap = None
+    wrap = wrap_backend
     if record_prompts:
         from bench.prompt_log import RecordingBackend
 
         def wrap(b):
             nonlocal recorder
-            recorder = RecordingBackend(b, record_prompts)
+            inner = wrap_backend(b) if wrap_backend is not None else b
+            recorder = RecordingBackend(inner, record_prompts)
             recorder.episode = ep.id
             return recorder
     # records.json is a separate modality from notes -- text ablation (T8)
