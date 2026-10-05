@@ -37,6 +37,9 @@ class Job:
     work: Callable[[], Any] | None = field(default=None, repr=False)
     lane: str | None = None
     prompt_tokens: int | None = None        # set when the lane is chosen
+    # multi.grammar: the GBNF the server must keep this job's answers to
+    # (fieldmind/multi/grammar.py), built with the prompt. None = free text.
+    grammar: str | None = field(default=None, repr=False)
     predicted_finish_s: float | None = None
     start_s: float | None = None
     finish_s: float | None = None

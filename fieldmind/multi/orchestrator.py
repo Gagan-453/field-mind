@@ -364,6 +364,7 @@ class MultiOrchestrator:
                 "compact_switches": dict(self.diag.sw),
                 "split": self.diag.split,
                 "split_on_change": self.diag.on_change,
+                "grammar": self.diag.grammar,
                 "ver_incomplete_verdicts": self.gate.ver_incomplete,
                 "accepted_late_unchanged_evidence": self.gate.accepted_late,
                 "ver_over_limit": self.gate.ver_over_limit,

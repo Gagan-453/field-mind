@@ -25,7 +25,7 @@ from types import SimpleNamespace
 from ...agent.l1_symbolize import evidence_packet
 from ...agent.orchestrator import evidence_max_facts, wm_summary
 from ...schemas import TAGS
-from .. import compact, sides
+from .. import compact, grammar, sides
 from ._call import call_model
 
 NAME = "diagnostician"
@@ -57,6 +57,10 @@ class DiagnosticianAgent:
         self.guard_cpt = mcfg.get("compact_guard_cpt")
         self.split = bool(mcfg.get("split", False))
         self.on_change = bool(mcfg.get("split_on_change", False))
+        self.grammar = bool(mcfg.get("grammar", False))
+        if self.grammar and not self.sw["schema"]:
+            raise ValueError("multi.grammar needs multi.compact.schema on: the grammar "
+                             "is the compact (B') answer format")
         if self.on_change and not self.split:
             raise ValueError("multi.split_on_change needs multi.split on")
         if self.split and not self.sw["schema"]:
@@ -190,4 +194,9 @@ class DiagnosticianAgent:
                                 submit_s=submit_s, work=work,
                                 side="all" if side is None else side)
         job.line_map = line_map
+        if self.grammar:
+            # exactly the lines THIS prompt showed
+            job.grammar = grammar.to_gbnf(grammar.diagnosis(
+                len(line_map["facts"]), len(line_map["cases"]),
+                len(line_map["context"]), line_map["letters"]))
         return job

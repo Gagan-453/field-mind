@@ -11,6 +11,13 @@ results/board/tmp/
 results/board/cache/
 # the aborted first campaign (2026-10-03), kept in full: never used for a decision or a timing
 !results/board_aborted_20261003/
+# the presentation benchmark (single agent and multi-agent, same episodes) is tracked:
+# summaries, gzipped runs, logs, lane proofs, temperatures. The raw per-tick files are
+# not (the same ticks are in each <ep>_multi.run.json.gz), nor the scratch folders
+!results/presentation_benchmark/
+results/presentation_benchmark/**/*.ticks.jsonl
+results/presentation_benchmark/**/*.ticks.interrupted-*.jsonl
+results/presentation_benchmark/**/tmp/
 
 # --- reference data: large, and not ours to redistribute
 data/reference/*.csv
@@ -39,3 +46,5 @@ bench/tokenizers/*/
 
 # --- build, download, quantize and board logs (large; kept local)
 logs/
+# zips the person made to hand the folders to another chat: copies of the folders above
+results/presentation_benchmark/*.zip

@@ -191,6 +191,14 @@ multi:
   # (side signature, open findings with severity, note-facts) changed; re-use
   # the side's last checked answer otherwise. Needs split. Off = commit 2.
   split_on_change: false
+  # Answer grammars (fieldmind/multi/grammar.py): every model job sends a GBNF
+  # with its request and llama-server samples only what it allows -- the compact
+  # answer format, line numbers the prompt showed, the note vocabulary, and a
+  # longest answer under the job's cap. Needs compact.schema (and ver_schema
+  # for the verifier). With it the wrong-format rate is zero BY CONSTRUCTION
+  # and no longer measures the model. Off = the earlier behaviour exactly; on
+  # in configs/fast.yaml (HUMAN DECISION 2026-10-05).
+  grammar: false
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json
   # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5

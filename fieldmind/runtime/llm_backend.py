@@ -700,6 +700,7 @@ class LlamaServerBackend(LLMBackend):
     """
 
     name = "llamaserver"
+    supports_grammar = True     # generate(..., grammar=<GBNF>) constrains the answer
 
     def __init__(self, url: str = "http://localhost:8080", lane: str = "npu",
                  model_file: str = "unknown", temperature: float = 0.0,
@@ -714,7 +715,7 @@ class LlamaServerBackend(LLMBackend):
         self.json_mode = json_mode
         self.cache_prompt = cache_prompt
 
-    def _body(self, prompt: str, max_tokens: int) -> dict:
+    def _body(self, prompt: str, max_tokens: int, grammar: str | None = None) -> dict:
         body = {"messages": [{"role": "user", "content": prompt}],
                 "max_tokens": max_tokens,
                 "temperature": self.temperature,
@@ -723,16 +724,21 @@ class LlamaServerBackend(LLMBackend):
                 "stream": False}
         if self.json_mode:
             body["response_format"] = {"type": "json_object"}
+        if grammar is not None:
+            # per call (multi.grammar): the server samples only what the GBNF
+            # allows. Absent = the request is byte for byte what it was.
+            body["grammar"] = grammar
         return body
 
-    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None,
+                 grammar=None):
         import socket
         import urllib.error
         import urllib.request
 
         req = urllib.request.Request(
             f"{self.url}/v1/chat/completions",
-            data=json.dumps(self._body(prompt, max_tokens)).encode(),
+            data=json.dumps(self._body(prompt, max_tokens, grammar)).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
         t0 = time.perf_counter()
 

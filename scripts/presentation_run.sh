@@ -26,5 +26,13 @@ grep -q '"ready_after_s": [0-9]' logs/presentation_lane_start.json || { echo "la
 .venv/bin/python bench/stage_monitor.py --episode "$ep" --backend llamaserver \
     --model-file "$MODEL" --save-run --out "$OUT" "$@"
 rc=$?
+# every result file carries the suffix _single (the multi-agent's carry _multi),
+# so a file copied out of its folder still says which agent made it
+for f in "$OUT/$ep".*; do
+    [ -f "$f" ] && mv "$f" "$OUT/${ep}_single${f#"$OUT/$ep"}"
+done
+for f in "$OUT"/stage_timing_"$ep"_*.txt; do
+    case "$f" in *_single.txt) ;; *) [ -f "$f" ] && mv "$f" "${f%.txt}_single.txt" ;; esac
+done
 .venv/bin/python -m bench.board stop >/dev/null
 exit $rc

@@ -30,3 +30,9 @@ multi:
     ver_claims: true
   split: true
   split_on_change: true
+  # HUMAN DECISION 2026-10-05 ("fix the json replies, enforce the strict limits
+  # on the server"): after the first board runs, where Gemma 1B's verifier and
+  # text-reader answers were almost all unusable (code fences, cut off at the
+  # cap) and a quarter of Llama 3B's diagnoses were not JSON. Runs made with
+  # this on are not comparable on format failures with runs made before it.
+  grammar: true

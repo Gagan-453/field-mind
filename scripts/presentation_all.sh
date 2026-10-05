@@ -4,9 +4,9 @@
 #
 #     scripts/presentation_all.sh
 #
-# Shortest first. An episode that already has <ep>.summary.json is skipped, so
+# Shortest first. An episode that already has <ep>_single.summary.json is skipped, so
 # the same command resumes after Ctrl-C (the interrupted episode starts over).
-# Chip temperature is logged before and after every episode (temps.jsonl) and
+# Chip temperature is logged before and after every episode (temps_single.jsonl) and
 # the next episode waits until the chip is within 5 C of the reading taken at
 # the start of this batch, for at most 900 s (the campaign's margin and limit).
 set -uo pipefail
@@ -23,7 +23,7 @@ temp() {   # prints the hottest of the CPU and NPU zones
 }
 note() {   # note <episode> <when> <temp> [waited_s]
     printf '{"episode": "%s", "when": "%s", "t": "%s", "max_c": %s, "cool_wait_s": %s}\n' \
-        "$1" "$2" "$(date +%Y-%m-%dT%H:%M:%S%z)" "$3" "${4:-null}" >> "$OUT/temps.jsonl"
+        "$1" "$2" "$(date +%Y-%m-%dT%H:%M:%S%z)" "$3" "${4:-null}" >> "$OUT/temps_single.jsonl"
 }
 
 mkdir -p "$OUT"
@@ -33,7 +33,7 @@ note batch start "$base"
 echo "batch start: chip at $base C"
 
 for ep in "${EPISODES[@]}"; do
-    if [ -f "$OUT/$ep.summary.json" ]; then
+    if [ -f "$OUT/${ep}_single.summary.json" ]; then
         echo "$ep: already saved, skipping"
         continue
     fi
@@ -48,7 +48,7 @@ for ep in "${EPISODES[@]}"; do
     scripts/presentation_run.sh "$ep"
     rc=$?
     note "$ep" after "$(temp)"
-    if [ $rc -ne 0 ] || [ ! -f "$OUT/$ep.summary.json" ]; then
+    if [ $rc -ne 0 ] || [ ! -f "$OUT/${ep}_single.summary.json" ]; then
         echo "$ep did not finish (exit $rc): stopping here. Run scripts/presentation_all.sh again to resume." >&2
         exit 1
     fi

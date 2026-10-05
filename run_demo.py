@@ -20,7 +20,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import queue
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -51,6 +53,61 @@ def load_config(path: str, backend: str | None, overlay: str | None = None) -> d
     if backend:
         cfg["llm"]["backend"] = backend
     return cfg
+
+
+class LiveTickWriter:
+    """--live-ticks: every tick's assessment appended to a JSONL file as it is
+    published, so a run that stops part-way keeps its ticks. It is the
+    harness's `on_assessment` hook (telemetry only): the tick thread only
+    serialises the dict and queues the line; a writer thread does the file
+    I/O and flushes every line."""
+
+    def __init__(self, path: str, show: bool = False):
+        self.path = Path(path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.show = show                    # --live-print: one line per tick
+        self.episode = ""
+        self.q: queue.Queue = queue.Queue()
+        self.f = self.path.open("a")
+        self.t = threading.Thread(target=self._run, daemon=True, name="live-ticks")
+        self.t.start()
+
+    def __call__(self, d: dict) -> None:
+        self.q.put((json.dumps({"episode": self.episode, **d}),
+                    self.line(d) if self.show else None))
+
+    @staticmethod
+    def line(d: dict) -> str:
+        """One tick for the screen, QUIET ticks too: laptop time, tick, state,
+        triage, headline, rank-1 cause, model jobs sent and answers arrived."""
+        hyp = d.get("hypotheses") or []
+        m = d.get("multi") or {}
+        sent = [f"{j['agent']}" for j in m.get("submitted", [])]
+        got = [f"{r['agent']}@{r['lane']} {r['finish_s'] - r['start_s']:.1f}s"
+               f"{' STALE' if r.get('stale') else ''}"
+               for r in m.get("results", [])
+               if r.get("start_s") is not None and r.get("finish_s") is not None]
+        return (f"{time.strftime('%H:%M:%S')} t{d['tick']:4d} {d['state']:13s} "
+                f"{d['triage']:11s} {d['headline'][:48]:48s} | "
+                f"{(hyp[0]['cause'][:36] if hyp else '-'):36s}"
+                f"{'  sent: ' + ', '.join(sent) if sent else ''}"
+                f"{'  got: ' + ', '.join(got) if got else ''}")
+
+    def _run(self) -> None:
+        while True:
+            item = self.q.get()
+            if item is None:
+                return
+            line, shown = item
+            self.f.write(line + "\n")
+            self.f.flush()
+            if shown is not None:
+                print(shown, flush=True)
+
+    def close(self) -> None:
+        self.q.put(None)
+        self.t.join()
+        self.f.close()
 
 
 def main():
@@ -107,6 +164,12 @@ def main():
     ap.add_argument("--record-prompts", default=None,
                     help="append every backend call (role, max_tokens, prompt, "
                          "mock-hint hash) to this JSONL file")
+    ap.add_argument("--live-ticks", default=None,
+                    help="append every tick's assessment to this JSONL file as "
+                         "it is published (a run that stops part-way keeps them)")
+    ap.add_argument("--live-print", action="store_true",
+                    help="with --live-ticks: also print one line per tick, QUIET "
+                         "ticks included (--verbose prints only the others)")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--out", default="results")
     ap.add_argument("--episodes-dir", default=None,
@@ -118,6 +181,8 @@ def main():
 
     if args.mode == "realtime" and args.arch != "multi":
         ap.error("--mode realtime is multi-agent only (--arch multi)")
+    if args.live_print and not args.live_ticks:
+        ap.error("--live-print needs --live-ticks <file>")
     cfg = load_config(args.config, args.backend, args.overlay)
     ls = cfg["llm"].setdefault("llamaserver", {})
     if args.url:
@@ -163,6 +228,7 @@ def main():
               "must not be reported as one.")
     print()
 
+    live = LiveTickWriter(args.live_ticks, args.live_print) if args.live_ticks else None
     evals, runs = [], []
     for path in targets:
         if not (path / "ground_truth.json").exists():
@@ -176,10 +242,18 @@ def main():
         if on_board and runs and args.cooldown_s > 0:
             time.sleep(args.cooldown_s)            # chip cooling between episodes
         temp0 = chip_temperature() if on_board else None
-        run = run_episode(ep, cfg, ablate_text=args.ablate_text,
-                          verbose=args.verbose, arch=args.arch,
-                          record_prompts=args.record_prompts,
-                          mode=args.mode, tick_s=args.tick_s)
+        if live is not None:
+            live.episode = ep.id
+        try:
+            run = run_episode(ep, cfg, ablate_text=args.ablate_text,
+                              verbose=args.verbose, arch=args.arch,
+                              record_prompts=args.record_prompts,
+                              mode=args.mode, tick_s=args.tick_s,
+                              on_assessment=live)
+        except BaseException:
+            if live is not None:
+                live.close()                   # Ctrl-C or a crash: keep the ticks so far
+            raise
         if on_board:
             run["chip_temp_start"] = temp0
             run["chip_temp_end"] = chip_temperature()
@@ -198,6 +272,8 @@ def main():
               f"lead={t6.get('lead_time_min', '-')} "
               f"p95={ev['S1_tick_latency_ms_p95']:.0f}ms")
 
+    if live is not None:
+        live.close()
     summary = aggregate(evals)
     tag = (f"{cfg['llm']['backend']}{'_ablated' if args.ablate_text else ''}"
            f"{'_' + args.tag if args.tag else ''}")

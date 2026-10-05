@@ -12,7 +12,7 @@ Owns `notefacts`, but writes only what the gate has checked.
 
 from __future__ import annotations
 
-from .. import compact
+from .. import compact, grammar
 from ._call import call_model
 
 NAME = "text_reader"
@@ -29,6 +29,10 @@ class TextReaderAgent:
         self.log_prompts = log_prompts
         self.template = compact.load_prompt("text_reader.txt")
         self.repair = compact.load_prompt("repair_lines.txt")
+        # multi.grammar: the vocabulary is fixed, so one grammar for every note
+        self.grammar = (grammar.to_gbnf(grammar.note(
+            vocab.kinds, sorted(vocab.subjects), vocab.states, vocab.max_pairs))
+            if mcfg.get("grammar") else None)
         self.calls = 0
         self.parse_failures = 0
         self.rejected = 0
@@ -59,6 +63,7 @@ class TextReaderAgent:
                                 max_answer_tokens=self.cap, submit_s=submit_s,
                                 work=work, side=str(note.get("id")))
         job.line_map = {"note": note}
+        job.grammar = self.grammar
         return job
 
     def accept(self, bb, result, checked: tuple[bool, str]) -> dict:

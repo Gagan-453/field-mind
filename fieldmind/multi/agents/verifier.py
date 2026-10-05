@@ -16,7 +16,7 @@ Writes nothing to the board: the gate applies its answer to the verdict.
 
 from __future__ import annotations
 
-from .. import compact
+from .. import compact, grammar
 from ._call import call_model
 
 NAME = "verifier"
@@ -31,6 +31,7 @@ class VerifierAgent:
         self.sw = compact.compact_switches(mcfg.get("compact"))
         self.cap = (mcfg.get("answer_caps") or {}).get("verifier", 30)
         self.guard_cpt = mcfg.get("compact_guard_cpt")
+        self.grammar = bool(mcfg.get("grammar", False)) and self.sw["ver_schema"]
         if self.sw["ver_schema"]:
             self.templates = {"body": compact.load_prompt("ver_compact.txt"),
                               "rules_full": compact.load_prompt("ver_rules_full.txt"),
@@ -74,4 +75,7 @@ class VerifierAgent:
                                 max_answer_tokens=self.cap, submit_s=submit_s,
                                 work=work)
         job.line_map = line_map
+        if self.grammar:
+            job.grammar = grammar.to_gbnf(grammar.verification(
+                len(line_map["claims"]), len(line_map["facts"])))
         return job
