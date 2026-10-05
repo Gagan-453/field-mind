@@ -1,9 +1,9 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-PARTIAL. Commits 0 to 6 are done (the note-fact coverage stop after commit 4 was resolved by the human, option
-(c), "AMENDMENT 3"; commits 5 and 6 were built unattended under "AMENDMENT 4"). Commit 7 (the dev gate G1a / G1b /
-G3 to G6 and the reporting run) has not started: amendment 4 stops before it, so no G1a run has been made.
+BLOCKED in commit 7 on gate G1a: one pre-registered count measured 20 against a prediction of 19 (every other
+count matches; G1b to G6 pass). Commits 0 to 6 are done. The reporting run has not been made. See "Dev gate
+results" and "Blocked / needs a decision".
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
 measure the deterministic and retrieval layers only. They are not an agent result. The real-model baseline
@@ -971,7 +971,49 @@ episodes run once (single; multi all on), then:
   reported, not tuned against;
 - the multi summary saved as `results/baselines/multi_p2_summary.json`.
 
+### Dev gate results (dev, 36 episodes, 5,850 ticks, mock, lockstep; laptop). **STOP: G1a count mismatch**
+**Mock numbers: no accuracy claim.** The reporting run was NOT made (it waits on the dev gate).
+
+| gate | rule | measured | result |
+|---|---|---|---|
+| G1a | R0 vs R1 `--g1a`: 0 differences outside the confidence-derived fields; four counts match | 0 differences outside the allowed fields; summary 0. `model_only` **3,170 = 3,170**; rank-1 confidence changed **580 = 580**; verifier calls **327 = 327**; `model_only` confidence unchanged **20, predicted 19: MISMATCH**. Ticks where a mock-cited fact is off the shown lines: 0 (any would have moved `supports`, which shows 0 differences) | **FAIL (one count)** |
+| G1b | R1 vs R2 strict | 0 differences, summary 0 | PASS |
+| G1 comparator | injected `supports` and `cited_facts` changes into a copy of R2 | both reported (`supports[len] 2 != 3`, `cited_facts[len] 2 != 3`) | PASS |
+| G2 | R2 vs R3 (fixed vs earliest finish) | 0 differences, summary 0; prompt logs byte-identical | PASS |
+| G3 | prompt + cap < 1,280 on four tokenizers; answers within caps; guard 0 | diagnostician max 878 / 890 / 914 / 907 (+60), verifier max 530 / 518 / 522 / 535 (+30), text reader max 414 / 392 / 413 / 409 (+50): 0 over on every tokenizer. Longest answers 52 (cap 60), 27 (cap 30), 31 to 33 (cap 50): 0 over. Guard firings 0, over-limit flags 0 | PASS |
+| G4 | single vs the single run at `fa6ee08`; prompt log sha; `git diff multi-phase1 -- fieldmind/agent` | 0 differences, summary 0; `6e9b748a` (the Phase 1 value); diff empty | PASS |
+| G5 | S7 0 (R1, R2, R4); P0 over 200 ms 0 (R1, R2) | S7 0.0 / 0.0 / 0.0; P0 over 200 ms 0 / 0 | PASS |
+| G6 | full suite; commit 5 and 6 mutation sets on the final tree | 276 passed; 24 / 24 and 22 / 22 caught | PASS |
+
+**P0 maximum moved, cause tested.** In the gate run P0 peaked at 163.6 (R1) and 171.8 ms (R2), against 47.0 ms in
+commit 4. The five gate runs ran at the same time on this laptop. R2 re-run alone: mean 10.7, p95 29.0, max 52.0 ms
+(parallel: 12.1 / 31.9 / 171.8), decisions identical. So the maximum is load from the parallel runs, not the code.
+Laptop timing, not board timing.
+
+#### The G1a mismatch: what is known (looked at, nothing adjusted)
+- The 20 unchanged `model_only` hypotheses: 15 where belief is at or above 0.5, so `merge` caps both the mock's
+  number and belief's at 0.5; 4 where belief's value equals the mock's exactly (0.15 three times, 0.23 once); 1 where
+  belief has no live entry and the mock's formula also gave 0.3 (dev_A04_strainer_choke, tick 208, RCA-13).
+- **The code follows the rule as worded.** Recomputed from the reference run R0 alone (belief's live confidence from
+  `belief_ranking`, capped at 0.5, else 0.3), the rule gives R1's value for 3,170 of 3,170 hypotheses.
+- **The same data reproduces the committed count for the other option.** Option (i) recomputed from R0 gives 11, the
+  committed figure; option (ii) gives 20, not the committed 19.
+- The script that produced "19" on 3 October was not committed, so which of the 20 it did not count cannot be
+  identified here. **Unexplained** (the prediction, not the run). A 2-decimal comparison would give 45, so rounding
+  does not explain it.
+- Every other G1a count matches exactly, and no field outside the allowed list moved.
+
 ## Blocked / needs a decision
+**Open: gate G1a, one count (commit 7).** The pre-registered "`model_only` confidence unchanged: 19" measured
+20 (details under "Dev gate results"). The rule says stop; the prediction is not adjusted. Every other G1a count
+matches, nothing outside the allowed fields moved, and G1b to G6 pass. The reporting run has not been made.
+Question for the human, options only:
+- (a) record it as a HUMAN DECISION that G1a passes with this one-count deviation (the code is shown to follow the
+  worded rule on 3,170 of 3,170; the prediction method was not committed), then make the reporting run;
+- (b) recover the 3 October computation (the other machine, or its session) to find the uncounted hypothesis, and
+  decide after that;
+- (c) treat G1a as failed and look for a cause in the code (none found so far).
+
 **Resolved earlier:** the answer format (amendment 1), gate G1 under B' (amendment 2) and the note-fact
 coverage stop below (amendment 3: option (c), keep the schema, record the partial losses as a known limit).
 

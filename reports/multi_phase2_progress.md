@@ -11,7 +11,7 @@ Updated and committed after every commit. Mock backend only; no accuracy claim.
 | 4 | text reader (notes), record-facts by code, note-fact coverage check | done, **stop rule tripped** | dev, mock: decisions 0 differences vs Phase 1; diagnostician and verifier prompts byte-identical (sha `6e9b748a`); single unchanged; 259 text-reader calls = 259 notes, 0 for records; text prompts max 392 to 414 tokens; 24 new tests, 223 pass; 21 mutations caught (2 after strengthening tests). **Coverage: A03 and B03 (tier B) keep their note content only in part** |
 | 5 | compact diagnostician with per-section switches (`schema`, `rules`, `cases`, `notes`, `world`, `case_order`), B' expansion in the gate, guard | done (pre-registered `7bf26a2`) | dev, mock: all off vs commit 4 0 differences, prompt log byte-identical (2,433 calls); all on: diagnostician prompts max 878 / 890 / 914 / 907 tokens (+60 < 1,280 on all four), mean 750 to 773 (Phase 1: 1,866 to 1,894); parse failures, repairs, bad lines, guard firings, cap drops all 0; 31 new tests, 254 pass; 24 mutations caught (3 after strengthening tests); phase-reviewer findings fixed or recorded in the report. Decisions with switches on not compared (G1a/G1b, commit 7) |
 | 6 | compact verifier with per-section switches (`ver_schema`, `ver_rules`, `ver_claims`), pass/fail by line number, "not judged" never a pass | done (pre-registered `522c4a3`) | dev, mock: all off vs commit 5 0 differences, prompt log byte-identical; verifier sections only vs all off 0 decision differences, `ver_calls` 192 both, cap 30; all on: verifier prompts max 518 to 535 tokens (+30 < 1,280; before: 1,887 to 1,905), mean 413 to 430; not judged 0, invalid 0, incomplete verdicts 0; 22 new tests, 276 pass; 22 mutations caught; phase-reviewer findings fixed or recorded |
-| 7 | dev gate and report. **STOP and report** | not started (amendment 4: stop before commit 7) | |
+| 7 | dev gate and report. **STOP and report** | dev gate run (plan `05c4b30`), **stop rule tripped** | G1a: `model_only` 3,170 / rank-1 changes 580 / verifier calls 327 all match; confidence unchanged **20 vs 19 predicted**; 0 differences outside the allowed fields. G1b, comparator check, G2, G3, G4, G5, G6 pass. Reporting run not made |
 
 ## Stops hit
 1. **After commit 3 (planned stop, and the answer-cap stop rule tripped).** The plan's ID-only answer format
@@ -46,3 +46,7 @@ No committed episode checksum exists, so the episodes were checked through the r
 | test suite at `fa6ee08` | 223 passed |
 | dev, `--arch single` vs `--arch multi --mode lockstep` | `bench/gate_phase2.py` strict: 36 episodes, 5,850 assessments, 0 differences; summary 0 differences |
 | reporting, multi lockstep vs `results/baselines/multi_p1_summary.json` | summary and per-episode: 0 differences outside timing keys; extra keys only `Q3_rel`, `n_rel_citations`, `T3_faithfulness.rel` (added in commit 4, pre-registered as extra) |
+6. **Commit 7, gate G1a (2026-10-05).** One pre-registered count differs: `model_only` confidences unchanged 20
+   against 19. Code shown to follow the worded rule on 3,170 of 3,170; recomputing option (i) from the same data
+   gives the committed 11, option (ii) gives 20. The 3 October computation was not committed. Reporting run waits on
+   the human's decision (options in the report).
