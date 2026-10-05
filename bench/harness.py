@@ -137,7 +137,8 @@ def build_multi_agent(cfg: dict, notes: list[dict], records: dict | None = None,
 
 def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
                 verbose: bool = False, arch: str = "single",
-                record_prompts: str | None = None, wrap_backend=None) -> dict:
+                record_prompts: str | None = None, wrap_backend=None,
+                mode: str = "lockstep", tick_s: float | None = None) -> dict:
     """Replay one episode. `ablate_text` removes every note -- that is the T8
     modality ablation, and tier B/C accuracy MUST collapse under it or the
     episode is mislabelled.
@@ -172,6 +173,21 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
         raise ValueError(f"unknown arch {arch!r}")
     orch.operator_query = ep.operator_query
 
+    rt = None
+    if mode == "realtime":
+        # Phase 4 (demonstration subset): lanes on worker threads; ticks on the
+        # wall clock every `wall_tick_s` seconds (default the agent's period);
+        # the tick never waits for a model.
+        if arch != "multi":
+            raise ValueError("real-time mode is multi-agent only")
+        from fieldmind.multi.realtime import RealtimeRunner
+        rt = RealtimeRunner(orch.scheduler)
+        orch.start_realtime(rt)
+    elif mode != "lockstep":
+        raise ValueError(f"unknown mode {mode!r}")
+    wall_tick_s = tick_s if tick_s is not None else cfg["agent"]["tick_period_s"]
+    tick_lag_s: list[float] = []
+
     tick_s = cfg["agent"]["tick_period_s"]
     window = SensorWindow(window_min=60.0,
                           sample_period_s=cfg["checks"]["sample_period_s"])
@@ -196,7 +212,17 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
         ts = (EPOCH + timedelta(seconds=t_end)).isoformat()
         if recorder is not None:
             recorder.tick = k
-        asmt = orch.tick(wm, window, k, ts, now_s=t_end)
+        if rt is not None:
+            # wait for this tick's wall-clock slot (never for a model)
+            due = len(tick_lag_s) * wall_tick_s
+            delay = due - rt.now()
+            if delay > 0:
+                time.sleep(delay)
+            tick_lag_s.append(round(rt.now() - due, 4))
+            asmt = orch.tick_realtime(wm, window, k, ts, now_s=t_end,
+                                      tick_wall_s=rt.now())
+        else:
+            asmt = orch.tick(wm, window, k, ts, now_s=t_end)
         d = asmt.to_dict()
         # Q3_rel (Phase 2): the DETERMINISTIC supports of every case belief
         # holds this tick, read from the world model after the tick. Both
@@ -213,6 +239,16 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
             print(f"  t{k:4d} {asmt.state:13s} {asmt.triage:11s} "
                   f"{asmt.headline[:58]:58s} | {top}")
 
+    rt_end = None
+    if rt is not None:
+        # let the background lanes finish what is queued (answers after the last
+        # tick are counted, not folded), then stop the worker threads
+        idle = rt.wait_idle(timeout_s=max(10 * wall_tick_s, 60.0))
+        late = rt.drain()
+        rt.close()
+        rt_end = {"idle_at_end": idle, "answers_after_last_tick": len(late),
+                  "wall_tick_s": wall_tick_s, "tick_lag_s": tick_lag_s,
+                  "tick_lag_s_max": max(tick_lag_s) if tick_lag_s else None}
     wall = time.perf_counter() - t0
     if recorder is not None:
         recorder.close()
@@ -245,6 +281,9 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
     }
     if arch == "multi":
         out["multi"] = orch.run_telemetry()
+        if rt_end is not None:
+            out["multi"]["realtime"].update(rt_end)
+            out["mode"] = "realtime"
         if orch.text is not None:           # key present only when the reader is on
             out["text_calls"] = out["multi"]["text_calls"]
     return out

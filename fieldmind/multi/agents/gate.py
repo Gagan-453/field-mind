@@ -51,6 +51,7 @@ class GateMemoryAgent:
         # Run-level compact-verifier counts (telemetry): verdicts with an
         # unjudged claim, and prompts flagged over the limit.
         self.ver_incomplete = 0
+        self.accepted_late = 0      # answers > 1 tick old accepted on unchanged evidence
         self.ver_over_limit = 0
 
     # ------------------------------------------------------------------
@@ -160,9 +161,24 @@ class GateMemoryAgent:
             r.envelope = self._expand(r.envelope, lm)
             env = r.envelope
             asmt.envelopes.append(env.to_dict())
-            if self._drop_if_stale(r, now_tick):
+            # Plan p.10: an answer is accepted if it is at most one tick old, OR
+            # if that side's evidence has not changed since (real time; with
+            # `reuse`, i.e. split_on_change). Its citations are checked against
+            # the facts of ITS evidence tick, which the board must still hold.
+            late = self.is_stale(r, now_tick)
+            if late and not (reuse and self._unchanged_since(bb, r)):
+                self._drop_if_stale(r, now_tick)
                 continue
-            ev = bb.read("facts").facts_of(r.evidence_tick)
+            if late:
+                self.accepted_late += 1
+            try:
+                ev = bb.read("facts").facts_of(r.evidence_tick)
+            except KeyError:                       # older than the fact history
+                r.stale = True
+                self.stale_dropped.append({"job_id": r.job.job_id, "agent": r.job.agent,
+                                           "evidence_tick": r.evidence_tick,
+                                           "now_tick": now_tick, "why": "facts no longer held"})
+                continue
             if r.evidence_tick != now_tick:
                 env, ev = self._stamped(env, ev, r.evidence_tick)
             if env.status != "ok":
@@ -197,15 +213,24 @@ class GateMemoryAgent:
             asmt.degraded_mode = degraded
         return claims
 
+    @staticmethod
+    def _unchanged_since(bb, result) -> bool:
+        """The side's evidence now equals the evidence its job was built on."""
+        fp = (result.job.line_map or {}).get("fingerprint")
+        return fp is not None and fp == DiagnosticianAgent.fingerprint(
+            bb, result.job.line_map["side"])
+
     def _reuse(self, bb, accepted, results, now_tick):
         """Keep `side_answers` and add the cached answers of sides that made no
         call. Returns (accepted + reused entries, the reused sides)."""
         facts_now = bb.read("facts").facts_of(now_tick)
         run = sides.sides_to_run(facts_now, bb.read("findings"))
-        called = {r.job.line_map["side"] for r in results}
+        # a side whose answer was dropped as stale did not really answer this
+        # tick: it may still use its cached answer (real time; never in lockstep)
+        called = {r.job.line_map["side"] for r in results if not r.stale}
         cache = {s: v for s, v in bb.read("side_answers").items()
                  if s in run and s not in called}          # stale sides dropped
-        by_side = {r.job.line_map["side"]: r for r in results}
+        by_side = {r.job.line_map["side"]: r for r in results if not r.stale}
         for side, env, _ in accepted:
             tick = env.tick
             stamp = lambda x: x if x.startswith("t") and "." in x else f"t{tick}.{x}"

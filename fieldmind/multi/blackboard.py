@@ -41,6 +41,7 @@ Stdlib only (copied to the device with the rest of fieldmind/).
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import asdict, is_dataclass
 from types import MappingProxyType
 
@@ -192,6 +193,10 @@ class Blackboard:
     def __init__(self, wm, audit: bool = True):
         self.wm = wm
         self.audit = audit
+        # Real-time mode: model calls run on lane worker threads. Model agents
+        # own no section and write nothing, so a step taken off this (the tick
+        # loop's) thread is not audited and cannot mark an active writer.
+        self._thread = threading.get_ident()
         self._s: dict = {
             "facts": FactsBook(),
             "signature": {},
@@ -222,7 +227,15 @@ class Blackboard:
                     "episode_id": self.wm.episode_id}
         return self._s[section]
 
+    def keep_fact_ticks(self, n: int) -> None:
+        """How many ticks of facts the board holds (real time keeps more, so a
+        late answer whose side's evidence is unchanged can still be checked)."""
+        self._s["facts"].keep = max(2, int(n))
+
     def _check(self, section: str, writer: str) -> None:
+        if threading.get_ident() != self._thread:
+            # model calls run on lane worker threads; nothing there may write
+            raise WriterError(f"{writer!r} wrote {section!r} off the tick thread")
         owner = OWNERS.get(section)
         if owner is None:
             raise KeyError(f"no blackboard section {section!r}")
@@ -272,12 +285,17 @@ class _Step:
         self.bb, self.agent = bb, agent
 
     def __enter__(self):
+        self.off_thread = threading.get_ident() != self.bb._thread
+        if self.off_thread:
+            return self.bb
         self.prev = self.bb._active
         self.bb._active = self.agent
         self.before = self.bb.snapshot() if self.bb.audit else None
         return self.bb
 
     def __exit__(self, exc_type, exc, tb):
+        if self.off_thread:
+            return False
         self.bb._active = self.prev
         if exc_type is not None or self.before is None:
             return False

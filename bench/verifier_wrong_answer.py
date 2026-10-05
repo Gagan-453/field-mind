@@ -186,13 +186,19 @@ def main() -> int:
     ap.add_argument("--backend", default="mock")
     ap.add_argument("--config", default="configs/base.yaml")
     ap.add_argument("--split", action="store_true")
+    ap.add_argument("--overlay", default=None,
+                    help="a config overlay merged over --config (e.g. configs/fast.yaml: "
+                         "two models, both diagnosticians on the NPU)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     cfg = yaml.safe_load(open(args.config))
+    if args.overlay:
+        from run_demo import _deep_merge
+        _deep_merge(cfg, yaml.safe_load(open(args.overlay)))
     cfg["llm"]["backend"] = args.backend
     cfg["agent"]["verifier"] = "always"                 # every model tick is checked
     cfg["multi"]["compact"].update({s: True for s in ALL_SECTIONS})
-    cfg["multi"]["split"] = args.split
+    cfg["multi"]["split"] = args.split or bool(cfg["multi"].get("split"))
     # every diagnosis must be a fresh call to be rewritten: a cached side answer
     # (split_on_change) would be an earlier rewritten one, re-used
     cfg["multi"]["split_on_change"] = False

@@ -33,8 +33,21 @@ from bench.board import chip_temperature                 # noqa: E402
 from bench.harness import Episode, run_episode           # noqa: E402
 
 
-def load_config(path: str, backend: str | None) -> dict:
+def _deep_merge(base: dict, over: dict) -> dict:
+    for k, v in (over or {}).items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _deep_merge(base[k], v)
+        else:
+            base[k] = v
+    return base
+
+
+def load_config(path: str, backend: str | None, overlay: str | None = None) -> dict:
+    """The config, with an optional overlay file merged over it key by key
+    (e.g. configs/fast.yaml); `backend` overrides llm.backend last."""
     cfg = yaml.safe_load(Path(path).read_text())
+    if overlay:
+        _deep_merge(cfg, yaml.safe_load(Path(overlay).read_text()))
     if backend:
         cfg["llm"]["backend"] = backend
     return cfg
@@ -43,6 +56,9 @@ def load_config(path: str, backend: str | None) -> dict:
 def main():
     ap = argparse.ArgumentParser(description="FieldMind boiler agent")
     ap.add_argument("--config", default="configs/base.yaml")
+    ap.add_argument("--overlay", default=None,
+                    help="a YAML file merged over --config key by key "
+                         "(e.g. configs/fast.yaml, the demonstration setup)")
     ap.add_argument("--episode", default=None, help="one episode id")
     ap.add_argument("--all", action="store_true", help="run every episode")
     ap.add_argument("--backend", default=None,
@@ -65,8 +81,13 @@ def main():
                     help="single = fieldmind/agent (baseline); multi = "
                          "fieldmind/multi (blackboard agents, scheduler, lanes)")
     ap.add_argument("--mode", default="lockstep", choices=["lockstep", "realtime"],
-                    help="lockstep: every job finishes inside its tick. "
-                         "realtime is not built yet (Session 6)")
+                    help="lockstep: every job finishes inside its tick. realtime: "
+                         "ticks on the wall clock, model calls in the background on "
+                         "both lanes, the tick never waits (needs --split --on-change "
+                         "or --overlay configs/fast.yaml)")
+    ap.add_argument("--tick-s", type=float, default=None,
+                    help="real time: wall-clock seconds per tick (default the agent's "
+                         "30 s; shorter for tests and quick demonstrations)")
     ap.add_argument("--placement", default=None,
                     choices=["fixed", "earliest_finish"],
                     help="overrides multi.placement (--arch multi only)")
@@ -95,9 +116,9 @@ def main():
                          "overwrites a reporting run")
     args = ap.parse_args()
 
-    if args.mode == "realtime":
-        ap.error("--mode realtime is not built yet (multi-agent Session 6)")
-    cfg = load_config(args.config, args.backend)
+    if args.mode == "realtime" and args.arch != "multi":
+        ap.error("--mode realtime is multi-agent only (--arch multi)")
+    cfg = load_config(args.config, args.backend, args.overlay)
     ls = cfg["llm"].setdefault("llamaserver", {})
     if args.url:
         ls["url"] = args.url
@@ -157,7 +178,8 @@ def main():
         temp0 = chip_temperature() if on_board else None
         run = run_episode(ep, cfg, ablate_text=args.ablate_text,
                           verbose=args.verbose, arch=args.arch,
-                          record_prompts=args.record_prompts)
+                          record_prompts=args.record_prompts,
+                          mode=args.mode, tick_s=args.tick_s)
         if on_board:
             run["chip_temp_start"] = temp0
             run["chip_temp_end"] = chip_temperature()

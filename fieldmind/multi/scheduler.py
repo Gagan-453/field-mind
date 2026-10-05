@@ -35,6 +35,7 @@ from measured timings, the degradation ladder, and real-time mode (Session 6).
 from __future__ import annotations
 
 import heapq
+import threading
 
 from ..agent.l4_diagnose import est_tokens
 from .jobs import Job, Result
@@ -71,11 +72,22 @@ class Scheduler:
         self._heap: list = []
         self._seq = 0
         self._waiting: dict[tuple, Job] = {}
-        self.current: Job | None = None
+        # The job whose model call is being made, PER THREAD: in real-time mode
+        # (fieldmind/multi/realtime.py) each lane has its own worker thread, and
+        # LaneBackend routes a call by the job of the thread that makes it.
+        self._tl = threading.local()
         self.replaced: list[Job] = []
         self.dispatched: list[Job] = []
 
     # ------------------------------------------------------------------
+    @property
+    def current(self) -> Job | None:
+        return getattr(self._tl, "job", None)
+
+    @current.setter
+    def current(self, job: Job | None) -> None:
+        self._tl.job = job
+
     def new_job(self, agent: str, evidence_tick: int, priority: int,
                 max_answer_tokens: int, submit_s: float, work=None,
                 side: str = "all") -> Job:
