@@ -791,6 +791,48 @@ to the measured run; `over_limit_after_guard` 0, `over_limit_unguarded` 0, guard
 - **The guard on real prompts**: it never fired on dev, so its dropping order is exercised only by the unit test.
 - The 0.3 confidence for a case belief retired this tick (item 3 finding) is carried over unchanged.
 
+## Commit 6: compact verifier with per-section switches
+### Plan, predictions and keep-or-revert rule (committed BEFORE the code and before any measurement)
+Written under amendment 4 (no plan-mode approval for this commit). Mock backend; no accuracy claim.
+
+**Switches** (`multi.compact`, all `false` by default; `run_demo.py --compact` accepts them and `all` turns on
+every diagnostician and verifier section):
+
+| switch | off (Phase 1 text) | on |
+|---|---|---|
+| `ver_schema` | the single agent's verifier prompt and answer (`checks`, `strongest_contradiction`, `revised_confidence`, `agree`) | answer format `{"v":[[claim line,"p"or"f"],...],"c":fact line or null}` (amendment 1 item 3); facts numbered (all facts of the evidence tick, as in Phase 1); claims numbered, **at most the top 3**, each with its case id and its cited fact LINES; no confidence and no discriminator shown (human decision (b): the observability check and the confidence rewrite are removed); answer cap `multi.answer_caps.verifier` (30) |
+| `ver_rules` | the single agent's verifier instructions, minus the removed checks 3 and the rewrite | short rules |
+| `ver_claims` | the claim's full cause text | the first sentence of the cause (same mechanical rule as the case check) |
+
+`ver_rules` and `ver_claims` need `ver_schema`. The verifier keeps its narrow view: facts and claims only, no
+case text beyond the claim's own cause, no notes, no world model.
+
+**Expansion (code, in the gate, through the job's line map):** `v` -> the single agent's payload: `checks`
+(one per JUDGED claim, verdict pass or fail), `strongest_contradiction` = the fact line's id and text (or None),
+`revised_confidence` None (removed by human decision (b)), `agree` = no claim failed. Then the single agent's
+`Verifier.apply`, unchanged: a failed claim is capped at 0.35 and flagged. **A shown claim with no verdict is
+"not judged"**: it gets no check (so `apply` leaves it alone, as before), is counted in telemetry, and never
+counts as a pass. An out-of-range claim or fact line is ignored and counted. The disagreement counter moves when
+at least one claim fails.
+
+**No repair call for the verifier**, as in the single agent (it has none today): a malformed answer is
+`invalid_schema` and the verdict is not applied (decision taken: the conservative option, unchanged behaviour).
+
+**Mock:** with `ver_schema` on it answers every shown claim "p" and `c` null: the same "always agrees" rule as
+its Phase 1 answer.
+
+**Predictions and pass rules (dev, 36 episodes, mock, lockstep, fixed placement):**
+| check | prediction / pass rule |
+|---|---|
+| all switches off vs the commit 5 all-off run | `bench/gate_phase2.py` strict: 0 differences, summary 0; prompt log byte-identical (whole file) |
+| verifier switches only (`ver_schema,ver_rules,ver_claims`), diagnostician off | 0 differences in decision fields against the all-off run (strict comparator; prompts, payloads, tokens are moving by construction); `ver_calls` 192 = all-off; every verifier call capped at 30 |
+| all switches on, G3 tokens | every verifier prompt + 30 < 1,280 and every diagnostician prompt + 60 < 1,280 on all four tokenizers; max and p95 reported beside the commit 5 column |
+| all switches on, health | verifier invalid answers 0, not-judged claims 0, out-of-range lines 0; `ver_calls` 327 (the option (ii) count already seen in commit 5's all-on run) |
+| tests | full suite green; every new test mutation-checked |
+
+**Keep or revert:** kept only if the all-off identity, the verifier-only decision identity and G3 all hold. A
+failure is a stop for this commit (amendment 4 item 2).
+
 ## Blocked / needs a decision
 **Resolved earlier:** the answer format (amendment 1), gate G1 under B' (amendment 2) and the note-fact
 coverage stop below (amendment 3: option (c), keep the schema, record the partial losses as a known limit).
