@@ -1,9 +1,10 @@
 # Multi-agent Phase 3: split by plant side: report
 
 ## Status
-PARTIAL. Commits 0 to 4 done (plan; side definitions; two side diagnosticians behind `multi.split`; call only on
-change behind `multi.split_on_change`; the known-wrong-answer verifier tool). Commit 5 (the dev run and the report)
-not started. Branch `multi-agent-p3`, made from
+DONE on the mock (commits 0 to 5). Two side diagnosticians behind `multi.split`, calls only on changed evidence
+behind `multi.split_on_change`, and a known-wrong-answer verifier tool; every commit-0 rule passes on dev (one
+laptop-timing outlier explained and re-measured, commit 5). The plan's real check needs the board, after Phase 2's
+real-model numbers are accepted. The 30 reporting episodes were not run. Branch `multi-agent-p3`, made from
 `multi-agent` at `a672af7`.
 
 **Mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers measure the
@@ -369,6 +370,66 @@ only the rank-2 claim, it is 0 (both tested), so the tool reads the right claim.
 
 Board command (after Phase 2's real-model numbers): `bench/verifier_wrong_answer.py --backend llamaserver --split
 --episodes dev_A03_bfp_suction,dev_B01_tube_leak,dev_C05_low_cv_coal --out results/board_multi/verifier_wrong.json`.
+
+## Commit 5: the mock dev run and the Phase 3 summary
+Code at `e379c42` (agent code unchanged since commit 3). Dev, 36 episodes, 5,850 ticks, mock, lockstep, fixed
+placement, laptop. Runs made one after another (not in parallel). **Mock: none of this is an accuracy result.**
+
+| check (commit 0 rules) | measured | result |
+|---|---|---|
+| single agent unchanged | `--arch single` vs the run at `fa6ee08`: 0 differences, summary 0; prompt log sha256 `6e9b748a` (the Phase 1 value); `git diff multi-phase1 -- fieldmind/agent` empty | PASS |
+| Phase 3 switches off | multi, every compact section on, split off vs the Phase 2 all-on run at `a672af7`: 0 differences, prompt log byte-identical | PASS |
+| deterministic layer with split (and on change) | 0 ticks differ from Phase 2 (commits 2 and 3) | PASS |
+| side prompts hold only their side | 0 off-side facts or cases (commit 2) | PASS |
+| tokens, every agent, four tokenizers | split + on change: diagnostician max 915 / 927 / 951 / 944 (+60), verifier max 524 / 512 / 518 / 529 (+30), text reader max 414 / 392 / 413 / 409 (+50): 0 over | PASS |
+| health | parse failures 0, invalid verifier answers 0, out-of-range lines 0, guard firings 0 | PASS |
+| S7 | 0.0 in every run | PASS |
+| P0 over 200 ms (laptop) | **2 ticks (205, 335 ms, dev_D01 ticks 187 and 195) in the first split run**; cause tested: that run overlapped the commit-4 reviewer's test suite on this laptop; the split run re-made alone gives 0 over 200 ms (max 64.0 ms, p95 29.0) with identical decisions. Phase 2 run max 118.3 ms, split + on change max 102.0 ms | PASS (on the solo run) |
+| tests | full suite 321 passed; every new test mutation-checked (commit 1: 23, 2: 21, 3: 16, 4: 13; all caught) | PASS |
+
+### Phase 3 numbers beside Phase 2 (mock; reported, not gated)
+| quantity | Phase 2 (one diagnostician) | split | split + on change |
+|---|---|---|---|
+| diagnosis calls | 1,982 | 2,005 | **1,049** |
+| verifier calls | 327 | 319 | 318 |
+| model calls per non-QUIET tick (all agents) | 1.16 | 1.17 | **0.69** |
+| S4 (share of ticks with a model call) | 0.337 | 0.337 | 0.203 |
+| diagnosis prompt tokens, mean, Llama 3.2 | 749.7 | 755.9 | 753.2 |
+| **SIMULATED** diagnosis latency, mean / p95 (placeholder lane rates: an expectation, not a result) | 2.10 / 2.28 s | 3.90 / 6.40 s | 3.97 / 6.49 s |
+| Q3 / Q3_rel | 1.0 / 0.573 | 1.0 / 0.592 | 1.0 / 0.590 |
+| mock library top-1 / group top-1 | 0.434 / 0.489 | 0.503 / 0.562 | 0.503 / 0.572 |
+| mock group top-1, post-onset, ticks with both sides active (n = 23) | 0.652 | 0.783 | 0.783 |
+| mock group top-1, post-onset, ticks with one side active (n = 1,304) | 0.580 | 0.665 | 0.670 |
+
+Every mock top-1 rise is the side case filter seen by a mock that re-ranks the cases it is shown (commit 2, cause
+tested); it is not an accuracy result and not attributable to two calls versus one. The cross-side subset has 23
+ticks.
+
+### What Phase 3 shows on the mock, and what only the board can show
+- **Built and checked:** two side diagnosticians with side-pure prompts; one merge through the unchanged single-agent
+  `merge`; the deterministic layer untouched; calls only on changed evidence (diagnosis calls -48% against the split,
+  -47% against Phase 2); a known-wrong-answer verifier tool.
+- **Not shown, and not showable on these episodes:** the plan's parallel-lane speed-up. Cross-side ticks are 23 of
+  1,982 (advisor question A1), and under fixed placement every heat-only tick runs on the slower CPU lane, so the
+  SIMULATED diagnosis latency rises (2.10 -> 3.97 s mean). "Earliest finish" placement (Phase 5) would send a
+  heat-only tick to the idle NPU.
+- **Needs the board, after Phase 2's real-model numbers are accepted** (the condition of the human decision to start
+  early): the plan's check (group top-1 at least Phase 2's, overall and on cross-side ticks); real diagnosis latency
+  and lane use; the known-wrong-answer test (`bench/verifier_wrong_answer.py --backend llamaserver --split ...`).
+- **Not run:** the 30 reporting episodes. Phase 2's own reporting run is still waiting on its G1a decision, and a
+  Phase 3 reporting run belongs after the board check.
+
+### Open items and decisions for the human (none acted on)
+1. Advisor questions A1 (cross-side faults rare; the simulated tube leak does not visibly cool the bed) and A2
+   (fuel-cap cases shown to both sides).
+2. Placement for the split: fixed (today) puts heat-only ticks on the CPU lane; compare with earliest finish in
+   Phase 5, or decide now.
+3. A verifier that disagrees only caps confidence and never reorders (commit 4 finding 2): is that the intended
+   role? (The plan's open question "is the verifier worth keeping?")
+4. Deferred to Phase 4: the side-aware stale rule (needs a longer fact history); stale verdicts counted by the
+   wrong-answer tool in real time.
+5. Open for `main` (look only): `world_model._fact_ids` maps the SUSPENDED water fact to `energy_balance`;
+   `merge` publishes half-invented citations (Phase 2 item).
 
 ---
 
