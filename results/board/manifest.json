@@ -174,8 +174,18 @@
    "done": true
   },
   "C": {
-   "pick": null,
-   "pick_reason": "NO MODEL PASSES: stop and ask",
+   "pick": "llama32-3b",
+   "rule_pick": null,
+   "override": {
+    "model": "llama32-3b",
+    "by": "human",
+    "decided": "2026-10-05, after the stage C result was seen",
+    "note": "bench.model_choice passed NO model; this model did not pass the rule",
+    "failed_constraints": [
+     "broken_json_after_repair"
+    ]
+   },
+   "pick_reason": "HUMAN OVERRIDE: no model passes the rule",
    "passing": [],
    "flags": [
     "qwen25-0.5b: library group top-1 0.418 is BELOW the deterministic floor 0.501 (evidence for the ranking question: the model's order loses to the no-reasoning order)"
@@ -198,10 +208,11 @@
      "pass": false
     }
    },
-   "ranking_verdict_3_episodes": null,
+   "ranking_verdict_3_episodes": "INCONCLUSIVE",
    "code_hash": "47e46c500775bcc1",
    "done": true,
-   "finished": "2026-10-04T23:24:23+0530"
+   "finished": "2026-10-04T23:24:23+0530",
+   "override_applied": "2026-10-05T13:04:55+0530"
   }
  },
  "idle_temp": {
