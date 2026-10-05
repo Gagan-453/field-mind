@@ -220,6 +220,19 @@ wrote the expected note-fact and the diagnosis still lost), the fallback is opti
 pre-registered rule. Not a human decision, recorded as advice given: any schema change is cheapest before
 Phase 3 (both side prompts carry note-facts) and before the Phase 2 reporting run.
 
+## AMENDMENT 4: HUMAN DECISIONS on working unattended (2026-10-05, before commit 5)
+The human is away for about 2 to 3 hours and answered four questions before leaving:
+1. **Scope: build commits 5 and 6, stop before commit 7.** This overrides "start each commit in plan mode and
+   wait for approval" for these two commits only. Each commit's plan, its predictions and its keep-or-revert
+   rule are written into this report and committed BEFORE the code and BEFORE any measurement. The dev gate
+   (G1a, G1b, G3 to G6) and the reporting run are not started.
+2. **On a stop rule (a count differs from its prediction, a prompt over 1,280 tokens, a decision field that
+   differs): stop that item, record it, adjust nothing, and continue only on work that does not depend on it.**
+3. **Note-facts and record-facts in the (unsplit) diagnosis prompt: up to 4 note-facts and up to 4
+   record-facts, newest first.** The plan's "note-facts for this side (up to 4)" (p.15), applied to each of the
+   two sections. Every tick where one is dropped is logged and counted, as for the 9-fact-line rule.
+4. **The phase-reviewer subagent runs after each commit**; its findings and the fixes go into this report.
+
 ## Stops
 - After every commit, `reports/multi_phase2_progress.md` is updated and committed.
 - Stop and report after commit 3 (real token counts and the 60-token answer check), even if the stop rule does
