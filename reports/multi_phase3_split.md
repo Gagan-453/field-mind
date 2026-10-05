@@ -164,3 +164,44 @@ coarse, is a question for the advisor. No data, threshold or check was changed.
 | RCA-14 / RCA-18 (fuel-cap faults where steam falls as a consequence) go to both sides only because `steam_flow` is a water tag | **recorded**: showing them to both is the inclusive reading of "steam flow as load", not a statement of the plan's intent |
 | most note-facts name equipment only, so they go to both sides | **recorded**: the side filter on note-facts does little on this vocabulary |
 | `world_model._fact_ids` maps the SUSPENDED water fact to `energy_balance` | already an open item for `main` (deviation 2) |
+
+---
+
+## Questions for the advisor (Prof. Shukla), to verify later
+Recorded on 2026-10-05; nothing below has been acted on. Mock numbers; they describe the dataset and the
+deterministic checks, not a model.
+
+### A1. Cross-side faults are almost absent from the data, and the simulated tube leak does not cool the bed visibly
+**What was found.** On the 36 dev episodes, 23 of 1,982 non-QUIET ticks have both plant sides active (20 in
+family C, 3 in family B); 972 are water only and 987 heat only (table under "Commit 1"). During a tube leak
+(family B), L1 reports the heat side as steady on 602 of 605 ticks.
+
+**Why it matters.**
+- The plan's case for splitting the diagnostician (p.6, and the ~19 s -> ~10 s example on p.15) is a fault that
+  moves both sides, with the NPU and the CPU working at once. With 23 such ticks the parallel-lane gain can barely
+  be shown; on these episodes the split's benefit is mainly shorter prompts per call.
+- The planned Phase 3 check "accuracy on faults that move both sides (family B)" would rest on 3 ticks.
+- The scheduling study (Phase 5) compares ways of keeping both lanes busy; if most ticks need one side, the
+  differences between policies may be small.
+- The project's own physics note (CLAUDE.md, sign discipline) says a tube leak puts water into the furnace and the
+  **bed cools**. If L1 almost never sees it, either the simulator's cooling is too weak for L1's thresholds, or the
+  heat-side checks are too coarse. Either way the synthetic tube leak may not behave like the real one in
+  `docs/Boiler_Failure_Case_Studies_RCA.pdf`.
+
+**Options (none chosen):**
+1. Accept it as a property of the dataset and report it: "cross-side faults are rare in these episodes, so the
+   speed gain comes mainly from shorter prompts".
+2. Check the simulator's tube-leak heat effect against the case-study PDF and the physics (direction and size of
+   the bed cooling). If it is wrong, fix it under a pre-registered rule. This is a data change: every baseline
+   (single v3, the board campaign, Phase 1 and 2) would have to be re-run.
+3. Add a small number of episodes whose fault moves both sides, built from the case library, so the parallel-lane
+   claim can be tested, without changing the existing 66 episodes.
+
+**Questions:** Is option 1 acceptable for the writeup? If not, which of 2 or 3, and does the advisor know whether a
+real AFBC tube leak shows on bed temperature within the first minutes?
+
+### A2. Fuel-cap faults (RCA-14, RCA-18) are shown to both side diagnosticians
+They move `steam_flow` (steam falls as a consequence of the fuel cap), and steam flow belongs to both sides (the
+plan's "steam flow as load"), so the water-side diagnostician also sees them. This is the inclusive reading. The
+alternative is to treat `steam_flow` movement in a case signature as heat-only. **Question:** which reading does
+the advisor prefer for the writeup?
