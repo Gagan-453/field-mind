@@ -64,7 +64,7 @@ class MultiOrchestrator:
                 json.loads(Path(mcfg["case_groups"]).read_text()),
                 [c["case_id"] for c in retriever.cases.cases])
         self.diag = DiagnosticianAgent(diag, acfg, mcfg, letters)
-        self.ver = VerifierAgent(ver, acfg)
+        self.ver = VerifierAgent(ver, acfg, mcfg)
         self.gate = GateMemoryAgent(gate, ver, acfg)
         self.compact = mcfg.get("compact") or {}
         self.text = None
@@ -208,6 +208,8 @@ class MultiOrchestrator:
         pct = (lambda q: round(p[min(len(p) - 1, int(q * len(p)))], 4)) if p else (lambda q: None)
         return {"placement": self.scheduler.placement,
                 "compact_switches": dict(self.diag.sw),
+                "ver_incomplete_verdicts": self.gate.ver_incomplete,
+                "ver_over_limit": self.gate.ver_over_limit,
                 "lanes": [l.telemetry() for l in self.scheduler.lanes],
                 "jobs_dispatched": len(self.scheduler.dispatched),
                 "jobs_replaced": len(self.scheduler.replaced),

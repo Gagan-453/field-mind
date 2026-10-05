@@ -47,6 +47,10 @@ class GateMemoryAgent:
         # Compact-answer expansion records of the current tick (telemetry;
         # the orchestrator takes and clears them when it records the tick).
         self.compact_log: list[dict] = []
+        # Run-level compact-verifier counts (telemetry): verdicts with an
+        # unjudged claim, and prompts flagged over the limit.
+        self.ver_incomplete = 0
+        self.ver_over_limit = 0
 
     # ------------------------------------------------------------------
     def begin_tick(self, bb, rung: int) -> None:
@@ -137,7 +141,8 @@ class GateMemoryAgent:
         cited facts and cases set the way Diagnostician.run sets them. A failed
         call is left as it is (merge never sees it). The expansion record goes
         to telemetry only."""
-        record = {"evidence_tick": lm["evidence_tick"], **lm.get("info", {})}
+        record = {"agent": "diagnostician", "evidence_tick": lm["evidence_tick"],
+                  **lm.get("info", {})}
         if env.status == "ok":
             payload, info = compact.expand_diag_answer(env.payload, lm)
             record.update(info, answer=env.payload)
@@ -147,6 +152,26 @@ class GateMemoryAgent:
                                     for s in h["supports"]}),
                 cited_cases=sorted({h["case_ref"] for h in payload["hypotheses"]
                                     if h.get("case_ref")}))
+        self.compact_log.append(record)
+        return env
+
+    def _expand_ver(self, env, lm: dict):
+        """Line-number verdicts -> the single agent's verifier payload
+        (compact.expand_ver_answer). Counts a disagreement when a claim fails,
+        as Verifier.run does for its own answer. A failed call is left as is."""
+        record = {"agent": "verifier", "evidence_tick": lm["evidence_tick"],
+                  "claims_shown": len(lm["claims"]),
+                  "over_limit": lm.get("over_limit", False)}
+        self.ver_over_limit += bool(lm.get("over_limit"))
+        if env.status == "ok":
+            payload, info = compact.expand_ver_answer(env.payload, lm)
+            record.update(info, answer=env.payload)
+            if payload["agree"] is False:
+                self.ver.disagreements += 1
+            # run-level: a verdict that left a shown claim unjudged is NOT an
+            # agreement, whatever the disagreement rate's denominator says
+            self.ver_incomplete += bool(info["not_judged"])
+            env = dataclasses.replace(env, payload=payload)
         self.compact_log.append(record)
         return env
 
@@ -170,6 +195,11 @@ class GateMemoryAgent:
 
     def apply_verdict(self, bb, asmt: Assessment, claims: dict, result,
                       now_tick: int) -> dict:
+        lm = getattr(result.job, "line_map", None)
+        if lm and lm.get("kind") == "verification":
+            # Compact verdicts: expanded through the line map, then folded by
+            # the single agent's Verifier.apply below, unchanged.
+            result.envelope = self._expand_ver(result.envelope, lm)
         env = result.envelope
         asmt.envelopes.append(env.to_dict())
         if self._drop_if_stale(result, now_tick):

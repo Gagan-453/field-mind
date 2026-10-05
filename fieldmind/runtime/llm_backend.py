@@ -212,7 +212,11 @@ class MockBackend(LLMBackend):
     @staticmethod
     def _mock_verification(hint: dict) -> dict:
         """Always agrees. A real verifier must not -- that is why the mock is
-        useless as a quality baseline and fine as a plumbing test."""
+        useless as a quality baseline and fine as a plumbing test. In the
+        compact format (multi-agent Phase 2) it passes every shown claim."""
+        if hint.get("compact_ver"):
+            return {"v": [[i, "p"] for i in range(1, hint.get("n_claims", 0) + 1)],
+                    "c": None}
         return {"checks": [], "strongest_contradiction": None,
                 "revised_confidence": None, "agree": True}
 

@@ -176,6 +176,13 @@ multi:
     notes: false                    # note-facts (max 4) + record-facts (max 4)
     world: false
     case_order: score               # score | shuffled (seeded by the evidence tick)
+    # Compact verifier (commit 6). All off = the single agent's verifier.
+    # `ver_schema` = pass/fail per shown claim by line number (amendment 1
+    # item 3), top 3 claims, no confidence or discriminator (decision (b)),
+    # cap 30; `ver_rules` short rules; `ver_claims` first sentence of the cause.
+    ver_schema: false
+    ver_rules: false
+    ver_claims: false
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json
   # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5

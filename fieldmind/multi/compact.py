@@ -137,7 +137,12 @@ def note_fact_text(nf: dict, now_s: float) -> str:
 # four shrink one section each and need `schema` (their text speaks in line
 # numbers). All off = the single agent's prompt, byte for byte.
 SECTIONS = ("schema", "rules", "cases", "notes", "world")
+# Compact verifier (commit 6): `ver_schema` turns on its line-number answer;
+# `ver_rules` and `ver_claims` need it.
+VER_SECTIONS = ("ver_schema", "ver_rules", "ver_claims")
+ALL_SECTIONS = SECTIONS + VER_SECTIONS
 CASE_ORDERS = ("score", "shuffled")
+MAX_CLAIMS = 3          # HUMAN DECISION (b): claims beyond rank 3 are not shown
 
 SEV_ORDER = {"CRITICAL": 0, "ALARM": 1, "WATCH": 2, "INFO": 3}   # = evidence_packet
 MAX_FACT_LINES = 9      # HUMAN DECISION, amendment 1 item 2 (single-digit fact lines)
@@ -153,7 +158,7 @@ NO_BELIEF_CONF = 0.3    # CITED: fieldmind/agent/orchestrator.merge default (ame
 def compact_switches(ccfg: dict | None) -> dict:
     """The five section switches and the case order, validated."""
     ccfg = ccfg or {}
-    sw = {s: bool(ccfg.get(s, False)) for s in SECTIONS}
+    sw = {s: bool(ccfg.get(s, False)) for s in ALL_SECTIONS}
     sw["case_order"] = ccfg.get("case_order", "score")
     if sw["case_order"] not in CASE_ORDERS:
         raise ValueError(f"multi.compact.case_order must be one of {CASE_ORDERS}")
@@ -161,6 +166,9 @@ def compact_switches(ccfg: dict | None) -> dict:
     if needs and not sw["schema"]:
         raise ValueError(f"multi.compact {needs} need `schema` on: their compact "
                          f"text speaks in line numbers")
+    vneeds = [s for s in VER_SECTIONS[1:] if sw[s]]
+    if vneeds and not sw["ver_schema"]:
+        raise ValueError(f"multi.compact {vneeds} need `ver_schema` on")
     return sw
 
 
@@ -436,4 +444,110 @@ def expand_diag_answer(p: dict, lm: dict) -> tuple[dict, dict]:
             "bad_case_lines": bad_case, "bad_fact_lines": bad_fact,
             "bad_x_lines": bad_x, "bad_note_lines": bad_n,
             "bad_sep": sep is not None and sep_id is None}
+    return payload, info
+
+
+# ======================================================================
+#  Compact verifier (Phase 2 commit 6): pass/fail per shown claim by line
+#  number (amendment 1 item 3); narrow view, facts and claims only
+# ======================================================================
+def build_verification(sw: dict, templates: dict, *, facts, claims: dict,
+                       evidence_tick: int) -> tuple[str, dict, dict]:
+    """The compact verifier prompt (sw["ver_schema"] must be on). Facts: every
+    fact of the evidence tick, in L1 order, as in Phase 1. Claims: at most the
+    top 3, each with its case id, its cause (whole, or the first sentence with
+    `ver_claims`) and its cited fact LINES. No confidence, no discriminator
+    (human decision (b)). Returns (prompt, line_map, mock hint)."""
+    if not sw["ver_schema"]:
+        raise ValueError("build_verification is the ver_schema-on path")
+    fids = [f.id for f in facts]
+    line_of = {fid: i for i, fid in enumerate(fids, 1)}
+    # same-tick supports are local (F3) or stamped with this tick: shown as
+    # their line. A support stamped with an EARLIER tick (a late answer in real
+    # time) is shown as that tick, `t83`, so it is not mistaken for an invented
+    # id; anything else names no fact and is shown as `?`.
+    def cite(x):
+        tick, _, fid = x.rpartition(".")
+        if not tick:
+            return str(line_of[x]) if x in line_of else "?"
+        if tick == f"t{evidence_tick}":
+            return str(line_of[fid]) if fid in line_of else "?"
+        return tick if tick.startswith("t") and tick[1:].isdigit() else "?"
+    shown = list(claims.get("hypotheses", []))[:MAX_CLAIMS]
+    lines = []
+    for h in shown:
+        cite_txt = ", ".join(cite(x) for x in h.get("supports", [])) or "none"
+        cause = h.get("cause") or "?"
+        if sw["ver_claims"]:
+            cause = first_sentence(cause)
+        lines.append(f"{h.get('case_ref') or 'model idea'}: {cause} [cites {cite_txt}]")
+    rules = templates["rules_compact" if sw["ver_rules"] else "rules_full"]
+    prompt = templates["body"].format(
+        rules=rules,
+        facts=_numbered([f"[{f.check}/{f.severity}] {f.detail}" for f in facts],
+                        "(no facts)"),
+        claims=_numbered(lines, "(no claims)"))
+    line_map = {"kind": "verification", "evidence_tick": evidence_tick,
+                "claims": [h.get("cause") for h in shown], "facts": fids,
+                "fact_detail": [f.detail for f in facts]}
+    hint = {"compact_ver": True, "n_claims": len(shown)}
+    return prompt, line_map, hint
+
+
+def over_limit(prompt: str, cap: int, guard_cpt: float | None) -> bool:
+    """The guard's estimate (fitted chars per token) of prompt + answer cap
+    reaching PROMPT_LIMIT. Used to FLAG a prompt; nothing is cut."""
+    return bool(guard_cpt) and math.ceil(len(prompt) / guard_cpt) + cap >= PROMPT_LIMIT
+
+
+def check_ver_answer_shape(p: dict) -> tuple[bool, str]:
+    """`v` a list of [claim line, "p"|"f"]; `c` a line number or null if present."""
+    v = p.get("v")
+    if not isinstance(v, list):
+        return False, 'missing verdict list "v"'
+    for e in v:
+        if not (isinstance(e, list) and len(e) == 2 and _is_int(e[0])
+                and e[1] in ("p", "f")):
+            return False, '"v" entries must be [claim line, "p" or "f"]'
+    if p.get("c") is not None and not _is_int(p["c"]):
+        return False, '"c" must be a fact line or null'
+    return True, ""
+
+
+def expand_ver_answer(p: dict, lm: dict) -> tuple[dict, dict]:
+    """Line-number verdicts -> the single agent's verifier payload, so its
+    Verifier.apply folds them unchanged. A shown claim with no verdict is NOT
+    JUDGED: no check is written for it (apply leaves it alone) and it is
+    counted, never as a pass. The first verdict for a line wins."""
+    claims, fids = lm["claims"], lm["facts"]
+    verdicts: dict[int, set] = {}
+    bad = 0
+    for line, verdict in p.get("v", []):
+        if not 1 <= line <= len(claims):
+            bad += 1
+            continue
+        verdicts.setdefault(line, set()).add(verdict)
+    # One verdict per claim. A claim given both "p" and "f" contradicts itself:
+    # it is NOT JUDGED (neither pass nor fail), counted.
+    conflicting = sorted(l for l, v in verdicts.items() if len(v) > 1)
+    judged = {l for l, v in verdicts.items() if len(v) == 1}
+    checks = [{"claim": claims[l - 1],
+               "verdict": "fail" if verdicts[l] == {"f"} else "pass"}
+              for l in sorted(judged)]
+    c = p.get("c")
+    contra = None
+    if _is_int(c) and 1 <= c <= len(fids):
+        contra = f"t{lm['evidence_tick']}.{fids[c - 1]} {lm['fact_detail'][c - 1]}"
+    failed = any(x["verdict"] == "fail" for x in checks)
+    not_judged = [i for i in range(1, len(claims) + 1) if i not in judged]
+    # An empty or partial verdict must not read as agreement (amendment 1
+    # item 3): `agree` is False when a claim failed, None (unknown) when any
+    # shown claim was not judged, True only when every claim passed.
+    agree = False if failed else (None if not_judged else True)
+    payload = {"checks": checks, "strongest_contradiction": contra,
+               "revised_confidence": None, "agree": agree}
+    info = {"not_judged": not_judged, "conflicting": conflicting,
+            "bad_claim_lines": bad,
+            "bad_fact_line": c is not None and contra is None,
+            "failed": [x["claim"] for x in checks if x["verdict"] == "fail"]}
     return payload, info

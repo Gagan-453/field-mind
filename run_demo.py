@@ -71,10 +71,10 @@ def main():
                     choices=["fixed", "earliest_finish"],
                     help="overrides multi.placement (--arch multi only)")
     ap.add_argument("--compact", default=None,
-                    help="compact diagnostician sections for this run (--arch "
+                    help="compact prompt sections for this run (--arch "
                          "multi): all | none | comma list of schema,rules,"
-                         "cases,notes,world (the rest off); overrides "
-                         "multi.compact")
+                         "cases,notes,world,ver_schema,ver_rules,ver_claims "
+                         "(the rest off); overrides multi.compact")
     ap.add_argument("--case-order", default=None, choices=["score", "shuffled"],
                     help="overrides multi.compact.case_order")
     ap.add_argument("--record-prompts", default=None,
@@ -101,12 +101,12 @@ def main():
     if args.placement:
         cfg["multi"]["placement"] = args.placement
     if args.compact is not None:
-        from fieldmind.multi.compact import SECTIONS
-        on = (set(SECTIONS) if args.compact == "all" else set() if
+        from fieldmind.multi.compact import ALL_SECTIONS
+        on = (set(ALL_SECTIONS) if args.compact == "all" else set() if
               args.compact == "none" else set(filter(None, args.compact.split(","))))
-        if on - set(SECTIONS):
-            ap.error(f"--compact: unknown section(s) {sorted(on - set(SECTIONS))}")
-        cfg["multi"]["compact"].update({s: s in on for s in SECTIONS})
+        if on - set(ALL_SECTIONS):
+            ap.error(f"--compact: unknown section(s) {sorted(on - set(ALL_SECTIONS))}")
+        cfg["multi"]["compact"].update({s: s in on for s in ALL_SECTIONS})
     if args.case_order:
         cfg["multi"]["compact"]["case_order"] = args.case_order
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])

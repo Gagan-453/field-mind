@@ -1,9 +1,9 @@
 # Multi-agent Phase 2: prompt shrink: report
 
 ## Status
-PARTIAL. Commits 0 to 4 are done. The note-fact coverage stop after commit 4 is resolved by the human (option
-(c), see "AMENDMENT 3"). Commits 5 to 7 (compact diagnostician, compact verifier, dev gate G1a / G1b / G3) have
-not started, so no G1a run has been made.
+PARTIAL. Commits 0 to 6 are done (the note-fact coverage stop after commit 4 was resolved by the human, option
+(c), "AMENDMENT 3"; commits 5 and 6 were built unattended under "AMENDMENT 4"). Commit 7 (the dev gate G1a / G1b /
+G3 to G6 and the reporting run) has not started: amendment 4 stops before it, so no G1a run has been made.
 
 **This session is mock only.** The mock backend re-ranks retrieved cases and does no reasoning, so its numbers
 measure the deterministic and retrieval layers only. They are not an agent result. The real-model baseline
@@ -832,6 +832,112 @@ its Phase 1 answer.
 
 **Keep or revert:** kept only if the all-off identity, the verifier-only decision identity and G3 all hold. A
 failure is a stop for this commit (amendment 4 item 2).
+
+### Results (dev, 36 episodes, 5,850 ticks, mock, lockstep, fixed placement; laptop). KEPT.
+**Mock numbers: the mock verifier always agrees, so nothing here says whether a real verifier disagrees when it
+should** (that is the Phase 3 known-wrong-answer test).
+
+| check | prediction / rule | measured | result |
+|---|---|---|---|
+| all off vs commit 5 all-off (strict) | 0 differences, prompt log byte-identical | 0 differences over 5,850 assessments, summary 0; `cmp` identical (2,433 calls) | PASS |
+| verifier sections only vs all off (strict) | 0 decision differences; `ver_calls` 192; cap 30 | 0 differences, summary 0; `ver_calls` 192 and 192; every verifier call `max_tokens` 30 (all-off: 256) | PASS |
+| all on, G3 | verifier + 30 and diagnostician + 60 < 1,280, four tokenizers | verifier max 530 / 518 / 522 / 535 (+30 = 548 to 565); diagnostician prompts byte-identical to commit 5's all-on run (max 878 to 914); 0 over for every agent on every tokenizer | PASS |
+| all on, health | invalid 0, not judged 0, bad lines 0, `ver_calls` 327 | invalid 0 (all 2,309 envelopes ok), not judged 0, conflicting 0, incomplete verdicts 0, over-limit flags 0, bad claim / fact lines 0, failed claims 0; `ver_calls` 327 | PASS |
+
+Verifier prompt tokens, chat template applied (all on, 327 calls; the "before" column is commit 5's all-on run, where
+the verifier was still the single agent's):
+
+| tokenizer | before mean / p95 / max | compact mean / p95 / max | max + 30 |
+|---|---|---|---|
+| Llama 3.2 3B | 1,544.3 / 1,839 / 1,895 | 428.3 / 489 / 530 | 560 |
+| Qwen3 1.7B | 1,537.6 / 1,832 / 1,887 | 413.1 / 480 / 518 | 548 |
+| Gemma 3 1B | 1,555.8 / 1,855 / 1,905 | 417.0 / 483 / 522 | 552 |
+| Qwen2.5 0.5B | 1,554.6 / 1,849 / 1,904 | 430.1 / 497 / 535 | 565 |
+
+The plan's estimate is ~350 (p.15); the compact verifier measures 413 to 430 on average (after the review fixes,
+which added the p/f definition and the no-citation rule: about +20 tokens).
+
+#### Constants introduced
+| symbol | value | provenance | range | affects |
+|---|---|---|---|---|
+| `MAX_CLAIMS` | 3 | HUMAN DECISION (b): claims beyond rank 3 are not shown | none | claims in a verifier prompt |
+| `multi.answer_caps.verifier` | 30 | CITED (already in config since commit 4): plan p.5 | none | `max_tokens` of a compact verifier call |
+
+#### Decisions taken (conservative option, under amendment 4)
+1. **No repair call for the verifier**, as in the single agent (it has none). A malformed verdict is
+   `invalid_schema` and is not applied. The plan's failure table allows one repair call before the deadline;
+   adding it would change behaviour and cost, so it is left for a human decision.
+2. **Facts in the verifier prompt are all the facts of the evidence tick in L1 order**, as in Phase 1 (the plan:
+   "all current facts"), not capped at 9 and not sorted by severity. Dev's maximum is 7 facts, so line numbers
+   stay single-digit there.
+3. **A claim's citations are shown as fact lines**; a support stamped with an earlier tick (a late answer in real
+   time) is shown as that tick (`t83`); a support that names no fact at all (an invented id such as `line7`) is
+   shown as `?`, so the verifier can tell the two apart (changed after the review).
+4. **The contradiction text carries the evidence tick** (`t84.F2 ...`), the same rule as the diagnostician's `x`
+   text after the commit 5 review.
+
+#### Verification
+| step | result |
+|---|---|
+| ran the module | dev runs all-off, verifier-only and all-on, 36 episodes each, exit 0; one episode (dev_A03) inspected by eye |
+| self-tests | `tests/test_compact_verifier.py` 22 passed; full suite 276 passed (254 before) |
+| independent re-derivation | verifier calls by three routes: prompt-log lines 327 = sum of `ver_calls` 327 = gate expansion records 327. Claims per prompt by parsing the prompt text with a regex: 3 on every call, agreeing with the line map on 327 of 327 |
+| mutation check | 22 mutations, 22 caught (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared before and after each); 5 added for the review fixes |
+
+| mutation | caught by |
+|---|---|
+| 4 claims shown | `test_prompt_shows_top_three_claims_with_cited_lines_and_no_confidence` |
+| confidence shown in the claim | same |
+| stamped citations not mapped to lines | same |
+| facts sorted by severity instead of L1 order | same |
+| `ver_claims` ignored | `test_ver_claims_shortens_the_cause_and_ver_rules_only_the_rules` |
+| `ver_rules` ignored | same |
+| not-judged list emptied | `test_failed_claim_is_capped_and_a_missing_verdict_is_not_judged` |
+| a missing verdict written as a pass | same |
+| contradiction text without its tick | same |
+| a self-contradicting claim (`p` and `f`) judged | `test_out_of_range_lines_are_counted_and_a_self_contradiction_is_not_judged` |
+| a partial verdict reads as agreement | same |
+| an earlier-tick citation shown as `?` | `test_late_citation_shows_its_tick_and_only_an_unknown_id_a_question_mark` |
+| incomplete verdicts not counted at run level | `test_gate_folds_line_verdicts_and_counts_a_disagreement` |
+| over-limit prompt never flagged | `test_prompt_over_the_limit_is_flagged_not_cut` |
+| `p` / `f` undefined in the answer line | `test_prompt_shows_top_three_claims_with_cited_lines_and_no_confidence` |
+| verifier sections allowed without `ver_schema` | `test_verifier_sections_need_ver_schema` |
+| disagreement not counted | `test_gate_folds_line_verdicts_and_counts_a_disagreement` |
+| gate skips the verdict expansion | same |
+| verifier given a repair call | `test_malformed_verdict_is_invalid_with_no_repair_call[*]` |
+| call cap 30 -> agent `max_tokens` | same |
+| switches-off path builds the compact prompt | `test_episode_verifier_off_sends_the_single_agents_verifier_prompts` |
+| mock verifier fails claim 1 | `test_episode_compact_verifier_keeps_decisions_and_caps_at_30` |
+
+#### Phase-reviewer findings and what was done
+The reviewer ran the suite (270 passed), compared decisions on three dev episodes in three switch pairs (0
+differences), scanned 981 shown claims, and reproduced 6 mutations in memory (6 caught). Checklist: single agent
+untouched PASS, shared code imported PASS, hard path PASS, single writer PASS, answers reach belief only through
+the gate PASS, tick stamps PASS (contradiction) with a real-time gap in claim display, token caps PARTIAL, no
+tuning on the reporting set PASS, tests PASS (one weak), metric causes PASS.
+
+| finding | done |
+|---|---|
+| 1. An empty or partial verdict read as agreement: `{"v":[]}` gave `agree: True`; `[[1,"p"],[1,"f"]]` became a pass (first wins); no run-level count (against amendment 1 item 3) | **fixed**: `agree` is False when a claim fails, **None** when any shown claim is not judged, True only when every claim passed; a claim given both `p` and `f` is not judged (neither pass nor fail); run-level `ver_incomplete_verdicts` in the run file's `multi` telemetry. Tested, mutation-checked. **Recorded, not changed:** the existing `verifier_disagreement_rate` (harness / evaluator) still divides by all verifier calls, so an incomplete verdict sits in its denominator; read it with `ver_incomplete_verdicts` beside it |
+| 2. In real time, a tick-83 diagnosis's real citations (`t83.F1`) were shown to a tick-84 verifier as `?`, the same mark as invented ones, and the rules tell the model to fail such a claim | **fixed**: shown as `t83`; tested. Lockstep cannot reach it |
+| 3. No over-limit flag for the verifier prompt (facts are uncapped) | **fixed**: flagged with the diagnostician's fitted estimate (`over_limit` per call, `ver_over_limit` per run; 0 on dev); never cut, as decision 2 keeps all facts |
+| `p` / `f` were never defined with `ver_rules` off (the `ver_schema`-only ablation) | **fixed**: the answer line reads `"p" (pass) or "f" (fail)`; tested |
+| a claim with no citation (carried belief, 27 of 981 shown claims) could be failed by a literal reading of "cited lines do not support it" | **fixed** in the compact rules: "A claim that cites no line is judged on the facts alone." |
+| a stale verdict's disagreement is counted before the stale check | **recorded**: same order as Phase 1 (`Verifier.run` counted before the gate saw it) |
+| `Verifier.apply` caps failures by cause text, so a hidden rank-4+ hypothesis with the same cause would also be capped | **recorded**: single-agent code (`fieldmind/agent/l5_verify.py`); causes are unique in the 13-case library |
+| `ver_rules_full.txt` is an edited copy of the single agent's verifier text, untested for drift | **recorded**: it differs on purpose (human decision (b)); it is prompt text, not code |
+| the episode-level decision test runs against an always-pass mock | **recorded**: the unit tests carry the fold logic; the "mock fails claim 1" mutation shows the episode test can fail |
+
+After the fixes (dev): all off vs commit 5 0 differences and byte-identical; verifier sections only vs all off 0
+differences, `ver_calls` 192 both; all on: diagnostician prompts byte-identical to commit 5, verifier figures in
+the tables above.
+
+#### What I could not verify
+- **Whether a real verifier answers every claim**, and whether it disagrees when it should: the mock always
+  passes everything. Not-judged counts and the disagreement rate are only meaningful with a real model.
+- **The effect of removing the observability check and the confidence rewrite** (human decision (b)): unmeasured
+  until a real model runs; the Phase 3 known-wrong-answer test covers it.
+- Token counts on the board's own tokenizers (as for commit 5).
 
 ## Blocked / needs a decision
 **Resolved earlier:** the answer format (amendment 1), gate G1 under B' (amendment 2) and the note-fact
