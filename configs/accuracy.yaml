@@ -30,4 +30,5 @@ multi:
     ver_claims: true
   split: true
   split_on_change: true
+  merge_rule: tiebreak             # accuracy-fix decision 1 (primary); baseline 3 runs with --merge-rule model
   grammar: true

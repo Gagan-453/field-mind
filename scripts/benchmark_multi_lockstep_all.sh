@@ -55,6 +55,8 @@ OVERLAY=${OVERLAY:-configs/fast.yaml}
 EPISODES_DIR=${EPISODES_DIR:-data/episodes}
 LOG_PROMPTS=${LOG_PROMPTS:-1}
 PROMPT_FLAG=(); [ "$LOG_PROMPTS" = 1 ] && PROMPT_FLAG=(--log-prompts)
+MERGE_RULE=${MERGE_RULE:-}            # model | belief_only | tiebreak | nudge; empty = the overlay's
+RULE_FLAG=(); [ -n "$MERGE_RULE" ] && RULE_FLAG=(--merge-rule "$MERGE_RULE")
 BACKEND=${BACKEND:-llamaserver}
 if [ "$BACKEND" = llamaserver ]; then
     OUT=${OUT:-results/presentation_benchmark/multi_agent_LOCKSTEP_grammar_llama32-3b_gemma3-1b}
@@ -135,9 +137,11 @@ for ep in "${EPISODES[@]}"; do
     # ticks of an interrupted attempt are kept under another name, never appended to
     [ -f "$OUT/${ep}_multi.ticks.jsonl" ] && mv "$OUT/${ep}_multi.ticks.jsonl" "$OUT/${ep}_multi.ticks.interrupted-$(date +%Y%m%dT%H%M%S).jsonl"
     echo "=== $ep  started $(date +%Y-%m-%dT%H:%M:%S%z)  BACK TO BACK (lockstep)  backend $BACKEND" | tee "$OUT/${ep}_multi.log"
-    PYTHONUNBUFFERED=1 systemd-inhibit --what=sleep:idle --why="FieldMind $ep" \
+    # systemd-inhibit keeps the (Linux) board laptop awake; absent elsewhere
+    INHIBIT=(); command -v systemd-inhibit >/dev/null && INHIBIT=(systemd-inhibit --what=sleep:idle --why="FieldMind $ep")
+    PYTHONUNBUFFERED=1 ${INHIBIT[@]+"${INHIBIT[@]}"} \
         .venv/bin/python run_demo.py --backend "$BACKEND" --arch multi \
-        --overlay "$OVERLAY" --mode lockstep --episodes-dir "$EPISODES_DIR" "${PROMPT_FLAG[@]}" \
+        --overlay "$OVERLAY" --mode lockstep --episodes-dir "$EPISODES_DIR" ${PROMPT_FLAG[@]+"${PROMPT_FLAG[@]}"} ${RULE_FLAG[@]+"${RULE_FLAG[@]}"} \
         --episode "$ep" --verbose --live-ticks "$OUT/${ep}_multi.ticks.jsonl" \
         --tag "$ep" --out "$OUT/tmp" 2>&1 | tee -a "$OUT/${ep}_multi.log"
     rc=${PIPESTATUS[0]}

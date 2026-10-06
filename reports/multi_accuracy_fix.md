@@ -1,13 +1,11 @@
 # Multi-agent accuracy recovery: report
 
 ## Status
-STEP 0 PARTIAL, STOPPED. Pre-registration committed first (`e1269a1`). Step 0 code is done and two of its three
-baselines exist (belief-alone on full dev; the replay of the four saved board runs). The third, the current
-multi-agent on the quick set with the real model, is **not run: the QIDK is not attached to this machine**
-(`adb devices` empty). Step 1 is also blocked on decision 1 (A or B). The pre-registration below was committed
-before any measurement or code in this work. Branch `multi-agent-fix`, made from `demo`
-at `e9425c0` (the branch that produced the board runs in `outputs/`). `fieldmind/agent/` and `bench/model_choice.py`
-are not edited in this work.
+STEP 1 BUILT ON THE MOCK, NOT MEASURED. Pre-registration (`e1269a1`), Step 0 (`34ba9f7`) and amendment 1 (`354cd05`,
+committed before any merge-rule replay) are in. Step 1's three merge rules are built and verified on the mock dev run
+(correctness only). Nothing has been measured with the real model: baseline 3 and every step-1 board number need the
+QIDK, which is not attached to this machine. `bench/board_session.sh` runs baseline 3, its replay check and the
+single-agent reference in one session at the board laptop. Step 2 is not started.
 
 **No accuracy claim is made in this work until the final gate (human decision 6) passes.** Mock numbers measure the
 deterministic and retrieval layers only. All plant data is synthetic.
@@ -284,7 +282,103 @@ None. Step 0 changes no behaviour; the run files gain `belief_order`.
 - The board run (baseline 3) and anything about Llama 3B on the CPU lane (speed, `bench/board.py` allow-list).
 - That replayed outputs runs are exact on tied ticks (5 ticks, insertion order not saved).
 
+## Step 1: merge rules (built; verified on the mock dev run only)
+`multi.merge_rule: model | belief_only | tiebreak | nudge` (`fieldmind/multi/merge_rules.py`, applied by the gate's
+`apply_rule` on every non-QUIET tick, after the side answers are checked and before the verifier). `model` is the
+earlier behaviour and stays the default in `configs/base.yaml`; `configs/accuracy.yaml` sets `tiebreak`;
+`run_demo.py --merge-rule` and the runner's `MERGE_RULE` override it. Lockstep only (real time refuses a rule other
+than `model`); needs `multi.split`. Each non-QUIET tick logs a `rule` record: the rule, the cases the model ranked,
+whether the published top 3 differs from belief's top 3, and why (for `tiebreak` also belief's leaders and which
+model cases were inside and outside the band; for `nudge` the offsets).
+
+Implementation detail found while verifying: the rules compare log-odds rounded to 4 decimals (the precision run
+files save). Without it, unrounded sums such as -0.7875 + 1.2 and 0.4125 differed in the last bit and the offline
+replay disagreed with the gate on 2 of 5,850 ticks; with it, 0.
+
+### Verification on the mock dev run (correctness, not selection; amendment item 3)
+Mock numbers are the deterministic and retrieval layers only; the mock "model" re-ranks retrieved cases by score.
+Nothing below is used to choose a rule.
+
+| rule | replay of the same rule vs the run's published ranking (5,850 ticks) | ticks the published top 3 differs from belief's | mock library group top-1 | mock held-out |
+|---|---|---|---|---|
+| belief_only | 0 differences; also 0 against the Step 0 `belief` replay | 0 of 1,982 | 0.508 | 0.709 |
+| tiebreak | 0 differences | 258 of 1,982 ("model reordered belief's leaders"); 1,139 "agrees", 583 "no model case in the band", 2 "no answer" | 0.517 | 0.681 |
+| nudge | 0 differences | 952 of 1,982 | 0.579 | 0.722 |
+
+`belief_only` gives 0.508 where the evaluator's `belief_group` gives 0.502. Cause, checked: the evaluator reads
+`belief_ranking` (log-odds order) and the published list is `rank_hypotheses` (confidence rounded to 3 decimals,
+ties in insertion order); their rank 1 differs on 13 of 1,982 ticks. Both are "belief alone"; the final gate
+(decision 6) compares the published metric of the multi-agent with `belief_group` as pre-registered, so this 0.006
+is in the gate's favour of belief-alone being slightly lower; recorded.
+
+Why replaying a different rule on baseline 3's answers is exact for group top-1: the diagnosis prompt shows belief's
+own top 3 (from the belief section), which no rule writes to, and the reuse fingerprint does not read the published
+ranking, so the model's answers are the same under every rule. What differs is the verifier: its trigger reads the
+published rank-1 confidence, so under another rule it would run on other ticks and judge other claims. The verifier
+only caps confidences and never reorders, so group top-1 is unaffected; confidence-based numbers (ECE, low-confidence
+rates) from a cross-rule replay are not exact and will not be reported as such.
+
+### Tests
+`tests/test_merge_rules.py`, 19 tests: belief_only equals `initial_claims` of `rank_hypotheses`; tiebreak reorders only
+inside the band, never lifts a case from outside it (4 cases), band edge inclusive at 0.35, takes tied cases beyond
+belief's top 3, keeps belief's confidence; nudge steps (+0.35 / +0.175, once per case per tick), the per-episode cap
+(1.2, also as an ordering outcome: 1.79 + 1.2 stays below 3.0), confidence of the sum; on a dev episode for each rule:
+every non-QUIET tick has exactly one rule record, `differs_from_belief` matches the published list, and the replay
+reproduces the run; nudge leaves belief's own ranking identical to belief_only's; unknown rule and rule without
+split are refused. `tests/test_replay_multi.py` pinned to `merge_rule: model` (it checks the unchanged gate).
+
+| mutation (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared) | caught by |
+|---|---|
+| tiebreak band ignored (model may lift any case) | 6 tests, incl. `test_tiebreak_never_lifts_a_case_from_outside_the_band[*]` |
+| band exclusive at its edge | `test_tiebreak_band_edge_is_inclusive_at_0_35` |
+| band 0.5 | 5 tests |
+| nudge cap removed | `test_nudge_respects_the_per_episode_cap`, `test_nudge_offsets_live_in_their_own_section_and_belief_is_untouched` |
+| rank 2 gets a full step | `test_nudge_rank1_and_rank2_steps_once_per_case_per_tick` |
+| more than one nudge per case per tick | same |
+| belief order ties by log-odds | 3 episode tests |
+| nudge written into belief's log-odds | 2 tests |
+| `differs_from_belief` never set | 2 tests |
+| reused answers nudge again | episode test (nudge) |
+| rule skipped on ticks with no model job | 3 episode tests |
+
+Full suite: 435 passed, 1 failed: `tests/test_campaign.py::test_kill_minus_9_mid_episode_then_resume_is_identical`.
+**It is intermittent and not caused by this step**: with this step's changes stashed it failed 2 of 3 runs, with them
+in 3 runs each it failed twice and passed once, with and without the changes. Recorded as open; its
+cause (the kill timing of the resume test) was not investigated.
+
+## Answer 4: what `bench/board.py` expects for the CPU lane
+`start_lane` refuses any file whose name is not in `CANDIDATES` or whose sha256 **on the board** differs. The lane
+does not matter to the check; the CPU lane loads the same file as the NPU lane:
+
+- path on the board: `/data/local/tmp/llm/Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`
+- sha256: `5aa3ece50ab33d09a7181888a75f8755f924c662dc99626e7f45440adfeadcdb`
+- check on the board laptop: `adb shell sha256sum /data/local/tmp/llm/Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`
+- CPU lane command: `llama-server -m <that path> --port 8081 -c 4096 -np 1 --device none -ngl 0 -t 6 -fit off
+  --cache-ram 0 -lv 4`, with `LD_LIBRARY_PATH` and `ADSP_LIBRARY_PATH` set. Not verified here: two 3B servers at once
+  (about 1.9 GB each) on the board's memory, and the CPU lane's speed with the 3B.
+
+## `bench/board_session.sh` (amendment item 5)
+Start it at the board laptop: `bench/board_session.sh`. Output under `results/accuracy_fix/board_session/`.
+- **(a)** baseline 3: `scripts/benchmark_multi_lockstep_all.sh` with `OVERLAY=configs/accuracy.yaml`, Llama 3B on both
+  lanes, `MERGE_RULE=model` (unchanged gate), dev quick set, prompts and replies saved, lanes restarted per episode,
+  placement checked from the lane logs, chip temperature before and after each episode with the cooldown protocol.
+- **(b)** every quick-set run file exists, every model call in it has its prompt and reply, `belief_order` is present,
+  and `bench/replay_multi.py --rule model --check` reproduces every run with 0 differences.
+- **(c)** single agent, NPU lane, Llama 3B, all 36 dev episodes, `--log-prompts`, lane restarted per episode, same
+  cooldown and temperature log (`temps_single.jsonl`), lane log lines kept per episode.
+- Resumable: an episode with a saved summary is skipped in (a) and (c). If (a) or (b) fails it exits before (c).
+
+Checked on the laptop with `BACKEND=mock` (board steps skipped): (a) saved all 10, (b) all 10 replay with 0
+differences, (c) ran on two episodes; a second start skipped every saved episode; a corrupted run file made (b) stop
+with exit 1 before (c). Two portability fixes to the runner were needed for that check and change nothing on the
+Fedora board laptop: `systemd-inhibit` is used only when present, and empty bash arrays are expanded safely.
+
 ## Blocked / needs a decision
-1. **Decision 1: option A or B** (or your own δ / Δ / ε). See "Decision 1: STOP". Step 1 waits.
-2. **Baseline 3 needs the board.** Run the command above on the QIDK laptop and bring back the folder.
-3. **Single-agent full-dev reference** for decision 6: when to schedule the 7 to 9 h run.
+1. **The board session.** Run `bench/board_session.sh` at the board laptop and bring back
+   `results/accuracy_fix/board_session/`. Then: the A-vs-B adoption check (amendment item 1) on the replay of baseline
+   3, and the step-1 board run of the adopted rule on the quick set.
+2. Nothing else is decided or blocked; Step 2 waits by instruction.
+
+## Open, not fixed here
+- `tests/test_campaign.py::test_kill_minus_9_mid_episode_then_resume_is_identical` is intermittent on unchanged code.
+- The items under "Recorded as open" in the pre-registration.

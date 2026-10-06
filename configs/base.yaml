@@ -191,6 +191,16 @@ multi:
   # (side signature, open findings with severity, note-facts) changed; re-use
   # the side's last checked answer otherwise. Needs split. Off = commit 2.
   split_on_change: false
+  # Accuracy-fix work (reports/multi_accuracy_fix.md, decision 1 + amendment):
+  # how a checked model answer reaches the published ranking.
+  #   model        the single agent's merge, model order wins (Phases 1-4)
+  #   belief_only  belief's top 3, model answers logged and ignored
+  #   tiebreak     belief's order; the model reorders only cases within 0.35
+  #                log-odds of belief's leader, every tick (PRIMARY)
+  #   nudge        belief log-odds + capped model offsets, +0.35 / +0.175,
+  #                at most 1.2 per case per episode (SECONDARY arm)
+  # Needs multi.split. Default = model (earlier behaviour exactly).
+  merge_rule: model
   # Answer grammars (fieldmind/multi/grammar.py): every model job sends a GBNF
   # with its request and llama-server samples only what it allows -- the compact
   # answer format, line numbers the prompt showed, the note vocabulary, and a

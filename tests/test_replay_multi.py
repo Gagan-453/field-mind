@@ -49,6 +49,7 @@ def _cfg():
     _merge(cfg, yaml.safe_load((ROOT / "configs/accuracy.yaml").read_text()))
     cfg["llm"]["backend"] = "mock"
     cfg["agent"]["log_prompts"] = True
+    cfg["multi"]["merge_rule"] = "model"       # step 0: the unchanged gate (baseline 3)
     return cfg
 
 

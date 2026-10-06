@@ -72,6 +72,9 @@ OWNERS: dict[str, str] = {
     # written by code from records.json, no model call (human decision a).
     "notefacts": "text_reader",
     "recordfacts": "retriever",
+    # accuracy-fix decision 1, secondary arm (merge_rule: nudge): the model's
+    # capped per-case offsets for the episode. Never written into belief.
+    "model_evidence": "gate",
     # Phase 3 (call only on change): each side's last CHECKED answer and the
     # fingerprint of the evidence it answered. Written by the gate only.
     "side_answers": "gate",
@@ -210,6 +213,7 @@ class Blackboard:
             "assessment": None,
             "notefacts": {},            # note id -> note-fact (or a rejection)
             "recordfacts": [],
+            "model_evidence": {},
             "side_answers": {},         # side -> {fingerprint, payload, evidence_tick}
         }
         self._active: str | None = None

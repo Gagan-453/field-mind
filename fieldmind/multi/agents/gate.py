@@ -31,7 +31,7 @@ from ...agent.orchestrator import (fold_diagnosis, initial_claims, merge,
                                    quiet_deadline_miss, rung_marker,
                                    stamp_shown_confidence, tick_deadline_miss)
 from ...schemas import AgentEnvelope, Assessment
-from .. import compact, sides
+from .. import compact, merge_rules, sides
 from .diagnostician import DiagnosticianAgent
 
 NAME = "gate"
@@ -53,10 +53,17 @@ class GateMemoryAgent:
         self.ver_incomplete = 0
         self.accepted_late = 0      # answers > 1 tick old accepted on unchanged evidence
         self.ver_over_limit = 0
+        # accuracy-fix decision 1: how a checked answer reaches the published
+        # ranking (fieldmind/multi/merge_rules.py). "model" = the single
+        # agent's merge (Phases 1-4). Set by the orchestrator.
+        self.merge_rule = "model"
+        self._tick_payload = None       # all accepted side answers, this tick
+        self._fresh_payload = None      # the ones answered THIS tick (not reused)
 
     # ------------------------------------------------------------------
     def begin_tick(self, bb, rung: int) -> None:
         """Only the degradation ladder persists across ticks (known bug 1)."""
+        self._tick_payload = self._fresh_payload = None
         bb.write("status", {"degraded_mode": rung_marker(rung)}, NAME)
 
     def open_assessment(self, bb, tick: int, timestamp: str, state: str,
@@ -200,7 +207,12 @@ class GateMemoryAgent:
                                          bb.read("findings"))
             accepted.sort(key=lambda a: a[0] != primary)
             payload = compact.combine_side_payloads([e.payload for _, e, _ in accepted])
-            claims = merge(claims, payload)
+            if self.merge_rule == "model":
+                claims = merge(claims, payload)
+            else:                           # applied in apply_rule, every tick
+                self._tick_payload = payload
+                self._fresh_payload = compact.combine_side_payloads(
+                    [e.payload for s, e, _ in accepted if s not in reused])
             self.compact_log.append({"agent": "merge", "now_tick": now_tick,
                                      "evidence_ticks": [e.tick for _, e, _ in accepted],
                                      "order": [a[0] for a in accepted],
@@ -211,6 +223,34 @@ class GateMemoryAgent:
         if degraded is not None:
             bb.write("status", {"degraded_mode": degraded}, NAME)
             asmt.degraded_mode = degraded
+        return claims
+
+    def apply_rule(self, bb, claims: dict, now_tick: int) -> dict:
+        """Accuracy-fix decision 1: publish belief's order, changed by the
+        model only as the rule allows. Runs on EVERY non-QUIET tick (a nudge
+        persists on ticks with no answer). Logs whether the published top 3
+        differs from belief's and why."""
+        live = [h for h in bb.read("belief") if not h.retired]
+        model = (self._tick_payload or {}).get("hypotheses", [])
+        if self.merge_rule == "belief_only":
+            hyps, info = merge_rules.belief_only(live)
+        elif self.merge_rule == "tiebreak":
+            hyps, info = merge_rules.tiebreak(live, model)
+        elif self.merge_rule == "nudge":
+            offsets = dict(bb.read("model_evidence"))
+            fresh = (self._fresh_payload or {}).get("hypotheses", [])
+            if fresh:
+                offsets = merge_rules.add_nudges(offsets, fresh)
+                bb.write("model_evidence", offsets, NAME)
+            hyps, info = merge_rules.nudge(live, offsets)
+        else:
+            raise ValueError(f"unknown merge_rule {self.merge_rule!r}")
+        claims = dict(claims, hypotheses=hyps,
+                      unexplained=list((self._tick_payload or {}).get("unexplained", []))
+                      + list(claims.get("unexplained", [])))
+        self.compact_log.append({"agent": "rule", "now_tick": now_tick,
+                                 "model_ranked": [m.get("case_ref") for m in model], **info})
+        bb.write("diagnosis", claims, NAME)
         return claims
 
     @staticmethod

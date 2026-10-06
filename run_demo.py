@@ -145,6 +145,9 @@ def main():
     ap.add_argument("--tick-s", type=float, default=None,
                     help="real time: wall-clock seconds per tick (default the agent's "
                          "30 s; shorter for tests and quick demonstrations)")
+    ap.add_argument("--merge-rule", default=None,
+                    choices=["model", "belief_only", "tiebreak", "nudge"],
+                    help="overrides multi.merge_rule (--arch multi only)")
     ap.add_argument("--placement", default=None,
                     choices=["fixed", "earliest_finish"],
                     help="overrides multi.placement (--arch multi only)")
@@ -192,6 +195,8 @@ def main():
     cfg.setdefault("agent", {})["log_prompts"] = args.log_prompts
     if args.placement:
         cfg["multi"]["placement"] = args.placement
+    if args.merge_rule:
+        cfg["multi"]["merge_rule"] = args.merge_rule
     if args.compact is not None:
         from fieldmind.multi.compact import ALL_SECTIONS
         on = (set(ALL_SECTIONS) if args.compact == "all" else set() if

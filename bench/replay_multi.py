@@ -12,8 +12,10 @@ so a different merge RULE can be applied to the SAME model answers without
 the board. The model's answers are not re-generated; a rule that changes the
 prompt cannot be replayed, only one that changes what is done with an answer.
 
-Rules:
-  current   what the gate does today: the side answers are expanded (case and
+Rules (`model` is an alias of `current`; the others are
+fieldmind/multi/merge_rules.py, applied exactly as the gate applies them):
+  belief_only, tiebreak, nudge   see merge_rules.py
+  current   what the gate does under merge_rule `model`: the side answers are expanded (case and
             fact ids from the line map, confidence from belief, 0.3 when belief
             has no live entry), combined in side order, folded by the single
             agent's `merge` (model order wins), then the verifier's verdicts
@@ -39,7 +41,7 @@ from types import SimpleNamespace
 sys.path.insert(0, ".")
 from fieldmind.agent.l5_verify import Verifier
 from fieldmind.agent.orchestrator import initial_claims, merge
-from fieldmind.multi import compact
+from fieldmind.multi import compact, merge_rules
 
 CASES = {c["case_id"]: c for c in
          json.loads(Path("data/kb/case_library.json").read_text())["cases"]}
@@ -51,6 +53,20 @@ def load_run(path: str) -> dict:
     if isinstance(d, list):
         d = d[0]
     return d["runs"][0] if "runs" in d else d
+
+
+def _live(a: dict) -> list:
+    """Belief's live hypotheses in INSERTION order, as the gate reads them."""
+    order = a.get("belief_order") or []
+    sup = a.get("belief_supports") or {}
+    hs = [SimpleNamespace(case_ref=b["case_ref"], cause=b["cause"],
+                          confidence=b["confidence"], log_odds=b["log_odds"],
+                          supports=list(sup.get(b["case_ref"], [])),
+                          discriminator=CASES.get(b["case_ref"], {})
+                          .get("discriminating_evidence", ""), retired=False)
+          for b in a.get("belief_ranking") or []]
+    pos = {c: i for i, c in enumerate(order)}
+    return sorted(hs, key=lambda h: pos.get(h.case_ref, len(pos)))
 
 
 def _belief(a: dict) -> list:
@@ -95,7 +111,9 @@ def expand(rec: dict, live: list) -> dict:
 def replay(run: dict, rule: str = "current") -> list[dict]:
     """Per assessment: the published hypotheses [(case_ref, confidence,
     flags)] under `rule`. QUIET ticks give []."""
-    out, cache = [], {}
+    if rule == "model":
+        rule = "current"
+    out, cache, offsets = [], {}, {}
     for a in run["assessments"]:
         if a["triage"] == "QUIET" or not a.get("belief_ranking") and not a["hypotheses"]:
             out.append({"tick": a["tick"], "hyps": []})
@@ -103,7 +121,7 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
         live = _belief(a)
         claims = initial_claims(a["headline"], live[:3])
         recs = a.get("multi", {}).get("compact", [])
-        if rule == "current":
+        if rule in ("current",) + merge_rules.RULES[1:]:
             answers = {r["side"]: expand(r, live) for r in recs
                        if r.get("agent") == "diagnostician" and r.get("answer") is not None}
             m = next((r for r in recs if r.get("agent") == "merge"), None)
@@ -115,7 +133,25 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                     if s not in m["order"]:
                         del cache[s]
                 payload = compact.combine_side_payloads([answers[s] for s in m["order"]])
-                claims = merge(claims, payload)
+                fresh = compact.combine_side_payloads(
+                    [answers[s] for s in m["order"] if s not in m["reused"]])
+            else:
+                payload = fresh = None
+            if rule == "current":
+                if payload is not None:
+                    claims = merge(claims, payload)
+            else:
+                live = _live(a)
+                model = (payload or {}).get("hypotheses", [])
+                if rule == "belief_only":
+                    hyps, _ = merge_rules.belief_only(live)
+                elif rule == "tiebreak":
+                    hyps, _ = merge_rules.tiebreak(live, model)
+                else:
+                    if fresh and fresh["hypotheses"]:
+                        offsets = merge_rules.add_nudges(offsets, fresh["hypotheses"])
+                    hyps, _ = merge_rules.nudge(live, offsets)
+                claims = dict(claims, hypotheses=hyps)
             v = next((r for r in recs if r.get("agent") == "verifier"), None)
             if v and v.get("answer") is not None:
                 shown = claims["hypotheses"][:compact.MAX_CLAIMS]
@@ -124,11 +160,11 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                 payload, _ = compact.expand_ver_answer(v["answer"], lm)
                 payload["strongest_contradiction"] = None
                 claims = Verifier.apply(claims, payload)
-        elif rule != "belief":
+        if rule not in ("current", "belief") + merge_rules.RULES[1:]:
             raise ValueError(f"unknown rule {rule!r}")
         out.append({"tick": a["tick"],
                     "hyps": [(h["case_ref"], round(float(h["confidence"]), 6),
-                              tuple(k for k in ("model_only", "carried", "verifier")
+                              tuple(k for k in ("model_only", "carried", "verifier", "tiebreak", "nudged")
                                     if h.get(k)))
                              for h in claims["hypotheses"]]})
     return out
@@ -138,7 +174,7 @@ def published(run: dict) -> list[dict]:
     return [{"tick": a["tick"],
              "hyps": [] if a["triage"] == "QUIET" else
              [(h["case_ref"], round(float(h["confidence"]), 6),
-               tuple(k for k in ("model_only", "carried", "verifier") if h.get(k)))
+               tuple(k for k in ("model_only", "carried", "verifier", "tiebreak", "nudged") if h.get(k)))
               for h in a["hypotheses"]]} for a in run["assessments"]]
 
 

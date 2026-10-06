@@ -68,6 +68,13 @@ class MultiOrchestrator:
         self.ver = VerifierAgent(ver, acfg, mcfg)
         self.gate = GateMemoryAgent(gate, ver, acfg)
         self.compact = mcfg.get("compact") or {}
+        from .merge_rules import RULES
+        self.gate.merge_rule = mcfg.get("merge_rule", "model")
+        if self.gate.merge_rule not in RULES:
+            raise ValueError(f"multi.merge_rule must be one of {RULES}")
+        if self.gate.merge_rule != "model" and not mcfg.get("split"):
+            raise ValueError("merge_rule other than 'model' needs multi.split "
+                             "(it is applied to the combined side answers)")
         self.text = None
         if self.compact.get("text_reader"):
             vocab = compact.NoteVocab(TAGS, retriever.asset.equipment,
@@ -155,6 +162,10 @@ class MultiOrchestrator:
                 if r.finish_s is not None:
                     submit_s = max(submit_s, r.finish_s)
 
+        if self.gate.merge_rule != "model":
+            with bb.step("gate"):
+                claims = self.gate.apply_rule(bb, claims, tick_no)
+
         top_conf = top_confidence(claims)
         if self.ver.should_run(level, top_conf, self.rung):
             with bb.step("scheduler"):
@@ -185,6 +196,9 @@ class MultiOrchestrator:
     #  harness. Lockstep (`tick`) is untouched.
     # ===================================================================
     def start_realtime(self, runner) -> None:
+        if self.gate.merge_rule != "model":
+            raise NotImplementedError("merge_rule other than 'model' is lockstep "
+                                      "only (accuracy-fix work)")
         if not (self.diag.split and self.diag.on_change):
             raise ValueError("real-time mode needs multi.split and multi.split_on_change "
                              "(answers are cached per side and re-used until they "
