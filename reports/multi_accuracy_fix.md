@@ -1,11 +1,9 @@
 # Multi-agent accuracy recovery: report
 
 ## Status
-STEP 1 BUILT ON THE MOCK, NOT MEASURED. Pre-registration (`e1269a1`), Step 0 (`34ba9f7`) and amendment 1 (`354cd05`,
-committed before any merge-rule replay) are in. Step 1's three merge rules are built and verified on the mock dev run
-(correctness only). Nothing has been measured with the real model: baseline 3 and every step-1 board number need the
-QIDK, which is not attached to this machine. `bench/board_session.sh` runs baseline 3, its replay check and the
-single-agent reference in one session at the board laptop. Step 2 is not started.
+STEP 1 BUILT ON THE MOCK, NOT MEASURED; THREE PRE-BOARD RISKS CLOSED. Nothing has been measured with the real model:
+the QIDK is not attached to this machine. `bench/board_session.sh` (preflight, baseline 3, replay and model checks,
+single-agent reference) is ready for the board laptop. Step 2 is not started.
 
 **No accuracy claim is made in this work until the final gate (human decision 6) passes.** Mock numbers measure the
 deterministic and retrieval layers only. All plant data is synthetic.
@@ -373,11 +371,92 @@ differences, (c) ran on two episodes; a second start skipped every saved episode
 with exit 1 before (c). Two portability fixes to the runner were needed for that check and change nothing on the
 Fedora board laptop: `systemd-inhibit` is used only when present, and empty bash arrays are expanded safely.
 
+## Pre-board risks (closed before the board session)
+
+### Risk 1: does the merge rule feed back into the model's inputs? No, except the verifier (by design)
+Traced in the code, every input of every model call and of the call-or-reuse decision:
+
+| model call / decision | built from (board sections) | reads the published ranking? |
+|---|---|---|
+| diagnostician prompt (`agents/diagnostician._compact_job`, `compact.build_diagnosis`) | `facts`, `retrieval` (cases, notes, records), `notefacts`, `recordfacts`, `belief` (world line: belief's own top 3 by confidence), `trust`, `findings` (the long world summary, `wm_summary`, also reads belief, not claims); side split from facts and findings | **no** |
+| answer grammar (`grammar.diagnosis`) | the prompt's line map | no |
+| text-reader prompt (`agents/text_reader`) | one raw note + the fixed vocabulary; P2/P3 from this tick's facts | no |
+| call-or-reuse (`DiagnosticianAgent.fingerprint`, `gate._reuse`) | side signature, open findings, note-facts, cases shown; the cached payloads in `side_answers` | no (confidence in a cached payload comes from belief) |
+| retrieval and belief (`agents/retriever`) | facts, signature, case library | no |
+| triage | findings, residuals, trust, status (reset every tick in `begin_tick`) | no |
+| **verifier prompt** (`compact.build_verification`) | **the published claims (top 3)** and the tick's facts | **yes, by design** |
+
+The sections the gate writes from the published ranking (`diagnosis`, `verdict`, `assessment`) have no reader that
+builds a prompt or a reuse decision (grep of every `bb.read` in `fieldmind/multi`). The experience store is never
+written by the multi path. So under every rule the diagnostician and text reader are asked exactly the same thing;
+only the verifier is not. The verifier caps confidences and never reorders, so **A-vs-B group top-1 from the replay of
+baseline 3 is exact; nothing confidence-based from a cross-rule replay is reported.** No fix needed. (If you prefer
+the verifier judged on belief's order under every rule, that is a separate change; with decision 2 it is switched
+off at step 8 anyway.)
+
+Test `tests/test_rule_prompt_identity.py`: three dev episodes under all four rules on the mock, with a verifier that
+fails claims and runs on every eligible tick. Tick for tick, every diagnostician and text-reader prompt and every
+call-or-reuse record is identical across rules, while the published rankings do differ (asserted) and the verifier
+prompts differ (asserted, documenting the exception). Mutation check: a prompt that shows the last published rank 1
+(read from the `verdict` section) and a reuse fingerprint that reads it are both caught (3 tests each).
+
+### Risk 2: does the session's resume share code with the intermittent campaign test? No
+`tests/test_campaign.py::test_kill_minus_9_mid_episode_then_resume_is_identical` exercises `bench/campaign.py`'s own
+resume: a per-call cache (`CallLog`, cache hits replayed from the live call log), a job manifest with attempt counts,
+and `atomic_write`. `bench/board_session.sh` uses none of it: no import of `bench.campaign` in the session, its runner
+(`scripts/benchmark_multi_lockstep_all.sh`), `run_demo.py` or the harness's episode loop. Its resume is per episode in
+bash: an episode counts as done only when its summary exists, and the summary is the last file written (after the
+gzipped run, and after the model check on the board); an interrupted episode's live tick file is renamed
+`.interrupted-<time>` and the episode is re-run from tick 0 with no cache. The only code both use is the episode
+replay itself (`bench/harness.run_episode`), which is not part of either resume. The campaign test's intermittency
+(failed 2 of 3 runs with and without this work's changes) stays open and was not investigated.
+
+New test `tests/test_board_session.py` (the real script, `BACKEND=mock`): SIGKILL of the whole process group in the
+middle of `dev_D01_high_cv_coal` (after 30 of its ticks); the restart skips the finished episodes, redoes D01 from the
+start (final run has all its ticks, the half file kept apart), and passes (b). Then a half-written single-agent
+episode (run file but no summary, a broken tmp file) is redone, not skipped. Then a saved run whose ranking was
+tampered with makes (b) fail and the session stop before (c). Mutations caught: (a) treating a live tick file as
+finished; (c) treating a run file as finished; appending to the interrupted tick file; ignoring the replay check's
+result (caught after the tampered-run case was added).
+
+### Risk 3: preflight and silent fallback
+`bench/board_preflight.py`, run by the session before (a) on the board:
+- starts both lanes with the 3B (NPU :8080 `--device HTP0 -ngl 99`; CPU :8081 `--device none -ngl 0`), each through
+  `bench/board.start_lane`, which refuses a file whose name or on-board sha256 is not the recorded one;
+- each lane must answer `Reply with the single word OK.` with status ok, a non-empty answer, the server-reported model
+  equal to `Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf`, and the reply labelled with its lane;
+- placement from each server's own startup log: NPU every layer offloaded and a nonzero HTP0 buffer; CPU 0 layers and
+  no HTP0 buffer; both logs name the 3B file;
+- logs `/proc/meminfo` (MemTotal, MemFree, MemAvailable, swap) and each llama-server's VmRSS by port to
+  `preflight_<time>.json`; aborts if either RSS or MemAvailable cannot be read;
+- stops both lanes (the runner restarts them per episode) and exits 3 with every problem listed if anything fails.
+During the runs, the fallback check is repeated on the saved data: after (a), every model call of every quick-set run
+must report the 3B model and its placed lane (diagnosticians npu, verifier and text reader cpu) with no failed call;
+in (c), each single-agent episode is checked the same way (all npu) before its summary is written, so a bad episode is
+neither kept nor skipped on resume.
+Tests `tests/test_board_preflight.py` (6) on the pure checks; 8 mutations caught (model, backend, partial offload, CPU
+lane with an HTP0 buffer, run lane, run model, text-reader calls skipped, CLI exit code), one after a test case was
+added. **Not verified here:** the preflight against a real board (no board attached); that `pidof` and the
+`/proc/<pid>/cmdline` port extraction work on the QIDK's Android shell; memory headroom for two 3B servers.
+
+Full suite: 447 passed, 1 failed (the intermittent campaign test above).
+
 ## Blocked / needs a decision
-1. **The board session.** Run `bench/board_session.sh` at the board laptop and bring back
-   `results/accuracy_fix/board_session/`. Then: the A-vs-B adoption check (amendment item 1) on the replay of baseline
-   3, and the step-1 board run of the adopted rule on the quick set.
-2. Nothing else is decided or blocked; Step 2 waits by instruction.
+1. **The board session.** At the board laptop (Fedora, QIDK on USB), from the repo root:
+
+   ```
+   git fetch origin && git switch multi-agent-fix && git pull     # after this branch is pushed
+   source .venv/bin/activate
+   adb devices                                                     # the QIDK must be listed
+   adb shell sha256sum /data/local/tmp/llm/Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf
+   #   expect 5aa3ece50ab33d09a7181888a75f8755f924c662dc99626e7f45440adfeadcdb
+   ls data/episodes_dev | wc -l                                    # expect 36; else regenerate the dev set
+   .venv/bin/python -m pytest -q tests/test_board_preflight.py tests/test_board_session.py
+   bench/board_session.sh 2>&1 | tee logs/board_session_$(date +%Y%m%dT%H%M%S).log
+   ```
+   Same command again resumes. Exit 3 = preflight failed, nothing measured; exit 1 = (a), (b) or a (c) episode failed
+   (the message says which). Bring back `results/accuracy_fix/board_session/` and the log.
+2. Then: the A-vs-B adoption check on the replay of baseline 3, and the step-1 board run of the adopted rule.
 
 ## Open, not fixed here
 - `tests/test_campaign.py::test_kill_minus_9_mid_episode_then_resume_is_identical` is intermittent on unchanged code.

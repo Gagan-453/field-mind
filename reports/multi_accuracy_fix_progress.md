@@ -20,3 +20,6 @@ Updated and committed after every step. No accuracy claim until the final gate p
    (option A or B) and the single-agent reference schedule are open.
 2. **Step 1 (by instruction: Step 2 not started).** Rules built and verified on the mock; baseline 3, the A-vs-B check
    and the step-1 board run need `bench/board_session.sh` on the board laptop.
+3. **Pre-board risks closed.** Replay claim proven from code and by a cross-rule prompt-identity test (verifier is
+   the documented exception); session resume shown independent of the campaign's and tested with SIGKILL mid-episode;
+   preflight and per-run model/lane checks added. Board commands are in the report.

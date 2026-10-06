@@ -4,14 +4,20 @@
 #
 #     bench/board_session.sh
 #
+#   (0) PREFLIGHT (board only): both Llama 3B servers started, each answers a
+#       trivial prompt as the expected model on the expected backend, placement
+#       read from each server's own startup log, free memory and each server's
+#       RSS logged (bench/board_preflight.py). Any failure stops the session.
 #   (a) BASELINE 3: the current multi-agent (merge_rule model, i.e. unchanged),
 #       quick set, Llama 3.2 3B on both lanes (configs/accuracy.yaml), every
 #       prompt and raw reply saved.
 #   (b) CHECK: every saved quick-set run exists, holds its prompts and replies,
 #       and replays (bench/replay_multi.py --rule model --check) with 0
-#       differences. If (a) or (b) fails, the session stops HERE.
+#       differences; on the board, every model call in them reports the 3B model
+#       and the lane its agent is placed on. If (a) or (b) fails, it stops HERE.
 #   (c) SINGLE-AGENT REFERENCE (decision 6): the single agent, Llama 3.2 3B on
-#       the NPU lane, all 36 dev episodes, prompts saved.
+#       the NPU lane, all 36 dev episodes, prompts saved; on the board, every
+#       episode's model calls are checked for model and lane before it is kept.
 #
 # Resumable: an episode with a saved summary is skipped, in (a) and in (c); an
 # interrupted episode starts over. Chip temperature is logged before and after
@@ -46,6 +52,16 @@ MAX_WAIT_S=900
 on_board() { [ "$BACKEND" = llamaserver ]; }
 mkdir -p "$OUT_A" "$OUT_C/tmp" logs
 
+# ------------------------------------------------------------------ (0)
+if on_board; then
+    echo "=== (0) preflight: both lanes, Llama 3.2 3B ($(date +%Y-%m-%dT%H:%M:%S%z))"
+    mkdir -p "$ROOT"
+    if ! .venv/bin/python -m bench.board_preflight lanes "$ROOT/preflight_$(date +%Y%m%dT%H%M%S).json"; then
+        echo "(0) PREFLIGHT FAILED: nothing was measured. See the problems above." >&2
+        exit 3
+    fi
+fi
+
 # ------------------------------------------------------------------ (a)
 echo "=== (a) baseline 3: multi-agent, merge_rule model, quick set ($(date +%Y-%m-%dT%H:%M:%S%z))"
 OVERLAY=configs/accuracy.yaml NPU_MODEL=$LLAMA CPU_MODEL=$LLAMA MERGE_RULE=model \
@@ -77,6 +93,14 @@ done
 .venv/bin/python bench/replay_multi.py --rule model --check "$OUT_A"/*_multi.run.json.gz \
     | tee "$ROOT/step0_replay_check.txt"
 rc=${PIPESTATUS[0]}
+if [ "$rc" -eq 0 ] && on_board; then
+    .venv/bin/python -m bench.board_preflight runs multi "$OUT_A"/*_multi.run.json.gz \
+        | tee "$ROOT/step0_model_check.txt"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+        echo "(b) a model call ran on another model or lane: stopping before (c)." >&2
+        exit 1
+    fi
+fi
 if [ "$rc" -ne 0 ]; then
     echo "(b) the replay does not reproduce a saved run: stopping before (c)." >&2
     exit 1
@@ -134,6 +158,10 @@ for ep in "${ALL_DEV[@]}"; do
         exit 1
     fi
     gzip -c "$runs" > "$OUT_C/${ep}_single.run.json.gz" && rm "$runs"
+    if on_board && ! .venv/bin/python -m bench.board_preflight runs single "$OUT_C/${ep}_single.run.json.gz"; then
+        echo "$ep: a model call ran on another model or lane: not kept, stopping." >&2
+        exit 1
+    fi
     mv "$OUT_C/tmp/summary_${BACKEND}_$ep.json" "$OUT_C/${ep}_single.summary.json"
     echo "$ep: saved"
 done
