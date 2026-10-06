@@ -166,6 +166,32 @@ work; `--arch single` on dev still equals `results/baselines/single_v3_summary.j
 differences) as a regression check.
 
 
+
+## AMENDMENT 1 to the pre-registration: HUMAN DECISIONS for Step 1 (committed before any replay of a merge rule)
+1. **Merge rule.** Option B, `tiebreak` (0.35 log-odds band, recomputed every tick, nothing written to belief) is
+   PRIMARY. Option A, `nudge` (+0.35 to the model's rank 1, +0.175 to its rank 2, at most 1.2 per case per episode)
+   is a pre-registered SECONDARY arm. **A is adopted over B only if**, on the dev quick set replayed from baseline 3,
+   A beats B on published group top-1 by at least 0.03 AND does not lose to B by more than 0.05 on any single
+   episode. Otherwise B stands.
+2. Both are implemented in the gate behind `multi.merge_rule: {belief_only, tiebreak, nudge}` (plus `model`, the
+   earlier behaviour, kept as the default in `configs/base.yaml` so nothing else changes). `configs/accuracy.yaml`
+   defaults to `tiebreak`. Unit tests: tiebreak never moves a case outside the band; nudge respects the per-episode
+   cap; belief_only reproduces the Step 0 belief baseline exactly. Per tick the run logs whether the published order
+   differs from belief's and why.
+3. The replay is verified on the mock dev run only (correctness, not selection). Merge rules are **not** replayed on
+   the `outputs/` reporting runs for any decision.
+4. Report which GGUF path and sha256 `bench/board.py` expects for the CPU lane.
+5. `bench/board_session.sh`: (a) baseline 3, (b) replay check of the saved run with 0 differences, (c) the
+   single-agent full-dev reference with cooldown and temperature logged, resumable per episode; stops before (c) if
+   (a) or (b) fails.
+6. Step 2 is not started.
+
+Design detail fixed with this amendment (mine, recorded for review): the `nudge` offsets are kept in a gate-owned
+board section `model_evidence` and added to belief's log-odds only when ranking for publication; they are not written
+into the Hypothesis objects, so belief's own update, retirement and the single agent's belief stay unchanged and the
+offset can be reported and removed. A reused (cached) side answer gives no new nudge; only an answer made this tick
+does. Under `nudge` the published confidence is sigmoid(log-odds + offset).
+
 ---
 
 # Results
