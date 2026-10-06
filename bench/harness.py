@@ -237,6 +237,11 @@ def run_episode(ep: Episode, cfg: dict, ablate_text: bool = False,
         # Q3_rel (Phase 2): the DETERMINISTIC supports of every case belief
         # holds this tick, read from the world model after the tick. Both
         # arches; nothing in fieldmind/agent/ writes or reads it.
+        # Accuracy-fix step 0: belief's live hypotheses in INSERTION order, so an
+        # offline replay (bench/replay_multi.py) breaks confidence ties exactly as
+        # rank_hypotheses does. Both arches; nothing in fieldmind/ reads it.
+        d["belief_order"] = ([] if asmt.triage == "QUIET" else
+                             [h.case_ref for h in wm.hypotheses if not h.retired])
         d["belief_supports"] = ({} if asmt.triage == "QUIET" else
                                 {h.case_ref: list(h.supports)
                                  for h in wm.hypotheses if h.case_ref})

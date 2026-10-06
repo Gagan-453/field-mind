@@ -44,8 +44,17 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 unset PYTHONPATH
-NPU_MODEL=Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf
-CPU_MODEL=gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf
+# Overridable (accuracy-fix work, reports/multi_accuracy_fix.md):
+#   OVERLAY=configs/accuracy.yaml CPU_MODEL=<Llama GGUF> EPISODES_DIR=data/episodes_dev OUT=... \
+#   scripts/benchmark_multi_lockstep_all.sh dev_A01_fcv_seize ...
+# Every run saves every prompt and raw model reply (--log-prompts), so it can be
+# replayed offline (bench/replay_multi.py). LOG_PROMPTS=0 turns that off.
+NPU_MODEL=${NPU_MODEL:-Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf}
+CPU_MODEL=${CPU_MODEL:-gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf}
+OVERLAY=${OVERLAY:-configs/fast.yaml}
+EPISODES_DIR=${EPISODES_DIR:-data/episodes}
+LOG_PROMPTS=${LOG_PROMPTS:-1}
+PROMPT_FLAG=(); [ "$LOG_PROMPTS" = 1 ] && PROMPT_FLAG=(--log-prompts)
 BACKEND=${BACKEND:-llamaserver}
 if [ "$BACKEND" = llamaserver ]; then
     OUT=${OUT:-results/presentation_benchmark/multi_agent_LOCKSTEP_grammar_llama32-3b_gemma3-1b}
@@ -128,7 +137,7 @@ for ep in "${EPISODES[@]}"; do
     echo "=== $ep  started $(date +%Y-%m-%dT%H:%M:%S%z)  BACK TO BACK (lockstep)  backend $BACKEND" | tee "$OUT/${ep}_multi.log"
     PYTHONUNBUFFERED=1 systemd-inhibit --what=sleep:idle --why="FieldMind $ep" \
         .venv/bin/python run_demo.py --backend "$BACKEND" --arch multi \
-        --overlay configs/fast.yaml --mode lockstep \
+        --overlay "$OVERLAY" --mode lockstep --episodes-dir "$EPISODES_DIR" "${PROMPT_FLAG[@]}" \
         --episode "$ep" --verbose --live-ticks "$OUT/${ep}_multi.ticks.jsonl" \
         --tag "$ep" --out "$OUT/tmp" 2>&1 | tee -a "$OUT/${ep}_multi.log"
     rc=${PIPESTATUS[0]}

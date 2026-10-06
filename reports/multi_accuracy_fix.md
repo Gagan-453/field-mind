@@ -1,7 +1,11 @@
 # Multi-agent accuracy recovery: report
 
 ## Status
-PRE-REGISTRATION. Committed before any measurement or code in this work. Branch `multi-agent-fix`, made from `demo`
+STEP 0 PARTIAL, STOPPED. Pre-registration committed first (`e1269a1`). Step 0 code is done and two of its three
+baselines exist (belief-alone on full dev; the replay of the four saved board runs). The third, the current
+multi-agent on the quick set with the real model, is **not run: the QIDK is not attached to this machine**
+(`adb devices` empty). Step 1 is also blocked on decision 1 (A or B). The pre-registration below was committed
+before any measurement or code in this work. Branch `multi-agent-fix`, made from `demo`
 at `e9425c0` (the branch that produced the board runs in `outputs/`). `fieldmind/agent/` and `bench/model_choice.py`
 are not edited in this work.
 
@@ -161,3 +165,100 @@ cleared; every number that moves gets a stated cause or "unexplained"; a contrad
 work; `--arch single` on dev still equals `results/baselines/single_v3_summary.json`-era behaviour (mock, 0
 differences) as a regression check.
 
+
+---
+
+# Results
+
+## Step 0: no behaviour change
+What was built (one commit):
+- `scripts/benchmark_multi_lockstep_all.sh` now passes `--log-prompts` by default (`LOG_PROMPTS=0` turns it off) and
+  takes `OVERLAY`, `CPU_MODEL`, `NPU_MODEL`, `EPISODES_DIR` from the environment. Every prompt and raw reply
+  (diagnostician, verifier, text reader) is saved in the gzipped run file.
+- `configs/accuracy.yaml`: `configs/fast.yaml` with Llama 3.2 3B on BOTH lanes (decision 4). It differs from fast.yaml
+  only in the CPU lane's model.
+- `bench/harness.py` writes `belief_order` (belief's live hypotheses in insertion order) per assessment, both arches,
+  so a replay breaks confidence ties exactly as `rank_hypotheses` does. Nothing in `fieldmind/` reads it.
+- `bench/replay_multi.py`: re-applies a merge rule to a saved run's answers offline. Rules: `current` (today's gate)
+  and `belief` (belief-alone). The model's answers are not regenerated, so only rules that change what is done
+  with an answer can be replayed; a prompt change needs the board.
+
+### Baseline 1: belief-alone, full dev (36 episodes), from a mock run with the accuracy overlay
+Belief takes no model input, so this is the number a belief-only publication gives with any backend.
+
+| | library (13 episodes) | held-out (4 episodes) |
+|---|---|---|
+| **belief_group (belief-alone, decision 6 reference)** | **0.502** | **0.709** |
+| belief_group_tiefair | 0.477 | 0.700 |
+| belief_top1_tiefair | 0.375 | n/a |
+
+Per episode (belief_group): A01 0.018, A02 0.469, A03 0.237, A05 0.000, A06 0.034, B01 0.469, B02 1.000,
+B03 0.375, B05 0.695, C02 0.909, C04 0.600, D01 0.784, D03 0.939; held-out C01 0.725, C03 0.933, C05 0.367,
+C06 0.811. The library value equals the Phase 1 dev value (0.502): the belief layer has not changed.
+
+**Recorded, not acted on:** on dev, belief is almost never right on family A (A01 0.018, A05 0.0, A06 0.034), unlike
+reporting A01 (0.55). Any merge rule that keeps belief's order as the default cannot fix that; only the model or a
+belief fix (open item for `main`) can. Option B of decision 1 in particular can only act inside belief's near-ties.
+
+The same mock run's published group top-1 is 0.572 library / 0.474 held-out. **That is not an agent result**: the
+mock re-ranks retrieved cases by retrieval score.
+
+### Baseline 2: the replay is faithful
+| run | ticks compared | differences from what was published | of those, on a belief tie the run could not resolve |
+|---|---|---|---|
+| mock, full dev, accuracy overlay (has `belief_order`) | 5,850 | **0** | 0 |
+| outputs A01 (board, reporting set) | 130 | 2 | 2 |
+| outputs B01 | 175 | 2 | 2 |
+| outputs C01 | 172 | 0 | 0 |
+| outputs D01 | 310 | 1 | 1 |
+
+The board runs predate `belief_order`; their 5 differences are all ticks where belief's top 4 holds a confidence tie,
+broken by insertion order, which those files did not save. Replayed group top-1 (per tick) of the four outputs runs,
+current rule against belief rule: A01 0.594 / 0.547, B01 0.125 / 0.555, C01 0.791 / 0.977, D01 0.031 / 0.816 (the
+figures of the diagnosis, reproduced). These are reporting-set runs, shown for the diagnosis only, not used to decide.
+
+### Baseline 3: current multi-agent, quick set, Llama 3.2 3B on the board — NOT RUN
+The QIDK is not attached to this machine. Command for the board laptop (results to their own folder):
+
+```
+OVERLAY=configs/accuracy.yaml CPU_MODEL=Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf \
+EPISODES_DIR=data/episodes_dev OUT=results/accuracy_fix/board_step0 \
+scripts/benchmark_multi_lockstep_all.sh dev_A01_fcv_seize dev_A02_fcv_seize_fast dev_B01_tube_leak \
+  dev_B02_tube_leak_fast dev_C01_wet_coal dev_C02_feeder_trip dev_D01_high_cv_coal dev_D03_high_cv_severe \
+  dev_N01_normal dev_N02_normal
+```
+`bench/board.py` must list the Llama GGUF as allowed on the CPU lane (it checks the sha256; not verified here).
+
+### Single-agent reference (decision 6): does not exist on full dev
+See answer (b). Needs a full-dev single-agent board run with the current harness (estimate 7 to 9 h); not run.
+
+### Verification
+| step | result |
+|---|---|
+| ran the module | mock full dev with the accuracy overlay, 36 episodes, exit 0; replay on that run and on the four outputs runs |
+| self-tests | `tests/test_replay_multi.py` 7 passed; full suite 416 passed |
+| independent re-derivation | belief-alone two ways: evaluator `belief_group` 0.502 (library, scored window), and the Phase 1 dev report's value 0.502 from a different code version; equal. Replay of the current rule against the run's own published ranking: 0 differences over 5,850 ticks |
+| mutation check | 7 mutations, 7 caught (R2 only after the test gained a backend whose verifier fails a claim) |
+| regression | `--arch single`, dev, mock: 0 decision differences against the Phase 1 single run (new keys and prompt text excluded) |
+
+| mutation (`PYTHONDONTWRITEBYTECODE=1`, `__pycache__` cleared) | caught by |
+|---|---|
+| replay ignores insertion order on ties | `test_replay_of_the_current_rule_reproduces_the_published_ranking` |
+| replay skips the verifier | same (after adding `FailingVerifierMock`) |
+| replay ignores reused answers | same |
+| replay uses 0.5 instead of 0.3 for a case belief does not hold | same |
+| harness `belief_order` includes retired hypotheses | `test_belief_order_is_live_hypotheses_in_insertion_order` |
+| runner drops `--log-prompts` | `test_board_runner_passes_log_prompts_by_default` |
+| accuracy overlay keeps Gemma on the CPU lane | `test_accuracy_overlay_runs_one_model_on_both_lanes` |
+
+### Numbers that changed
+None. Step 0 changes no behaviour; the run files gain `belief_order`.
+
+### What I could not verify
+- The board run (baseline 3) and anything about Llama 3B on the CPU lane (speed, `bench/board.py` allow-list).
+- That replayed outputs runs are exact on tied ticks (5 ticks, insertion order not saved).
+
+## Blocked / needs a decision
+1. **Decision 1: option A or B** (or your own δ / Δ / ε). See "Decision 1: STOP". Step 1 waits.
+2. **Baseline 3 needs the board.** Run the command above on the QIDK laptop and bring back the folder.
+3. **Single-agent full-dev reference** for decision 6: when to schedule the 7 to 9 h run.
