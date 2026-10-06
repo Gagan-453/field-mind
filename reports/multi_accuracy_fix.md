@@ -308,8 +308,8 @@ Nothing below is used to choose a rule.
 `belief_only` gives 0.508 where the evaluator's `belief_group` gives 0.502. Cause, checked: the evaluator reads
 `belief_ranking` (log-odds order) and the published list is `rank_hypotheses` (confidence rounded to 3 decimals,
 ties in insertion order); their rank 1 differs on 13 of 1,982 ticks. Both are "belief alone"; the final gate
-(decision 6) compares the published metric of the multi-agent with `belief_group` as pre-registered, so this 0.006
-is in the gate's favour of belief-alone being slightly lower; recorded.
+(decision 6) compares the multi-agent's published metric with `belief_group`, as pre-registered, so on the mock dev
+set a belief-only publication would already clear that bar by 0.006 from this definitional difference alone. Recorded.
 
 Why replaying a different rule on baseline 3's answers is exact for group top-1: the diagnosis prompt shows belief's
 own top 3 (from the belief section), which no rule writes to, and the reuse fingerprint does not read the published
