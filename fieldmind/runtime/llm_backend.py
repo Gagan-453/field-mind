@@ -732,6 +732,7 @@ class LlamaServerBackend(LLMBackend):
 
     def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None,
                  grammar=None):
+        import http.client
         import socket
         import urllib.error
         import urllib.request
@@ -760,6 +761,12 @@ class LlamaServerBackend(LLMBackend):
             if isinstance(e.reason, (TimeoutError, socket.timeout)):
                 return fail("timeout", f"llama-server exceeded {self.timeout_s}s")
             return fail("error", f"connection: {e.reason}")
+        except (http.client.HTTPException, ConnectionError, OSError) as e:
+            # The board's USB / adb link dropping mid-call surfaces here
+            # (RemoteDisconnected, ConnectionResetError, IncompleteRead), not as
+            # a URLError. A failed call, never a crash: the tick keeps the
+            # deterministic answer (board run of 2026-10-07, single-agent B01).
+            return fail("error", f"connection dropped: {type(e).__name__}: {e}")
         latency = (time.perf_counter() - t0) * 1000
 
         try:

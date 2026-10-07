@@ -35,6 +35,9 @@ class _Handler(BaseHTTPRequestHandler):
         mode = _Handler.mode
         if mode == "slow":
             time.sleep(1.5)
+        if mode == "drop":                  # the link drops: no response at all
+            self.close_connection = True
+            return
         if mode == "http500":
             self.send_response(500)
             self.end_headers()
@@ -143,3 +146,12 @@ def test_registered_and_built_from_config(server):
                       "llamaserver": {"url": server, "lane": "cpu", "model_file": "m"}})
     assert isinstance(b, LlamaServerBackend)
     assert b.generate("x").backend == "cpu"
+
+
+def test_dropped_connection_is_a_failed_call_not_a_crash(server):
+    """2026-10-07: the board link dropped mid-call and http.client raised
+    RemoteDisconnected, which killed the run. It must be a failed call."""
+    _Handler.mode = "drop"
+    r = LlamaServerBackend(url=server, timeout_s=5).generate("x", max_tokens=8)
+    assert r.status == "error" and "connection dropped" in r.error
+    assert r.prefill_tokens is None and r.decode_tokens is None and r.text == ""
