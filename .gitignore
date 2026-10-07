@@ -55,3 +55,7 @@ results/presentation_benchmark/*.zip
 results/benchmarks/**/*.ticks.jsonl
 results/benchmarks/**/*.interrupted-*
 results/benchmarks/**/.tmp_*/
+
+# --- bev-decider weights (huggingface.co/avbiswas/bev-decider-0.4B, ~1 GB, CC-BY-NC):
+#     a separate git-lfs clone, never committed here
+bev-decider-0.4B/
