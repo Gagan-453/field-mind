@@ -215,6 +215,19 @@ multi:
   # and no longer measures the model. Off = the earlier behaviour exactly; on
   # in configs/fast.yaml (HUMAN DECISION 2026-10-05).
   grammar: false
+  # bev-decider (reports/bev_decider.md; HUMAN SIGN-OFF 2026-10-07): a third
+  # model, bev-decider-0.4B served by bev-decide on its own lane (a
+  # multi.lanes entry with `kind: decider`), picks among belief's top `top_k`
+  # cases whenever its evidence changes (offered cases, signature, open
+  # findings). The gate checks the answer and adds it to `nudge` as one more
+  # fresh answer (+0.35 to its pick, +0.175 to its second): the diagnosticians'
+  # and the decider's offsets are kept apart, summed, and the SUM is capped at
+  # 1.2 per case per episode (merge_rules.total_offsets). Needs merge_rule
+  # nudge. Off = the earlier behaviour exactly. On in configs/bev.yaml.
+  decider:
+    enabled: false
+    top_k: 3        # HUMAN DECISION 2026-10-07: belief's top 3
+    question: "Which root cause best explains the plant facts?"   # HUMAN DECISION 2026-10-07; fixed, never tuned
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json
   # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5

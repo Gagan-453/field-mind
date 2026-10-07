@@ -145,13 +145,14 @@ class MockBackend(LLMBackend):
             payload = {"note": "mock backend, no role-specific behaviour"}
 
         text = json.dumps(payload)
-        # Rough token accounting so the telemetry plumbing is exercised.
+        # Rough token accounting so the telemetry plumbing is exercised. The
+        # decider generates nothing (one forward pass), as BevDeciderBackend reports.
         return LLMReply(
             text=text,
             latency_ms=(time.perf_counter() - t0) * 1000 + self.latency_ms,
             backend="mock", model="mock-0",
             prefill_tokens=len(prompt) // 4,
-            decode_tokens=len(text) // 4,
+            decode_tokens=0 if role == "decider" else len(text) // 4,
             ttft_ms=self.latency_ms * 0.5,
         )
 

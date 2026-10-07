@@ -33,6 +33,7 @@ from ..agent.orchestrator import top_confidence
 from ..schemas import TAGS
 from . import compact
 from ..runtime.llm_backend import make_backend
+from .agents.decider import DeciderAgent
 from .agents.diagnostician import DiagnosticianAgent
 from .agents.gate import GateMemoryAgent
 from .agents.retriever import RetrieverAgent
@@ -81,6 +82,19 @@ class MultiOrchestrator:
         if self.gate.merge_rule != "model" and not mcfg.get("split"):
             raise ValueError("merge_rule other than 'model' needs multi.split "
                              "(it is applied to the combined side answers)")
+        # bev-decider (reports/bev_decider.md): off = the earlier behaviour
+        # exactly (no job, no section written, no telemetry key).
+        self.decider = None
+        dcfg = mcfg.get("decider") or {}
+        if dcfg.get("enabled"):
+            if self.gate.merge_rule != "nudge":
+                raise ValueError("multi.decider needs merge_rule 'nudge' (its pick "
+                                 "enters as a capped offset, never as the ranking)")
+            if not any(getattr(l, "kind", "llm") == "decider" for l in scheduler.lanes):
+                raise ValueError("multi.decider needs a lane of kind 'decider' "
+                                 "(multi.lanes.<lane>.kind: decider)")
+            self.decider = DeciderAgent(diag.backend, dcfg,
+                                        log_prompts=bool(acfg.get("log_prompts")))
         self.text = None
         if self.compact.get("text_reader"):
             vocab = compact.NoteVocab(TAGS, retriever.asset.equipment,
@@ -167,6 +181,23 @@ class MultiOrchestrator:
             for r in got:
                 if r.finish_s is not None:
                     submit_s = max(submit_s, r.finish_s)
+
+        # bev-decider: belief's leaders to bev-decide on its own lane, submitted
+        # with the tick (it reads belief, not the diagnosis); checked by the
+        # gate, then counted by apply_rule's nudge
+        if self.decider is not None and self.rung < 5 and level in MODEL_LEVELS:
+            with bb.step("scheduler"):
+                job = self.decider.make_job(bb, self.scheduler, tick_no, now_s)
+                got = []
+                if job is not None:
+                    self.scheduler.submit(job)
+                    bb.write("jobs", [job.to_dict()], "scheduler")
+                    got = self.scheduler.run_lockstep(now_s)
+            for r in got:
+                with bb.step("gate"):
+                    self.gate.fold_decider(bb, asmt, r, tick_no)
+            results += got
+            llm_used = llm_used or bool(got)
 
         if self.gate.merge_rule != "model":
             with bb.step("gate"):
@@ -380,7 +411,10 @@ class MultiOrchestrator:
     def run_telemetry(self) -> dict:
         p = sorted(self.p0_ms)
         pct = (lambda q: round(p[min(len(p) - 1, int(q * len(p)))], 4)) if p else (lambda q: None)
-        return {"placement": self.scheduler.placement,
+        extra = {} if self.decider is None else {"decider": {
+            "calls": self.decider.calls, "failed": self.decider.failed,
+            "rejected": self.gate.decider_rejected, "top_k": self.decider.top_k}}
+        return {**extra, "placement": self.scheduler.placement,
                 "compact_switches": dict(self.diag.sw),
                 "split": self.diag.split,
                 "split_on_change": self.diag.on_change,
@@ -411,7 +445,14 @@ def make_lanes(cfg: dict, shared_backend) -> list[SimLane]:
     call; on any other backend the lanes share one backend."""
     lanes = []
     for name, lc in cfg["multi"]["lanes"].items():
-        if cfg["llm"]["backend"] == "llamaserver":
+        kind = lc.get("kind", "llm")
+        if kind == "decider" and cfg["llm"]["backend"] == "llamaserver":
+            # bev-decider: bev-decide on the board, its own server and model
+            backend = make_backend({"backend": "bevdecider", "bevdecider": {
+                "url": lc["url"], "lane": name,
+                "model_file": lc.get("model_file", "unknown"),
+                "timeout_s": cfg["llm"].get("llamaserver", {}).get("timeout_s", 60.0)}})
+        elif cfg["llm"]["backend"] == "llamaserver":
             llm = dict(cfg["llm"])
             llm["llamaserver"] = {**cfg["llm"].get("llamaserver", {}),
                                   "url": lc["url"], "lane": name}
@@ -420,6 +461,7 @@ def make_lanes(cfg: dict, shared_backend) -> list[SimLane]:
             backend = make_backend(llm)
         else:
             backend = shared_backend
-        lanes.append(SimLane(name, backend, lc["prefill_tok_s"], lc["decode_tok_s"]))
+        lanes.append(SimLane(name, backend, lc["prefill_tok_s"], lc["decode_tok_s"],
+                             kind=kind))
     return lanes
 

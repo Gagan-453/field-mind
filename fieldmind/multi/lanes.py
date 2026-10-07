@@ -35,11 +35,21 @@ class LaneBusy(AssertionError):
     """A second job was started on a lane that is still running one."""
 
 
+LANE_KINDS = ("llm", "decider")
+
+
 class SimLane:
+    """`kind` (multi.lanes.<lane>.kind, default "llm"): an "llm" lane runs the
+    text-generating agents; a "decider" lane runs bev-decide (bev-decider) and
+    only the decider agent (scheduler.eligible_lanes)."""
+
     def __init__(self, name: str, backend, prefill_tok_s: float,
-                 decode_tok_s: float):
+                 decode_tok_s: float, kind: str = "llm"):
         if prefill_tok_s <= 0 or decode_tok_s <= 0:
             raise ValueError(f"lane {name}: rates must be positive")
+        if kind not in LANE_KINDS:
+            raise ValueError(f"lane {name}: kind must be one of {LANE_KINDS}, got {kind!r}")
+        self.kind = kind
         self.name = name
         self.backend = backend
         self.prefill_tok_s = float(prefill_tok_s)
@@ -99,7 +109,8 @@ class SimLane:
         self.running = None
 
     def telemetry(self) -> dict:
-        return {"lane": self.name, "prefill_tok_s": self.prefill_tok_s,
+        extra = {} if self.kind == "llm" else {"kind": self.kind}
+        return {"lane": self.name, **extra, "prefill_tok_s": self.prefill_tok_s,
                 "decode_tok_s": self.decode_tok_s, "n_jobs": self.n_jobs,
                 "busy_s": round(self.busy_s, 3), "free_at": round(self.free_at, 3)}
 

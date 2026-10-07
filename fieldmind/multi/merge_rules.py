@@ -134,6 +134,16 @@ def add_nudges(offsets: dict, fresh_model_hyps: list[dict],
     return out
 
 
+def total_offsets(model: dict, decider: dict, cap: float = CAP) -> dict:
+    """bev-decider: the diagnosticians' and the decider's offsets, kept apart
+    on the board, summed per case for `nudge`, the SUM capped at CAP -- so the
+    model side as a whole still moves a case by at most CAP per episode, the
+    bound nudge had before the decider. With no decider offsets this is
+    `model` unchanged (each of its values is already <= CAP)."""
+    return {c: min(cap, round(model.get(c, 0.0) + decider.get(c, 0.0), 4))
+            for c in sorted(set(model) | set(decider))} if decider else dict(model)
+
+
 def nudge(live: list, offsets: dict) -> tuple[list[dict], dict]:
     """Belief log-odds + the model's offset; ties keep insertion order."""
     order = _belief_order(live)
