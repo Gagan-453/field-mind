@@ -157,3 +157,90 @@ def test_single_agent_ticks_show_diagnosis_and_verifier_calls(tmp_path):
     n_env = sum(e["agent"] in ("diagnostician", "verifier") for a in recs for e in a["envelopes"])
     assert len(model["jobs"]) == n_env > 0
     assert {j["agent"] for j in model["jobs"]} <= {"diagnostician", "verifier"}
+
+
+# ---- safety checks added to the runner (accuracy-fix work) ----------------
+def _runner(run_arch="multi", board=False, rule="model"):
+    from types import SimpleNamespace
+    from bench.benchmark import Runner
+    me = SimpleNamespace(args=SimpleNamespace(arch=run_arch), board=board,
+                         test=SimpleNamespace(params={"merge_rule": rule, "models": {
+                             "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+                             "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf"}}),
+                         cfg={"multi": {"fixed_placement": {"diagnostician": "npu", "diag_water": "npu",
+                                                            "diag_heat": "npu", "verifier": "cpu",
+                                                            "text_reader": "cpu"}}})
+    return lambda run: Runner.check_run(me, run)
+
+
+def _saved(first, ep="dev_C01_wet_coal"):
+    d, _ = first
+    return json.loads(gzip.decompress((d / f"{ep}_multi.run.json.gz").read_bytes()))
+
+
+@needs_dev
+def test_a_kept_run_passed_its_replay_check(first):
+    d, _ = first
+    meta = json.loads((d / "dev_C01_wet_coal_multi.summary.json").read_text())["meta"]
+    assert meta["checks"]["replay"] == "0 differences"
+    assert _runner()(_saved(first)) == []
+
+
+@needs_dev
+def test_a_run_whose_ranking_does_not_replay_is_rejected(first):
+    run = _saved(first)
+    a = next(x for x in run["assessments"] if len(x["hypotheses"]) >= 2)
+    a["hypotheses"][0], a["hypotheses"][1] = a["hypotheses"][1], a["hypotheses"][0]
+    probs = _runner()(run)
+    assert probs and "replay" in probs[0]
+
+
+@needs_dev
+def test_on_the_board_a_call_from_the_wrong_model_or_lane_is_rejected(first):
+    run = _saved(first)
+    L, G = "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf", "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf"
+    for a in run["assessments"]:                           # what a correct board run looks like
+        for e in a["envelopes"]:
+            e["backend"] = "npu" if e["agent"] == "diagnostician" else "cpu"
+            e["model"] = f"/data/local/tmp/llm/{L if e['backend'] == 'npu' else G}"
+        for t in a["multi"]["text"]:
+            t["envelope"].update(backend="cpu", model=f"/data/local/tmp/llm/{G}")
+    check = _runner(board=True)
+    assert check(run) == []
+    e = next(e for a in run["assessments"] for e in a["envelopes"] if e["agent"] == "diagnostician")
+    e["backend"] = "cpu"                                    # silently fell back to the CPU lane
+    assert any("backend" in p for p in check(run))
+    e["backend"], e["model"] = "npu", f"/data/local/tmp/llm/{G}"   # wrong model on the NPU
+    assert any("model" in p for p in check(run))
+
+
+def test_preflight_failure_stops_the_batch_before_any_episode(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    import threading
+    from bench import benchmark as b
+    monkeypatch.setattr(b.board_preflight, "preflight",
+                        lambda out, models=None: (Path(out).write_text('{"problems": ["npu: x"]}'), 1)[1])
+    ran = []
+    me = SimpleNamespace(board=True, test=SimpleNamespace(dir=tmp_path, params={"models": {}}),
+                         error=None, stop=threading.Event(), episodes=["e"], lock=threading.Lock(),
+                         say=lambda m: None, episode=lambda ep: ran.append(ep) or True)
+    monkeypatch.setattr(b.board, "stop_lanes", lambda *a, **k: "")
+    b.Runner.run(me)
+    assert ran == [] and "PREFLIGHT FAILED" in me.error and "npu: x" in me.error
+
+
+@needs_dev
+def test_an_episode_that_fails_its_checks_is_rejected_not_kept(tmp_path):
+    code = ("import sys, bench.benchmark as b; from pathlib import Path; "
+            f"b.ROOT_RESULTS = Path({str(tmp_path)!r}); "
+            "b.Runner.check_run = lambda self, run: ['forced problem']; "
+            "sys.argv = ['benchmark.py', 'rej', 'ep_N01_normal', '--backend', 'mock', '--plain']; "
+            "raise SystemExit(b.main())")
+    p = subprocess.run([sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, timeout=600)
+    d = tmp_path / "rej"
+    assert not (d / "ep_N01_normal_multi.summary.json").exists()
+    assert not (d / "ep_N01_normal_multi.run.json.gz").exists()
+    assert (d / "ep_N01_normal_multi.REJECTED.run.json.gz").exists()
+    t = json.loads((d / "test.json").read_text())
+    assert t["runs"][-1]["status"] == "failed_check" and t["runs"][-1]["problems"] == ["forced problem"]
+    assert "forced problem" in p.stdout + p.stderr

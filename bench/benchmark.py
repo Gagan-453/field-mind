@@ -71,6 +71,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from bench import board                                            # noqa: E402
+from bench import board_preflight, replay_multi                     # noqa: E402
 from bench.stage_monitor_multi import (Screen, SlotPoller, _c,     # noqa: E402
                                        episode_dir)
 
@@ -312,6 +313,13 @@ class Runner(threading.Thread):
     def run(self) -> None:
         try:
             if self.board:
+                self.say("preflight: both lanes start, answer, right model, right chip")
+                pf = self.test.dir / f"preflight_{stamp()}.json"
+                if board_preflight.preflight(str(pf), models=self.test.params["models"]) != 0:
+                    probs = json.loads(pf.read_text()).get("problems", [])
+                    self.error = ("PREFLIGHT FAILED, nothing was measured:\n  "
+                                  + "\n  ".join(probs) + f"\n(details: {_rel(pf)})")
+                    return
                 self.say("stopping any lanes and reading the chip temperature")
                 board.stop_lanes()
                 self.base_c = self.temp()
@@ -394,8 +402,21 @@ class Runner(threading.Thread):
                 tail = log.with_name(log.name).read_text()[-1500:] if log.exists() else ""
                 self.error = f"{ep} failed (exit {rc}). End of its log:\n{tail}"
             return False
-        self.say(f"saving {ep}")
+        self.say(f"checking {ep}")
         run = json.loads(runs.read_text())[0]
+        problems = self.check_run(run)
+        if problems:
+            entry.update(status="failed_check", problems=problems[:20])
+            test.save()
+            bad = d / f"{stem}.REJECTED.run.json.gz"
+            with gzip.open(bad, "wt") as f:
+                json.dump(run, f)
+            self.keep_partial(stem)
+            shutil.rmtree(out, ignore_errors=True)
+            self.error = (f"{ep}: the saved run failed its checks and was NOT kept as a result "
+                          f"(kept for inspection as {_rel(bad)}):\n  " + "\n  ".join(problems[:8]))
+            return False
+        self.say(f"saving {ep}")
         ev = json.loads(summ.read_text())["per_episode"][0]
         stats = run_stats(run)
         meta = {"test": test.name, "episode": ep, "run": n, "params": test.params,
@@ -404,7 +425,9 @@ class Runner(threading.Thread):
                 "chip_c_before": c0, "chip_c_after": c1, "cool_wait_s": waited,
                 "where": ("agent code on the laptop, model calls on the board" if self.board
                           else "MOCK backend on the laptop: plumbing only, NOT an agent result"),
-                "energy_mwh": None}
+                "energy_mwh": None,
+                "checks": {"replay": "0 differences" if self.args.arch == "multi" else "n/a",
+                           "models_and_lanes": "ok" if self.board else "n/a (mock)"}}
         write_json(d / f"{stem}.summary.json", {"meta": meta, "evaluation": ev, "calls": stats})
         with gzip.open(d / f"{stem}.run.json.gz", "wt") as f:
             json.dump(run, f)
@@ -417,6 +440,32 @@ class Runner(threading.Thread):
             self.current = dict(self.current, finished=True)
         self.done_lines.append(one_line(ep, n, ev, stats, entry))
         return True
+
+    def check_run(self, run: dict) -> list[str]:
+        """Before a run is kept as a result: (1) multi: the offline replay of its
+        own merge rule reproduces every published ranking, so the file is
+        complete and can be replayed later; (2) board: every model call came
+        from the configured model on the lane its agent is placed on (catches a
+        lane that silently served another model or fell back to the CPU)."""
+        problems = []
+        if self.args.arch == "multi":
+            rule = self.test.params.get("merge_rule") or "model"
+            rep, pub = replay_multi.replay(run, rule), replay_multi.published(run)
+            diffs = [x["tick"] for x, y in zip(rep, pub) if x["hyps"] != y["hyps"]]
+            if len(rep) != len(pub) or diffs:
+                problems.append(f"replay of merge rule {rule!r} differs from the published "
+                                f"ranking on {len(diffs)} ticks (first: {diffs[:5]})")
+        if self.board:
+            fp = self.cfg.get("multi", {}).get("fixed_placement", {})
+            placement = {"diagnostician": tuple({fp.get("diagnostician", "npu"),
+                                                 fp.get("diag_water", "npu"),
+                                                 fp.get("diag_heat", "npu")}),
+                         "verifier": fp.get("verifier", "cpu"),
+                         "text_reader": fp.get("text_reader", "cpu")}
+            problems += board_preflight.check_run_models(
+                run, self.args.arch, lane_models=self.test.params["models"],
+                placement=placement)
+        return problems
 
     def keep_partial(self, stem: str) -> None:
         """Ticks, log and lane lines of a stopped attempt, kept under another name."""

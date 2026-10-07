@@ -336,3 +336,24 @@ Files:
 - `bench/stage_monitor_multi.py`: the monitor. It can also view a run on its own:
   `.venv/bin/python bench/stage_monitor_multi.py`
 - `tests/test_benchmark.py`: the tests
+
+## 14. Safety checks (added 7 October 2026, accuracy-fix work)
+
+On the board, three checks guard every result. `bench/board_session.sh` was retired; this command is the only
+board runner.
+
+1. **Preflight, once per batch, before any episode.** Both lanes are started with the models of the test, each must
+   answer a trivial prompt with status ok as the expected model on the expected lane, and each server's startup log
+   must show the right placement (NPU: every layer offloaded and a nonzero HTP0 buffer; CPU: none). Free memory and
+   each server's RSS are logged (`preflight_<time>.json`); failing to read them is only a warning. Any other
+   failure stops the batch with `PREFLIGHT FAILED` and nothing is measured.
+2. **Replay check, every multi-agent episode.** Before a run is kept, `bench/replay_multi.py` replays its own merge
+   rule on the saved answers and must reproduce every published ranking. This proves the file is complete and can
+   be used later to compare merge rules without the board.
+3. **Model and lane check, every episode on the board.** Every model call in the saved run must report the
+   configured model on the lane its agent is placed on, with no failed call.
+
+A run that fails check 2 or 3 is not kept as a result: it is saved as `<ep>_<arch>.REJECTED.run.json.gz`, the
+test records it as `failed_check` with the problems, and the batch stops. Each kept summary records
+`meta.checks`.
+
