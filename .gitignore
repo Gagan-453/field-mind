@@ -48,3 +48,7 @@ bench/tokenizers/*/
 logs/
 # zips the person made to hand the folders to another chat: copies of the folders above
 results/presentation_benchmark/*.zip
+
+# --- bev-decider weights (huggingface.co/avbiswas/bev-decider-0.4B, ~1 GB, CC-BY-NC):
+#     a separate git-lfs clone, never committed here
+bev-decider-0.4B/
