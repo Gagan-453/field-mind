@@ -41,12 +41,18 @@ def _launched(calls):
 
 
 def test_nothing_starts_while_the_build_sha256s_are_not_recorded(monkeypatch):
+    """Whatever is recorded in bench/board.py today: a missing value refuses."""
     fake, calls = _fake_adb(lambda p: "a" * 64)
     monkeypatch.setattr(board, "_adb", fake)
-    assert board.BEV_BINARY_SHA256 is None or any(v is None for v in board.BEV_FILES.values())
-    with pytest.raises(board.ModelNotAllowed, match="no recorded sha256"):
-        board.start_bev(MODEL)
-    assert not _launched(calls)
+    for missing in ("bev-decider-0.4B-backbone-Q8_0.gguf", "bev_head.bin", "bev_head.json", "binary"):
+        _record(monkeypatch)
+        if missing == "binary":
+            monkeypatch.setattr(board, "BEV_BINARY_SHA256", None)
+        else:
+            monkeypatch.setitem(board.BEV_FILES, missing, None)
+        with pytest.raises(board.ModelNotAllowed, match="no recorded sha256"):
+            board.start_bev(MODEL)
+        assert not _launched(calls), missing
 
 
 def test_a_file_that_is_not_a_bev_model_is_refused(monkeypatch):
