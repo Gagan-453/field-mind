@@ -78,12 +78,18 @@ OWNERS: dict[str, str] = {
     # Phase 3 (call only on change): each side's last CHECKED answer and the
     # fingerprint of the evidence it answered. Written by the gate only.
     "side_answers": "gate",
+    # bev-decider (reports/bev_decider.md): the decider's last CHECKED answer
+    # with the fingerprint of its evidence, and its capped per-case nudge
+    # offsets for the episode (kept apart from the diagnosticians' so each is
+    # reported; never written into belief). Written by the gate only.
+    "decider_answer": "gate",
+    "decider_evidence": "gate",
 }
 
 # Every agent that takes a step. The diagnostician and verifier own no section:
 # their answers come back as Results and only the gate writes them onto the
 # board. The text reader owns `notefacts` but writes only gate-checked answers.
-MODEL_AGENTS = ["diagnostician", "verifier"]
+MODEL_AGENTS = ["diagnostician", "verifier", "decider"]
 AGENTS = sorted(set(OWNERS.values())) + MODEL_AGENTS
 
 
@@ -215,6 +221,8 @@ class Blackboard:
             "recordfacts": [],
             "model_evidence": {},
             "side_answers": {},         # side -> {fingerprint, payload, evidence_tick}
+            "decider_answer": {},       # {fingerprint, ranking, probabilities, evidence_tick}
+            "decider_evidence": {},     # case id -> offset
         }
         self._active: str | None = None
         self.writes: dict[str, int] = {s: 0 for s in OWNERS}

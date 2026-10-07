@@ -1,0 +1,322 @@
+"""bev-decider in the multi-agent (reports/bev_decider.md).
+
+Every assertion is on what an episode publishes or on the board, never on the
+arithmetic that produced it. The decider's backends below are mocks that
+answer in bev-decide's /v1/systemone format; they test the plumbing and the
+rules, not bev-decider.
+"""
+import json
+import math
+from pathlib import Path
+
+import pytest
+import yaml
+
+from fieldmind.multi import merge_rules as mr
+from fieldmind.multi.agents.decider import check_answer
+from fieldmind.multi.blackboard import Blackboard, WriterError
+from fieldmind.multi.lanes import SimLane
+from fieldmind.multi.scheduler import Scheduler
+from fieldmind.runtime.llm_backend import LLMReply, MockBackend, register_backend
+
+ROOT = Path(__file__).resolve().parent.parent
+DEV = ROOT / "data/episodes_dev"
+EP = "dev_A01_fcv_seize"
+
+needs_dev = pytest.mark.skipif(not (DEV / EP).exists(), reason="dev episodes not generated")
+
+
+# ------------------------------------------------------------ decider mocks
+def _answer(choice, probs):
+    return json.dumps({"answers": {"root_cause": {"type": "choice", "choice": choice,
+                                                  "probabilities": probs}}})
+
+
+class ContrarianMock(MockBackend):
+    """The decider always backs the LAST offered case (belief's third)."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role != "decider":
+            return super().generate(prompt, role, max_tokens, mock_hint)
+        keys = mock_hint["options"]
+        probs = {k: (0.9 if k == keys[-1] else 0.1 / (len(keys) - 1)) for k in keys}
+        return LLMReply(text=_answer(keys[-1], probs), backend="mock", model="mock-0",
+                        prefill_tokens=None, decode_tokens=0)
+
+
+class RogueMock(MockBackend):
+    """The decider names a case it was not offered."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role != "decider":
+            return super().generate(prompt, role, max_tokens, mock_hint)
+        probs = {k: 0.0 for k in mock_hint["options"][1:]}
+        probs["RCA-99"] = 1.0
+        return LLMReply(text=_answer("RCA-99", probs), backend="mock", model="mock-0")
+
+
+class DownMock(MockBackend):
+    """bev-decide is unreachable: every decider call fails."""
+    seen = []
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role != "decider":
+            return super().generate(prompt, role, max_tokens, mock_hint)
+        DownMock.seen.append(prompt)
+        return LLMReply(text="", status="error", error="connection: refused",
+                        backend="mock", model="mock-0", prefill_tokens=None, decode_tokens=None)
+
+
+for _n, _c in (("mock_contrarian", ContrarianMock), ("mock_rogue", RogueMock), ("mock_down", DownMock)):
+    register_backend(_n, _c)
+
+
+def _cfg(backend="mock", decider=True, overlay="bev.yaml"):
+    from run_demo import _deep_merge
+    cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    _deep_merge(cfg, yaml.safe_load((ROOT / "configs" / overlay).read_text()))
+    cfg["llm"]["backend"] = backend
+    cfg["agent"]["log_prompts"] = True
+    cfg["multi"]["merge_rule"] = "nudge"
+    cfg["multi"]["decider"]["enabled"] = decider
+    return cfg
+
+
+def _run(cfg, ep=EP):
+    from bench.harness import Episode, run_episode
+    return run_episode(Episode(DEV / ep), cfg, arch="multi")
+
+
+def _records(run, agent):
+    return [c for a in run["assessments"] for c in (a.get("multi") or {}).get("compact", [])
+            if c.get("agent") == agent]
+
+
+def _published(run):
+    return [[h.get("case_ref") for h in a["hypotheses"]] for a in run["assessments"]]
+
+
+@pytest.fixture(scope="module")
+def runs():
+    if not (DEV / EP).exists():
+        pytest.skip("dev episodes not generated")
+    return {
+        # arm A: accuracy.yaml + nudge, no decider anywhere in the config
+        "A": _run(_cfg(decider=False, overlay="accuracy.yaml")),
+        # the bev.yaml config with the decider switched off (lane present, idle)
+        "off": _run(_cfg(decider=False)),
+        "mock": _run(_cfg()),
+        "contrarian": _run(_cfg("mock_contrarian")),
+        "rogue": _run(_cfg("mock_rogue")),
+        "down": _run(_cfg("mock_down")),
+    }
+
+
+# ---------------------------------------------------------------- off = same
+@needs_dev
+def test_decider_off_publishes_exactly_what_arm_a_publishes(runs):
+    a, off = runs["A"], runs["off"]
+    assert [x["hypotheses"] for x in off["assessments"]] == [x["hypotheses"] for x in a["assessments"]]
+    assert [x["actions"] for x in off["assessments"]] == [x["actions"] for x in a["assessments"]]
+    assert [x["state"] for x in off["assessments"]] == [x["state"] for x in a["assessments"]]
+    assert "decider" not in off["multi"] and not _records(off, "decider")
+
+
+@needs_dev
+def test_a_decider_that_never_counts_changes_nothing_published(runs):
+    """Rejected (rogue) and failed (down) answers reach no offset: the episode
+    publishes what arm A publishes, tick for tick."""
+    for k in ("rogue", "down"):
+        assert _published(runs[k]) == _published(runs["A"]), k
+        assert not any("decider_offsets" in r for r in _records(runs[k], "rule")), k
+
+
+# ------------------------------------------------------------ gate checking
+@needs_dev
+def test_an_answer_naming_a_case_not_offered_is_rejected_every_time(runs):
+    r = runs["rogue"]
+    t = r["multi"]["decider"]
+    assert t["calls"] > 0 and t["rejected"] == t["calls"] and t["failed"] == 0
+    assert all("ranking" not in d and "offered" in d["why"] for d in _records(r, "decider"))
+
+
+@needs_dev
+def test_a_failed_call_is_logged_and_asked_again_next_tick(runs):
+    r = runs["down"]
+    t = r["multi"]["decider"]
+    recs = _records(r, "decider")
+    assert t["failed"] == t["calls"] == len(recs) > 0
+    assert all(d["status"] == "error" for d in recs)
+    # nothing was kept, so unchanged evidence is asked about again: more calls
+    # than the run whose answers are kept and re-used
+    assert t["calls"] > runs["mock"]["multi"]["decider"]["calls"]
+
+
+@pytest.mark.parametrize("payload,why", [
+    ({"type": "noul", "noul": 0.9}, "not a choice"),
+    ({"type": "choice", "choice": "A", "probabilities": {"A": 0.6, "B": 0.4}}, "offered"),
+    ({"type": "choice", "choice": "A", "probabilities": {"A": 0.5, "B": 0.3, "C": 0.1, "D": 0.1}}, "offered"),
+    ({"type": "choice", "choice": "A", "probabilities": {"A": 1.2, "B": 0.0, "C": 0.0}}, "probability of A"),
+    ({"type": "choice", "choice": "A", "probabilities": {"A": True, "B": 0.0, "C": 0.0}}, "probability of A"),
+    ({"type": "choice", "choice": "Z", "probabilities": {"A": 0.5, "B": 0.3, "C": 0.2}}, "not offered"),
+])
+def test_check_answer_refuses(payload, why):
+    ok, msg, ranking = check_answer(payload, ["A", "B", "C"])
+    assert not ok and why in msg and ranking == []
+
+
+def test_check_answer_ranks_by_probability_ties_in_belief_order():
+    ok, _, ranking = check_answer({"type": "choice", "choice": "B",
+                                   "probabilities": {"A": 0.2, "B": 0.4, "C": 0.4}}, ["A", "B", "C"])
+    assert ok and ranking == ["B", "C", "A"]
+
+
+# -------------------------------------------------------------- capped nudge
+@needs_dev
+def test_the_contrarian_decider_moves_the_ranking_but_never_past_the_cap(runs):
+    r = runs["contrarian"]
+    rules = [x for x in _records(r, "rule") if "decider_offsets" in x]
+    assert rules, "the decider's answers never reached the nudge"
+    for x in rules:
+        assert max(x["offsets"].values()) <= mr.CAP + 1e-9                 # the SUM is capped
+        assert max(x["decider_offsets"].values()) <= mr.CAP + 1e-9
+        for c, v in x["offsets"].items():                                    # sum, capped
+            want = min(mr.CAP, x["model_offsets"].get(c, 0) + x["decider_offsets"].get(c, 0))
+            assert v == pytest.approx(want, abs=1e-4)
+    # it did change what was published somewhere (else this test proves nothing)
+    assert _published(r) != _published(runs["A"])
+
+
+@needs_dev
+def test_the_diagnosticians_offsets_are_untouched_by_the_decider(runs):
+    """The decider's offsets live apart: the diagnosticians' own offsets follow
+    the same path tick for tick as in arm A (their answers do not depend on what
+    is published, tests/test_rule_prompt_identity.py), whatever the decider says."""
+    def model_offsets(run):
+        return [x.get("model_offsets", x.get("offsets")) for x in _records(run, "rule")]
+    base = model_offsets(runs["A"])
+    for k in ("mock", "contrarian"):
+        assert model_offsets(runs[k]) == base, k
+
+
+def test_total_offsets_sums_and_caps_and_is_the_identity_without_a_decider():
+    model = {"A": 1.0, "B": 0.35}
+    assert mr.total_offsets(model, {}) == model
+    assert mr.total_offsets(model, {"A": 0.35, "C": 0.175}) == {"A": 1.2, "B": 0.35, "C": 0.175}
+
+
+# -------------------------------------------------- belief is never written
+@needs_dev
+def test_belief_is_identical_with_and_without_the_decider(runs):
+    """Plan rule: model answers never write belief. Belief's own ranking (log-
+    odds, confidence) per tick is the same whatever the decider says."""
+    base = [a.get("belief_ranking") for a in runs["A"]["assessments"]]
+    for k in ("mock", "contrarian"):
+        assert [a.get("belief_ranking") for a in runs[k]["assessments"]] == base, k
+
+
+# ------------------------------------------------------------- when it runs
+@needs_dev
+def test_the_decider_asks_only_when_its_evidence_changed(runs):
+    r = runs["mock"]
+    recs = _records(r, "decider")
+    assert recs and r["multi"]["decider"]["calls"] == len(recs)
+    non_quiet = sum(1 for a in r["assessments"] if a["triage"] != "QUIET")
+    assert len(recs) < non_quiet                       # unchanged ticks make no call
+    # every call offers belief's top 3, in belief's order: confidence, ties in
+    # insertion order (the run's belief_ranking and belief_order of that tick)
+    by_tick = {a["tick"]: a for a in r["assessments"]}
+    for d in recs:
+        a = by_tick[d["evidence_tick"]]
+        ins = {c: i for i, c in enumerate(a["belief_order"])}
+        live = [b for b in a["belief_ranking"] if b.get("case_ref")]
+        want = [b["case_ref"] for b in sorted(live, key=lambda b: (-b["confidence"], ins[b["case_ref"]]))][:3]
+        assert d["offered"] == want
+    assert all(d["ranking"] == d["offered"] for d in recs)        # the mock backs belief's order
+
+
+@needs_dev
+def test_every_decider_call_is_logged_with_its_size_and_stays_under_the_prompt_limit(runs):
+    envs = [e for a in runs["mock"]["assessments"] for e in a["envelopes"] if e["agent"] == "decider"]
+    assert envs
+    for e in envs:
+        assert e["prompt_tokens"] > 0 and e["tokens"]["decode"] == 0
+        assert e["prompt_tokens"] < 1280                                 # plan rule 4
+        req = json.loads(e["prompt"])
+        assert set(req) == {"state", "questions"}
+        q = req["questions"]["root_cause"]
+        assert q["type"] == "choice" and len(q["criteria"]) == 3
+        assert q["instructions"] == "Which root cause best explains the plant facts?"
+        assert all(line.startswith("[") for line in req["state"].splitlines())
+
+
+@needs_dev
+def test_the_decider_runs_on_its_own_lane_only(runs):
+    lanes = {l["lane"]: l for l in runs["mock"]["multi"]["lanes"]}
+    calls = runs["mock"]["multi"]["decider"]["calls"]
+    assert lanes["bev"]["kind"] == "decider" and lanes["bev"]["n_jobs"] == calls
+    off = {l["lane"]: l for l in runs["off"]["multi"]["lanes"]}
+    assert off["bev"]["n_jobs"] == 0                     # no llm agent ever lands there
+
+
+# ------------------------------------------------------- configuration rules
+def test_bev_yaml_is_accuracy_yaml_plus_the_decider_and_nothing_else():
+    acc = yaml.safe_load((ROOT / "configs/accuracy.yaml").read_text())
+    bev = yaml.safe_load((ROOT / "configs/bev.yaml").read_text())
+    bev["multi"]["fixed_placement"].pop("decider")
+    bev["multi"]["lanes"].pop("bev")
+    bev["multi"].pop("decider")
+    assert bev["multi"].pop("merge_rule") == "nudge"
+    acc["multi"].pop("merge_rule")
+    assert bev == acc
+
+
+def test_decider_off_by_default():
+    base = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    assert base["multi"]["decider"]["enabled"] is False
+    assert all(l.get("kind", "llm") == "llm" for l in base["multi"]["lanes"].values())
+
+
+@needs_dev
+def test_the_decider_needs_nudge_and_a_decider_lane():
+    from bench.harness import build_multi_agent
+    cfg = _cfg()
+    cfg["multi"]["merge_rule"] = "tiebreak"
+    with pytest.raises(ValueError, match="nudge"):
+        build_multi_agent(cfg, [])
+    cfg = _cfg()
+    cfg["multi"]["lanes"]["bev"]["kind"] = "llm"
+    with pytest.raises(ValueError, match="wrong kind|decider"):
+        build_multi_agent(cfg, [])
+
+
+def _lanes():
+    return [SimLane("npu", MockBackend(), 909, 13.9), SimLane("cpu", MockBackend(), 126, 42),
+            SimLane("bev", MockBackend(), 909, 13.9, kind="decider")]
+
+
+@pytest.mark.parametrize("placement", [{"decider": "npu"}, {"diag_water": "bev"}])
+def test_fixed_placement_on_a_lane_of_the_wrong_kind_is_refused(placement):
+    fp = {"diag_water": "npu", "diag_heat": "npu", "decider": "bev", **placement}
+    with pytest.raises(ValueError, match="wrong kind"):
+        Scheduler(_lanes(), {"placement": "fixed", "fixed_placement": fp})
+
+
+def test_earliest_finish_keeps_llm_agents_off_the_decider_lane_and_the_decider_on_it():
+    s = Scheduler(_lanes(), {"placement": "earliest_finish"})
+    s.lanes[0].free_at = s.lanes[1].free_at = 1e9             # llm lanes busy, bev idle
+    j = s.new_job("diag_water", 0, 2, 60, 0.0)
+    assert s.choose_lane(j, 500).name in ("npu", "cpu")
+    d = s.new_job("decider", 0, 3, 0, 0.0)
+    assert s.choose_lane(d, 500).name == "bev"
+
+
+def test_only_the_gate_writes_the_decider_sections():
+    from fieldmind.agent.world_model import WorldModel
+    bb = Blackboard(WorldModel(), audit=True)
+    for agent in ("decider", "retriever", "scheduler"):
+        for sec in ("decider_answer", "decider_evidence"):
+            with pytest.raises(WriterError):
+                bb.write(sec, {"x": 1}, agent)
+    bb.write("decider_evidence", {"A": 0.35}, "gate")
+    assert dict(bb.read("decider_evidence")) == {"A": 0.35}

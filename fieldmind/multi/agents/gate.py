@@ -59,11 +59,13 @@ class GateMemoryAgent:
         self.merge_rule = "model"
         self._tick_payload = None       # all accepted side answers, this tick
         self._fresh_payload = None      # the ones answered THIS tick (not reused)
+        self._decider_fresh = None      # bev-decider: this tick's checked ranking
+        self.decider_rejected = 0       # run-level: answers that failed the check
 
     # ------------------------------------------------------------------
     def begin_tick(self, bb, rung: int) -> None:
         """Only the degradation ladder persists across ticks (known bug 1)."""
-        self._tick_payload = self._fresh_payload = None
+        self._tick_payload = self._fresh_payload = self._decider_fresh = None
         bb.write("status", {"degraded_mode": rung_marker(rung)}, NAME)
 
     def open_assessment(self, bb, tick: int, timestamp: str, state: str,
@@ -242,7 +244,17 @@ class GateMemoryAgent:
             if fresh:
                 offsets = merge_rules.add_nudges(offsets, fresh)
                 bb.write("model_evidence", offsets, NAME)
-            hyps, info = merge_rules.nudge(live, offsets)
+            # bev-decider: its checked ranking is one more fresh answer, in its
+            # own offsets; the two are summed, the sum capped (total_offsets)
+            dec = dict(bb.read("decider_evidence"))
+            if self._decider_fresh:
+                dec = merge_rules.add_nudges(
+                    dec, [{"case_ref": c} for c in self._decider_fresh])
+                bb.write("decider_evidence", dec, NAME)
+            hyps, info = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
+            if dec:
+                info["model_offsets"] = {k: round(v, 4) for k, v in sorted(offsets.items())}
+                info["decider_offsets"] = {k: round(v, 4) for k, v in sorted(dec.items())}
         else:
             raise ValueError(f"unknown merge_rule {self.merge_rule!r}")
         claims = dict(claims, hypotheses=hyps,
@@ -345,6 +357,38 @@ class GateMemoryAgent:
         env = dataclasses.replace(env, payload=payload,
                                   cited_facts=[stamp(c) for c in env.cited_facts])
         return env, [dataclasses.replace(f, id=stamp(f.id)) for f in facts]
+
+    def fold_decider(self, bb, asmt: Assessment, result, now_tick: int) -> None:
+        """bev-decider: check the answer against the cases offered (the job's
+        line map, fixed when the request was built); keep it, with the
+        fingerprint of its evidence, in `decider_answer`, and hand its ranking
+        to apply_rule as this tick's fresh decider answer. A failed or
+        rejected answer is logged and dropped; its fingerprint is not kept, so
+        the next tick asks again."""
+        from .decider import check_answer
+        env, lm = result.envelope, result.job.line_map
+        asmt.envelopes.append(env.to_dict())
+        record = {"agent": "decider", "evidence_tick": lm["evidence_tick"],
+                  "offered": list(lm["offered"]), "status": env.status}
+        if self._drop_if_stale(result, now_tick):
+            record["why"] = "stale"
+        elif env.status != "ok":
+            record["why"] = env.error
+        else:
+            ok, why, ranking = check_answer(env.payload, lm["offered"])
+            record.update(probabilities=env.payload.get("probabilities"),
+                          choice=env.payload.get("choice"))
+            if not ok:
+                self.decider_rejected += 1
+                record["why"] = why
+            else:
+                record["ranking"] = ranking
+                self._decider_fresh = ranking
+                bb.write("decider_answer", {"fingerprint": lm["fingerprint"],
+                                            "ranking": ranking,
+                                            "probabilities": dict(env.payload["probabilities"]),
+                                            "evidence_tick": lm["evidence_tick"]}, NAME)
+        self.compact_log.append(record)
 
     def check_notefact(self, result, vocab) -> tuple[bool, str]:
         """A text-reader answer may reach the board only if the call succeeded

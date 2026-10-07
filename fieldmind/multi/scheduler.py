@@ -67,6 +67,12 @@ class Scheduler:
             bad = {a: n for a, n in self.fixed_placement.items() if n not in names}
             if bad:
                 raise ValueError(f"fixed_placement names unknown lanes: {bad}")
+            wrong = {a: n for a, n in self.fixed_placement.items()
+                     if getattr(self._lane(n), "kind", "llm") != self.lane_kind(a)}
+            if wrong:
+                raise ValueError(f"fixed_placement puts agents on a lane of the wrong "
+                                 f"kind (the decider runs only on a decider lane, "
+                                 f"every other agent only on an llm lane): {wrong}")
         dl = cfg.get("deadlines_s", {})
         self.deadlines = {int(k[1:]): v for k, v in dl.items()}
         self._heap: list = []
@@ -127,9 +133,22 @@ class Scheduler:
         return sum(1 for *_, j in self._heap if not j.replaced)
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def lane_kind(agent: str) -> str:
+        """bev-decider: the decider agent needs a "decider" lane (bev-decide);
+        every other agent an "llm" lane (llama-server)."""
+        return "decider" if agent == "decider" else "llm"
+
+    def eligible_lanes(self, agent: str) -> list:
+        lanes = [l for l in self.lanes if getattr(l, "kind", "llm") == self.lane_kind(agent)]
+        if not lanes:
+            raise KeyError(f"no {self.lane_kind(agent)!r} lane for agent {agent!r}")
+        return lanes
+
     def choose_lane(self, job: Job, prompt_tokens: int):
         """fixed: the agent's assigned lane, busy or not. earliest_finish:
-        earliest predicted finish; ties to the earlier lane in config order."""
+        earliest predicted finish over the lanes of the agent's kind; ties to
+        the earlier lane in config order."""
         if self.placement == "fixed":
             name = self.fixed_placement.get(job.agent)
             if name is None:
@@ -140,7 +159,7 @@ class Scheduler:
                                          job.max_answer_tokens)
         else:
             best, best_t = None, None
-            for lane in self.lanes:
+            for lane in self.eligible_lanes(job.agent):
                 t = lane.predict_finish(job.submit_s, prompt_tokens,
                                         job.max_answer_tokens)
                 if best_t is None or t < best_t:
