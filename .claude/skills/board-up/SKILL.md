@@ -48,3 +48,18 @@ retype the flags.
    `:8081`) and report prompt tokens, prefill tok/s, decode tok/s and time to first token per lane, from the server's
    own timing fields. Report chip temperature again.
 9. Report anything that did not match the expected state. Do not try workarounds without asking.
+
+Optional third lane, only for runs with `configs/bev.yaml` (bev-decider, `reports/bev_decider.md`): `bev-decide`
+on port 8082. Its files are NOT llama-server candidates: they are listed in `bench.board.BEV_FILES` with their sha256,
+and `start bev` refuses until those values are recorded (from `device/bev_decide/build_gguf.sh` and
+`build_android.sh`) and match on the board. Same `LD_LIBRARY_PATH` / `ADSP_LIBRARY_PATH`, same `-c 4096`.
+
+10. `.venv/bin/python -m bench.board start bev bev-decider-0.4B-backbone-Q8_0.gguf` (NPU: `--device HTP0 -ngl 99`;
+    add `cpu` as a last argument for the board-CPU fallback, `--device none`). It forwards 8082 and waits for `/health`.
+11. `.venv/bin/python -m bench.board log bev` and confirm, as for the NPU lane (bev-decide has no `-lv`; it is expected
+    to print llama.cpp's loader lines by default, not yet seen on this build -- if they are missing, stop and report): a nonzero `HTP0 model buffer size`,
+    `offloaded N/N layers` with both numbers equal (20 repeating layers plus the non-repeating one), and the
+    `bev-decide: model ..., device HTP0, ngl 99, n_ctx 4096` line. For the CPU fallback: no `HTP0 model buffer size`.
+12. Before any agent run with the decider: the conformance check (`bench.bev_conformance compare`, Part C step 5 of
+    the report) must have passed for this exact file and device. Stop the third lane with
+    `.venv/bin/python -m bench.board stop bev` (by process name only).

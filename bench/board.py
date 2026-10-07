@@ -19,6 +19,9 @@ Host side only: shells out to adb and talks HTTP to the forwarded lanes.
   .venv/bin/python -m bench.board start npu <model.gguf>   (also: cpu)
   .venv/bin/python -m bench.board log npu
   .venv/bin/python -m bench.board stop
+  .venv/bin/python -m bench.board start bev <bev gguf> [cpu]   (bev-decide, port 8082)
+  .venv/bin/python -m bench.board log bev
+  .venv/bin/python -m bench.board stop bev
 
 Two host rules for every board script (bench.board, bench.probe_device):
   * PYTHONPATH is unset. This laptop exports PYTHONPATH into the QAIRT SDK's
@@ -151,6 +154,80 @@ def lane_command(lane: str, model_file: str, threads: int = 6,
             f"-m {DEVICE_MODELS}/{model_file} --host 0.0.0.0 --port {LANE_PORT[lane]} "
             f"-c {CTX_SIZE} -np {N_PARALLEL} {offload} -fit off --cache-ram 0"
             + (f" -lv {log_level}" if log_level is not None else ""))
+
+
+# ---- bev-decide: the decider lane (bev-decider, reports/bev_decider.md) -----
+BEV_PORT = 8082
+# The only files bev-decide may load (under DEVICE_MODELS), with the sha256
+# printed by device/bev_decide/build_gguf.sh; and its binary (under DEVICE_PKG)
+# with the sha256 printed by build_android.sh. None = not built yet: start_bev
+# refuses until the value is recorded here (the CANDIDATES rule, applied to the
+# third lane). The 16-bit GGUF is for the board-CPU conformance run only.
+BEV_FILES: dict[str, str | None] = {
+    "bev-decider-0.4B-backbone-Q8_0.gguf": None,
+    "backbone-16bit.gguf": None,
+    "bev_head.bin": None,
+    "bev_head.json": None,
+}
+BEV_MODELS = ("bev-decider-0.4B-backbone-Q8_0.gguf", "backbone-16bit.gguf")
+BEV_BINARY = "bin/bev-decide"
+BEV_BINARY_SHA256: str | None = None
+
+
+def bev_command(model_file: str, device: str = "npu", threads: int = 6) -> str:
+    """The board-side command for bev-decide: the lanes' library variables,
+    -c 4096 (CTX_SIZE), NPU (--device HTP0 -ngl 99) or board CPU (--device none).
+    bev-decide installs no log filter, so libllama's default logger should
+    print the loader lines (offload, HTP0 buffer) without an -lv flag: NOT YET
+    SEEN on this build; confirm on the first board start (Part C step 4)."""
+    if device == "npu":
+        offload = "--device HTP0 -ngl 99"
+    elif device == "cpu":
+        offload = f"--device none -t {threads}"
+    else:
+        raise ValueError(f"unknown device {device!r}")
+    return (f"cd {DEVICE_PKG} && LD_LIBRARY_PATH={DEVICE_PKG}/lib "
+            f"ADSP_LIBRARY_PATH={DEVICE_PKG}/lib ./{BEV_BINARY} "
+            f"-m {DEVICE_MODELS}/{model_file} --head {DEVICE_MODELS}/bev_head.json "
+            f"--host 0.0.0.0 --port {BEV_PORT} -c {CTX_SIZE} {offload}")
+
+
+def check_bev(model_file: str, serial: str = "") -> dict:
+    """Raise unless model_file is a bev-decide model and it, the head and the
+    binary all have a recorded sha256 that the board matches."""
+    if model_file not in BEV_MODELS:
+        raise ModelNotAllowed(f"{model_file!r} is not a bev-decide model {BEV_MODELS}")
+    want = {f"{DEVICE_MODELS}/{f}": BEV_FILES[f] for f in (model_file, "bev_head.bin", "bev_head.json")}
+    want[f"{DEVICE_PKG}/{BEV_BINARY}"] = BEV_BINARY_SHA256
+    missing = [p for p, v in want.items() if v is None]
+    if missing:
+        raise ModelNotAllowed(f"no recorded sha256 for {missing}: record the build's values in "
+                              f"bench.board.BEV_FILES / BEV_BINARY_SHA256 first")
+    got = {}
+    for path, sha in want.items():
+        out = _adb("shell", f"sha256sum {path}", serial=serial, timeout=300).stdout.split()
+        got[path] = out[0] if out else ""
+        if got[path] != sha:
+            raise ModelNotAllowed(f"{path}: board sha256 {got[path] or '(missing)'} != {sha}")
+    return got
+
+
+def start_bev(model_file: str, device: str = "npu", threads: int = 6, serial: str = "") -> dict:
+    """Start bev-decide in the background and forward its port (8082)."""
+    shas = check_bev(model_file, serial)
+    cmd = bev_command(model_file, device, threads)
+    _adb("shell", f"mkdir -p {DEVICE_LOGS}", serial=serial)
+    _adb("shell", f"nohup sh -c '{cmd}' > {lane_log_path('bev')} 2>&1 &", serial=serial)
+    _adb("forward", f"tcp:{BEV_PORT}", f"tcp:{BEV_PORT}", serial=serial)
+    return {"lane": "bev", "device": device, "started_laptop_time": laptop_time(),
+            "command": cmd, "model_file": model_file, "sha256": shas,
+            "board_log": lane_log_path("bev"), "url": f"http://localhost:{BEV_PORT}"}
+
+
+def stop_bev(serial: str = "") -> str:
+    """Stop bev-decide by process name only. Never deletes files."""
+    return _adb("shell", "pkill bev-decide; sleep 1; pgrep -l bev-decide",
+                serial=serial).stdout.strip()
 
 
 def _adb(*args: str, serial: str = "", timeout: float = 60) -> subprocess.CompletedProcess:
@@ -309,6 +386,13 @@ if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "env":
         print(json.dumps({"laptop_time": laptop_time(),
                           "PYTHONPATH": os.environ.get("PYTHONPATH")}))
+    elif len(sys.argv) >= 4 and sys.argv[1:3] == ["start", "bev"]:
+        dev = sys.argv[4] if len(sys.argv) > 4 else "npu"
+        info = start_bev(sys.argv[3], dev)
+        info["ready_after_s"] = wait_health(info["url"])
+        print(json.dumps(info, indent=1))
+    elif sys.argv[1:3] == ["stop", "bev"]:
+        print(json.dumps({"laptop_time": laptop_time(), "still_running": stop_bev()}))
     elif len(sys.argv) >= 4 and sys.argv[1] == "start":
         info = start_lane(sys.argv[2], sys.argv[3])
         info["ready_after_s"] = wait_health(info["url"])
