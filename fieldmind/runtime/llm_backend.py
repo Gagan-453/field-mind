@@ -139,6 +139,8 @@ class MockBackend(LLMBackend):
             payload = self._mock_verification(hint)
         elif role == "text_reader":
             payload = self._mock_text_read(hint)
+        elif role == "decider":
+            payload = self._mock_decider(hint)
         else:
             payload = {"note": "mock backend, no role-specific behaviour"}
 
@@ -208,6 +210,24 @@ class MockBackend(LLMBackend):
         tags = [t for t in note.get("tags", [])][:3]
         kind = "INSTR" if note.get("injection") else ("OBS" if tags else "OTHER")
         return {"k": kind, "s": [[t, "MENTIONED"] for t in tags]}
+
+    @staticmethod
+    def _mock_decider(hint: dict) -> dict:
+        """bev-decide's /v1/systemone reply, choosing belief's leader: the
+        first offered option (the decider agent offers belief's top cases in
+        belief's order) gets the largest probability, falling linearly in
+        offered order (weights n, n-1, ..., 1, normalised). It does not read
+        the state, so it says nothing about bev-decider; it only exercises the
+        plumbing."""
+        keys = list(hint.get("options", []))
+        if not keys:
+            return {"answers": {}}
+        n = len(keys)
+        probs = {k: (n - i) / (n * (n + 1) / 2) for i, k in enumerate(keys)}
+        return {"model": "mock-0",
+                "answers": {hint.get("question", "root_cause"):
+                            {"type": "choice", "choice": keys[0], "probabilities": probs}},
+                "usage": {"prompt_tokens": None}}
 
     @staticmethod
     def _mock_verification(hint: dict) -> dict:
@@ -785,6 +805,91 @@ class LlamaServerBackend(LLMBackend):
         )
 
 
+class BevDeciderBackend(LLMBackend):
+    """Talks HTTP to bev-decide (device/bev_decide/), bev-decider-0.4B on the
+    board: POST /v1/systemone. Not a text generator: one forward pass returns
+    a probability per option, so nothing is decoded.
+
+    `prompt` is the request body, a JSON string {"state", "questions"} built by
+    the decider agent (fieldmind/multi/agents/decider.py); the reply text is
+    the server's whole JSON response ({"answers", "usage", "timings", ...}),
+    parsed by the agent and checked by the gate.
+
+        prefill_tokens = usage.prompt_tokens   tokens through the transformer,
+                         all questions of the request (None if not sent:
+                         bev_decider's own Python server does not send it)
+        decode_tokens  = 0, decode_ms = 0.0    nothing is generated
+        ttft_ms        = timings.decode_ms     SERVER-SIDE transformer time
+                         (the llama_decode calls), None if not sent
+        latency_ms     = client wall clock for the whole request
+
+    Every failure is a failed call (status timeout | error), never an
+    exception -- including a dropped connection (http.client.RemoteDisconnected,
+    ConnectionError), which LlamaServerBackend does not catch (7 Oct 2026
+    benchmark, single-agent B01).
+    """
+
+    name = "bevdecider"
+
+    def __init__(self, url: str = "http://localhost:8082", lane: str = "bev",
+                 model_file: str = "unknown", timeout_s: float = 60.0, **_):
+        self.url = url.rstrip("/")
+        self.lane = lane
+        self.model_file = model_file
+        self.timeout_s = timeout_s
+
+    def generate(self, prompt, role="decider", max_tokens=0, mock_hint=None):
+        import http.client
+        import socket
+        import urllib.error
+        import urllib.request
+
+        t0 = time.perf_counter()
+
+        def fail(status: str, err: str) -> LLMReply:
+            return LLMReply(text="", status=status, backend=self.lane,
+                            model=self.model_file, error=err[:300],
+                            prefill_tokens=None, decode_tokens=None, ttft_ms=None,
+                            decode_ms=None,
+                            latency_ms=(time.perf_counter() - t0) * 1000)
+
+        req = urllib.request.Request(
+            f"{self.url}/v1/systemone", data=prompt.encode(),
+            headers={"Content-Type": "application/json"}, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                raw = resp.read().decode()
+        except urllib.error.HTTPError as e:
+            return fail("error", f"HTTP {e.code}: {e.read()[:200]!r}")
+        except (TimeoutError, socket.timeout):
+            return fail("timeout", f"bev-decide exceeded {self.timeout_s}s")
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, (TimeoutError, socket.timeout)):
+                return fail("timeout", f"bev-decide exceeded {self.timeout_s}s")
+            return fail("error", f"connection: {e.reason}")
+        except (http.client.HTTPException, ConnectionError) as e:
+            return fail("error", f"connection dropped: {e!r}")
+        latency = (time.perf_counter() - t0) * 1000
+
+        try:
+            data = json.loads(raw)
+            if not isinstance(data, dict) or not isinstance(data.get("answers"), dict):
+                raise ValueError("no answers object")
+        except ValueError as e:
+            return fail("error", f"malformed reply ({e}): {raw[:200]}")
+
+        usage = data.get("usage") or {}
+        tm = data.get("timings") or {}
+        pt = usage.get("prompt_tokens")
+        dm = tm.get("decode_ms")
+        return LLMReply(
+            text=raw, backend=self.lane, model=self.model_file, latency_ms=latency,
+            prefill_tokens=int(pt) if isinstance(pt, (int, float)) else None,
+            decode_tokens=0, decode_ms=0.0,
+            ttft_ms=float(dm) if isinstance(dm, (int, float)) else None,
+        )
+
+
 # =======================================================================
 #  FACTORY  --  the single switch point
 # =======================================================================
@@ -822,3 +927,4 @@ def register_backend(name: str, cls: type) -> None:
 
 
 register_backend("llamaserver", LlamaServerBackend)
+register_backend("bevdecider", BevDeciderBackend)
