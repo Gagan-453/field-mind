@@ -56,6 +56,7 @@ class DiagnosticianAgent:
         self.cap = (mcfg.get("answer_caps") or {}).get("diagnostician", 60)
         self.guard_cpt = mcfg.get("compact_guard_cpt")
         self.split = bool(mcfg.get("split", False))
+        self.raw_notes = self.sw["notes"] and self.sw["note_source"] == "raw"
         self.on_change = bool(mcfg.get("split_on_change", False))
         self.grammar = bool(mcfg.get("grammar", False))
         if self.grammar and not self.sw["schema"]:
@@ -67,7 +68,11 @@ class DiagnosticianAgent:
             raise ValueError("multi.split needs multi.compact.schema on: the side "
                              "prompts are the compact (B') prompts")
         if self.sw["schema"]:
-            self.templates = {"body": compact.load_prompt("diag_compact.txt"),
+            # group_letters off: the same body without the leading "g" in the
+            # answer format and example
+            body = ("diag_compact.txt" if self.sw["group_letters"]
+                    else "diag_compact_nogroup.txt")
+            self.templates = {"body": compact.load_prompt(body),
                               "rules_full": compact.load_prompt("diag_rules_full.txt"),
                               "rules_compact": compact.load_prompt("diag_rules_compact.txt")}
             self.repair = compact.load_prompt("repair_lines.txt")
@@ -100,12 +105,18 @@ class DiagnosticianAgent:
         return sides.sides_to_run(bb.read("facts").facts_of(tick), bb.read("findings"))
 
     @staticmethod
-    def fingerprint(bb, side: str) -> tuple:
-        """The evidence a side's diagnosis depends on, as on the board now."""
+    def fingerprint(bb, side: str, raw_notes: bool = False) -> tuple:
+        """The evidence a side's diagnosis depends on, as on the board now.
+        `raw_notes` (note_source raw): the side's selected raw notes count as
+        evidence, so a newly arrived note makes the side be asked again (with
+        the text reader on, its note-facts do that)."""
         retrieved = bb.read("retrieval")
         shown = ([c.get("case_id") for c in
                   sides.cases_for_side(retrieved.get("cases", []), side)]
                  + [e.get("case_id") for e in retrieved.get("experience", [])])
+        if raw_notes:
+            shown += ["note:" + str(n.get("id")) for n in retrieved.get("notes", [])
+                      if side in sides.note_sides(n)]
         return sides.side_fingerprint(bb.read("signature").get("signature", {}),
                                       bb.read("findings"),
                                       list(bb.read("notefacts").values()), side,
@@ -123,7 +134,7 @@ class DiagnosticianAgent:
         cached = bb.read("side_answers")
         jobs = []
         for s in self.sides_to_run(bb, tick):
-            fp = self.fingerprint(bb, s)
+            fp = self.fingerprint(bb, s, self.raw_notes)
             if self.on_change and s in cached and cached[s]["fingerprint"] == fp:
                 continue
             job = self._compact_job(bb, scheduler, tick, level, rung, submit_s, side=s)
@@ -151,7 +162,11 @@ class DiagnosticianAgent:
             # belief themselves are not split (decision 4)
             facts = sides.facts_for_side(all_facts, side)
             retrieved["cases"] = sides.cases_for_side(retrieved.get("cases", []), side)
-            if self.sw["notes"]:
+            if self.sw["notes"] and self.sw["note_source"] == "raw":
+                # raw notes: by the note's own tags (a note with none goes to both)
+                retrieved["notes"] = [n for n in retrieved.get("notes", [])
+                                      if side in sides.note_sides(n)]
+            elif self.sw["notes"]:
                 # note-facts: by the note-fact's own subjects (commit 0 design)
                 notefacts = {k: v for k, v in notefacts.items()
                              if v.get("status") != "ok" or side in sides.notefact_sides(v)}
@@ -198,5 +213,6 @@ class DiagnosticianAgent:
             # exactly the lines THIS prompt showed
             job.grammar = grammar.to_gbnf(grammar.diagnosis(
                 len(line_map["facts"]), len(line_map["cases"]),
-                len(line_map["context"]), line_map["letters"]))
+                len(line_map["context"]), line_map["letters"],
+                with_group=self.sw["group_letters"]))
         return job

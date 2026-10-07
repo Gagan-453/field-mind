@@ -14,7 +14,7 @@ prompt cannot be replayed, only one that changes what is done with an answer.
 
 Rules (`model` is an alias of `current`; the others are
 fieldmind/multi/merge_rules.py, applied exactly as the gate applies them):
-  belief_only, tiebreak, nudge   see merge_rules.py
+  belief_only, tiebreak, nudge, hybrid   see merge_rules.py
   current   what the gate does under merge_rule `model`: the side answers are expanded (case and
             fact ids from the line map, confidence from belief, 0.3 when belief
             has no live entry), combined in side order, folded by the single
@@ -45,6 +45,7 @@ from fieldmind.multi import compact, merge_rules
 
 CASES = {c["case_id"]: c for c in
          json.loads(Path("data/kb/case_library.json").read_text())["cases"]}
+FLAT = merge_rules.flat_case_ids(list(CASES.values()))
 
 
 def load_run(path: str) -> dict:
@@ -147,6 +148,11 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                     hyps, _ = merge_rules.belief_only(live)
                 elif rule == "tiebreak":
                     hyps, _ = merge_rules.tiebreak(live, model)
+                elif rule == "hybrid":
+                    if fresh and fresh["hypotheses"]:
+                        offsets = merge_rules.add_nudges(
+                            offsets, [m for m in fresh["hypotheses"] if m.get("case_ref") not in FLAT])
+                    hyps, _ = merge_rules.hybrid(live, model, offsets, FLAT)
                 else:
                     if fresh and fresh["hypotheses"]:
                         offsets = merge_rules.add_nudges(offsets, fresh["hypotheses"])

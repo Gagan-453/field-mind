@@ -142,6 +142,7 @@ SECTIONS = ("schema", "rules", "cases", "notes", "world")
 VER_SECTIONS = ("ver_schema", "ver_rules", "ver_claims")
 ALL_SECTIONS = SECTIONS + VER_SECTIONS
 CASE_ORDERS = ("score", "shuffled")
+NOTE_SOURCES = ("reader", "raw")
 MAX_CLAIMS = 3          # HUMAN DECISION (b): claims beyond rank 3 are not shown
 
 SEV_ORDER = {"CRITICAL": 0, "ALARM": 1, "WATCH": 2, "INFO": 3}   # = evidence_packet
@@ -160,6 +161,21 @@ def compact_switches(ccfg: dict | None) -> dict:
     ccfg = ccfg or {}
     sw = {s: bool(ccfg.get(s, False)) for s in ALL_SECTIONS}
     sw["case_order"] = ccfg.get("case_order", "score")
+    # multi.compact.group_letters (default on = every earlier prompt, byte for
+    # byte): the "[group X]" tag on each case line and the answer's leading "g".
+    # Off: neither is shown or asked for (reports/multi_llm_impact_design.md: the
+    # model wrote the most common letter in 89% of answers and picked from it).
+    sw["group_letters"] = bool(ccfg.get("group_letters", True))
+    # multi.compact.note_source (with `notes` on): `reader` (default, every
+    # earlier prompt) shows the text reader's note-facts; `raw` shows the
+    # selected notes' own text ("[author] text", retrieval's selection, the same
+    # line caps), with the code-written record-facts and the token guard
+    # unchanged. Needs the model text reader off (compact.text_reader: false).
+    sw["note_source"] = ccfg.get("note_source", "reader")
+    if sw["note_source"] not in NOTE_SOURCES:
+        raise ValueError(f"multi.compact.note_source must be one of {NOTE_SOURCES}")
+    if sw["note_source"] == "raw" and not (sw["notes"] and sw["schema"]):
+        raise ValueError("multi.compact.note_source raw needs `notes` and `schema` on")
     if sw["case_order"] not in CASE_ORDERS:
         raise ValueError(f"multi.compact.case_order must be one of {CASE_ORDERS}")
     needs = [s for s in SECTIONS[1:] if sw[s]]
@@ -270,7 +286,13 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
         random.Random(evidence_tick).shuffle(cases)
 
     # ---- context: notes then records
-    if sw["notes"]:
+    if sw["notes"] and sw.get("note_source") == "raw":
+        # raw note text, newest first (as note-facts are), record-facts as usual
+        raw = sorted(retrieved.get("notes", []), key=lambda n: -n.get("t", 0.0))
+        notes = [(n.get("id"), f"{n.get('id')} [note, {n.get('author', '?')}, "
+                  f"{_age(now_s, n.get('t', 0.0))}] {n.get('text', '')}") for n in raw]
+        recs = [(r["id"], f"{r['id']} {r['text']}") for r in recordfacts]
+    elif sw["notes"]:
         sel = {n.get("id") for n in retrieved.get("notes", [])}
         nfs = sorted((v for k, v in notefacts.items()
                       if k in sel and v.get("status") == "ok"),
@@ -314,11 +336,11 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
             tag = "unconfirmed" if c.get("unverified") else "confirmed"
             return (f"{cid} [own past episode, {tag}, seen {c.get('occurrences', 1)}x] "
                     f"cause={c.get('root_cause', '?')}")
-        L = letters.get(cid, "?")
+        tag = f" [group {letters.get(cid, '?')}]" if sw.get("group_letters", True) else ""
         if sw["cases"]:
-            return (f"{cid} [group {L}] {signature_text(c.get('signature'))}; "
+            return (f"{cid}{tag} {signature_text(c.get('signature'))}; "
                     f"check: {first_sentence(c.get('discriminating_evidence', ''))}")
-        return (f"{cid} [group {L}] ({c['score']:.2f}) {c.get('title', '')}: "
+        return (f"{cid}{tag} ({c['score']:.2f}) {c.get('title', '')}: "
                 f"cause={c.get('root_cause', '?')}; "
                 f"discriminator={c.get('discriminating_evidence', '?')}")
 

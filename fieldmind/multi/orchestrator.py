@@ -65,11 +65,17 @@ class MultiOrchestrator:
                 json.loads(Path(mcfg["case_groups"]).read_text()),
                 [c["case_id"] for c in retriever.cases.cases])
         self.diag = DiagnosticianAgent(diag, acfg, mcfg, letters)
+        if self.diag.raw_notes and (mcfg.get("compact") or {}).get("text_reader"):
+            raise ValueError("multi.compact.note_source raw needs the model text reader "
+                             "off (multi.compact.text_reader: false)")
         self.ver = VerifierAgent(ver, acfg, mcfg)
         self.gate = GateMemoryAgent(gate, ver, acfg)
+        self.gate.raw_notes = self.diag.raw_notes
         self.compact = mcfg.get("compact") or {}
-        from .merge_rules import RULES
+        from .merge_rules import RULES, flat_case_ids as merge_rules_flat
         self.gate.merge_rule = mcfg.get("merge_rule", "model")
+        # hybrid: the cases the model may never lead with or nudge (no moving signature)
+        self.gate.flat_ids = merge_rules_flat(retriever.cases.cases)
         if self.gate.merge_rule not in RULES:
             raise ValueError(f"multi.merge_rule must be one of {RULES}")
         if self.gate.merge_rule != "model" and not mcfg.get("split"):

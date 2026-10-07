@@ -41,10 +41,17 @@ from __future__ import annotations
 
 import math
 
-RULES = ("model", "belief_only", "tiebreak", "nudge")
+RULES = ("model", "belief_only", "tiebreak", "nudge", "hybrid")
 BAND = 0.35
 STEP = 0.35
 CAP = 1.2
+# hybrid: belief's best case counts as WEAK below this log-odds. 0 is
+# confidence 0.5, i.e. belief has no net evidence FOR its best case. DESIGN
+# CHOICE, made after looking at the 7 October reporting-episode replays
+# (reports/multi_llm_impact_design.md); validated on dev only. The replay moved
+# it over -0.5 / 0 / +0.5 (and BAND over 0.2 / 0.35 / 0.5): the margin over
+# belief stayed within +0.181 to +0.191. Affects: which ticks the model leads.
+WEAK = 0.0
 
 
 def _lo(h) -> float:
@@ -139,4 +146,69 @@ def nudge(live: list, offsets: dict) -> tuple[list[dict], dict]:
     return _finish(hyps), {"rule": "nudge", "differs_from_belief": differs,
                            "why": "model offsets reorder belief" if differs else
                            ("offsets do not change belief's top 3" if offsets else "no offsets"),
+                           "offsets": {k: round(v, 4) for k, v in sorted(offsets.items())}}
+
+
+def flat_case_ids(cases: list[dict]) -> frozenset:
+    """Library cases whose signature has no moving triple (every direction
+    FLAT): RCA-09, RCA-10, RCA-15 in today's library. Read from the case data,
+    not listed by hand."""
+    out = set()
+    for c in cases:
+        moving = False
+        for k, v in (c.get("signature") or {}).items():
+            d = v[0] if isinstance(v, list) else k.split("|")[1]
+            moving = moving or d != "FLAT"
+        if not moving:
+            out.add(c["case_id"])
+    return frozenset(out)
+
+
+def regime(live: list, band: float = BAND, weak: float = WEAK) -> str:
+    """weak: belief's best log-odds < weak; tie: best minus second < band;
+    clear: otherwise (or no live case)."""
+    los = sorted((_lo(h) for h in live), reverse=True)
+    if not los:
+        return "clear"
+    if los[0] < weak:
+        return "weak"
+    if len(los) > 1 and round(los[0] - los[1], 4) < band:
+        return "tie"
+    return "clear"
+
+
+def hybrid(live: list, model_hyps: list[dict], offsets: dict, flat_ids,
+           band: float = BAND, weak: float = WEAK) -> tuple[list[dict], dict]:
+    """Belief weak or tied: the model's ranking of belief's live, non-flat cases
+    goes first (in the model's order), the rest follow in nudge order. Belief
+    has a clear leader: `nudge`. The offsets must be accumulated without flat
+    picks (`add_nudges(offsets, [m for m in fresh if not flat])`).
+
+    Why the flat guard is part of the rule: without it, on the 7 October board
+    answers the model put a flat case first on most tie ticks of B01 and D01,
+    and the unguarded rule fell to 0.312 on B01 against belief's 0.555.
+    Only belief's live cases can be published; nothing is written to belief."""
+    reg = regime(live, band, weak)
+    base = sorted(live, key=lambda h: -round(_lo(h) + offsets.get(h.case_ref, 0.0), 4))
+    by_ref = {h.case_ref: h for h in live}
+    picked = []
+    for m in model_hyps:
+        h = by_ref.get(m.get("case_ref"))
+        if h is not None and h.case_ref not in flat_ids and h not in picked:
+            picked.append(h)
+    lead = reg != "clear" and bool(picked)
+    order = picked + [h for h in base if h not in picked] if lead else base
+    top = order[:3]
+    hyps = [_claim(h, round(1.0 / (1.0 + math.exp(-round(_lo(h) + offsets.get(h.case_ref, 0.0), 4))), 3),
+                   model_first=lead and h in picked,
+                   nudged=offsets.get(h.case_ref, 0.0) > 0) for h in top]
+    belief_top = [h.case_ref for h in _belief_order(live)[:3]]
+    why = ("belief has a clear leader: nudge" if reg == "clear" else
+           f"belief {reg}: model's ranking first" if lead else
+           f"belief {reg}, but no usable model case (none, flat or not live): nudge")
+    return _finish(hyps), {"rule": "hybrid", "regime": reg, "model_led": lead,
+                           "differs_from_belief": [h.case_ref for h in top] != belief_top,
+                           "why": why,
+                           "model_flat_ignored": [m.get("case_ref") for m in model_hyps
+                                                  if m.get("case_ref") in flat_ids],
                            "offsets": {k: round(v, 4) for k, v in sorted(offsets.items())}}

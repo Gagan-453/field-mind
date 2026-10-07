@@ -45,6 +45,8 @@ class GateMemoryAgent:
         self.hard_deadline_ms = cfg.get("hard_stage_deadline_ms", 200)
         self.tick_budget_ms = cfg.get("tick_period_s", 30) * 1000
         self.stale_dropped: list[dict] = []
+        self.raw_notes = False      # note_source raw: set by the orchestrator
+        self.flat_ids: frozenset = frozenset()    # hybrid: set by the orchestrator
         # Compact-answer expansion records of the current tick (telemetry;
         # the orchestrator takes and clears them when it records the tick).
         self.compact_log: list[dict] = []
@@ -243,6 +245,14 @@ class GateMemoryAgent:
                 offsets = merge_rules.add_nudges(offsets, fresh)
                 bb.write("model_evidence", offsets, NAME)
             hyps, info = merge_rules.nudge(live, offsets)
+        elif self.merge_rule == "hybrid":
+            offsets = dict(bb.read("model_evidence"))
+            fresh = [m for m in (self._fresh_payload or {}).get("hypotheses", [])
+                     if m.get("case_ref") not in self.flat_ids]
+            if fresh:
+                offsets = merge_rules.add_nudges(offsets, fresh)
+                bb.write("model_evidence", offsets, NAME)
+            hyps, info = merge_rules.hybrid(live, model, offsets, self.flat_ids)
         else:
             raise ValueError(f"unknown merge_rule {self.merge_rule!r}")
         claims = dict(claims, hypotheses=hyps,
@@ -253,12 +263,11 @@ class GateMemoryAgent:
         bb.write("diagnosis", claims, NAME)
         return claims
 
-    @staticmethod
-    def _unchanged_since(bb, result) -> bool:
+    def _unchanged_since(self, bb, result) -> bool:
         """The side's evidence now equals the evidence its job was built on."""
         fp = (result.job.line_map or {}).get("fingerprint")
         return fp is not None and fp == DiagnosticianAgent.fingerprint(
-            bb, result.job.line_map["side"])
+            bb, result.job.line_map["side"], self.raw_notes)
 
     def _reuse(self, bb, accepted, results, now_tick):
         """Keep `side_answers` and add the cached answers of sides that made no
@@ -284,7 +293,7 @@ class GateMemoryAgent:
         for side in run:
             if side in called or side not in cache:
                 continue
-            fp = DiagnosticianAgent.fingerprint(bb, side)
+            fp = DiagnosticianAgent.fingerprint(bb, side, self.raw_notes)
             if cache[side]["fingerprint"] != fp:
                 del cache[side]                             # evidence moved on
                 continue

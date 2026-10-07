@@ -176,6 +176,9 @@ multi:
     notes: false                    # note-facts (max 4) + record-facts (max 4)
     world: false
     case_order: score               # score | shuffled (seeded by the evidence tick)
+    # "[group X]" on compact case lines and the answer's leading "g" (Phase 2).
+    # Off in configs/fast.yaml (2026-10-07). On = every earlier prompt unchanged.
+    group_letters: true
     # Compact verifier (commit 6). All off = the single agent's verifier.
     # `ver_schema` = pass/fail per shown claim by line number (amendment 1
     # item 3), top 3 claims, no confidence or discriminator (decision (b)),
@@ -199,6 +202,9 @@ multi:
   #                log-odds of belief's leader, every tick (PRIMARY)
   #   nudge        belief log-odds + capped model offsets, +0.35 / +0.175,
   #                at most 1.2 per case per episode (SECONDARY arm)
+  #   hybrid       belief weak (best log-odds < 0) or tied (margin < 0.35): the
+  #                model's ranking of belief's non-flat cases first; else nudge
+  #                (flat cases never nudged). Proposed 2026-10-08, dev-validated only
   # Needs multi.split. Default = model (earlier behaviour exactly).
   merge_rule: model
   # Answer grammars (fieldmind/multi/grammar.py): every model job sends a GBNF

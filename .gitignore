@@ -48,3 +48,10 @@ bench/tokenizers/*/
 logs/
 # zips the person made to hand the folders to another chat: copies of the folders above
 results/presentation_benchmark/*.zip
+# benchmarks made by scripts/benchmark.sh (bench/benchmark.py) are tracked: test.json,
+# RESULTS.md, temps, summaries, gzipped run files, logs, lane proofs. Live tick files,
+# kept stopped attempts and scratch folders are not; mock runs never are.
+!results/benchmarks/
+results/benchmarks/**/*.ticks.jsonl
+results/benchmarks/**/*.interrupted-*
+results/benchmarks/**/.tmp_*/

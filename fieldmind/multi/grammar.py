@@ -80,7 +80,8 @@ def _number_list(rules: dict, name: str, n: int, most: int) -> None:
     rules[name] = [[lit("[]")], [lit("["), ref(start), lit("]")]]
 
 
-def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str]) -> dict:
+def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str],
+              with_group: bool = True) -> dict:
     """Answer format B' for a prompt that showed `n_facts` fact lines,
     `n_cases` case lines (their group `letters`) and `n_context` note and
     record lines."""
@@ -109,6 +110,11 @@ def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str]) ->
     rules["r"] = r
     rules["g"] = [[lit(x)] for x in (sorted(set(letters)) or ["?"])]
     rules["sep"] = [[lit("null")]] + [[lit(str(c))] for c in range(1, n_cases + 1)]
+    if not with_group:                      # multi.compact.group_letters off
+        del rules["g"]
+        rules["root"] = [[lit('{"r":'), ref("r"), lit(',"sep":'), ref("sep"),
+                          lit(',"n":'), ref("notes"), lit(',"x":'), ref("unexpl"), lit("}")]]
+        return rules
     rules["root"] = [[lit('{"g":"'), ref("g"), lit('","r":'), ref("r"),
                       lit(',"sep":'), ref("sep"), lit(',"n":'), ref("notes"),
                       lit(',"x":'), ref("unexpl"), lit("}")]]

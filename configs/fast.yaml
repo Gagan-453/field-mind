@@ -28,6 +28,11 @@ multi:
     ver_schema: true
     ver_rules: true
     ver_claims: true
+    # HUMAN DECISION 2026-10-07: no "[group X]" on case lines and no leading "g"
+    # in the diagnosis answer (the model picked the most common letter in 89% of
+    # answers; reports/multi_llm_impact_design.md). Runs made with this are not
+    # comparable with earlier fast.yaml runs on diagnosis answers.
+    group_letters: false
   split: true
   split_on_change: true
   # HUMAN DECISION 2026-10-05 ("fix the json replies, enforce the strict limits
