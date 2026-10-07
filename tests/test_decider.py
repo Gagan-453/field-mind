@@ -205,6 +205,97 @@ def test_total_offsets_sums_and_caps_and_is_the_identity_without_a_decider():
     assert mr.total_offsets(model, {"A": 0.35, "C": 0.175}) == {"A": 1.2, "B": 0.35, "C": 0.175}
 
 
+# ------------------------------------------------------------ candidates
+def _fake_bb(belief, model_ranking):
+    from types import SimpleNamespace as N
+    secs = {"belief": [N(case_ref=c, cause=f"cause {c}", confidence=p, retired=False) for c, p in belief],
+            "model_ranking": model_ranking}
+    return N(read=lambda s: secs[s])
+
+
+def test_union_is_belief_top3_then_the_models_new_cases_of_this_tick_only():
+    from fieldmind.multi.agents.decider import DeciderAgent
+    lib = {"RCA-05": {"root_cause": "lib cause 05"}, "RCA-06": {"root_cause": "lib cause 06"}}
+    d = DeciderAgent(None, {"top_k": 3, "question": "q", "candidates": "union"}, library=lib)
+    bb = _fake_bb([("RCA-01", 0.9), ("RCA-02", 0.7), ("RCA-03", 0.5), ("RCA-04", 0.4)],
+                  {"tick": 7, "cases": ["RCA-02", "RCA-05", "RCA-04", "RCA-06"]})
+    got = d.offered(bb, 7)
+    assert [c for c, _ in got] == ["RCA-01", "RCA-02", "RCA-03", "RCA-05", "RCA-04"]   # model's top 3 only
+    assert dict(got)["RCA-05"] == "lib cause 05" and dict(got)["RCA-04"] == "cause RCA-04"
+    assert [c for c, _ in d.offered(bb, 8)] == ["RCA-01", "RCA-02", "RCA-03"]          # stale ranking ignored
+    b = DeciderAgent(None, {"top_k": 3, "question": "q", "candidates": "belief"}, library=lib)
+    assert [c for c, _ in b.offered(bb, 7)] == ["RCA-01", "RCA-02", "RCA-03"]
+    with pytest.raises(ValueError):
+        DeciderAgent(None, {"top_k": 3, "question": "q", "candidates": "everything"})
+
+
+# ------------------------------------------------------- flat-case guard
+FLAT = None
+
+
+class FlatLoverMock(MockBackend):
+    """The decider backs a flat case whenever one is offered (else the last)."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role != "decider":
+            return super().generate(prompt, role, max_tokens, mock_hint)
+        keys = mock_hint["options"]
+        pick = next((k for k in keys if k in ("RCA-09", "RCA-10", "RCA-15")), keys[-1])
+        probs = {k: (0.9 if k == pick else 0.1 / (len(keys) - 1)) for k in keys}
+        return LLMReply(text=_answer(pick, probs), backend="mock", model="mock-0",
+                        prefill_tokens=None, decode_tokens=0)
+
+
+register_backend("mock_flatlover", FlatLoverMock)
+
+
+def test_decider_nudges_only_lowers_flat_cases():
+    off = {"A": 0.35, "F": 0.35}
+    plain = mr.decider_nudges(off, ["F", "B", "A"])
+    guarded = mr.decider_nudges(off, ["F", "B", "A"], frozenset({"F"}))
+    assert plain == mr.add_nudges(off, [{"case_ref": c} for c in ["F", "B", "A"]])
+    assert guarded["F"] == 0.35 and plain["F"] == 0.7
+    assert {k: v for k, v in guarded.items() if k != "F"} == {k: v for k, v in plain.items() if k != "F"}
+    assert "G" not in mr.decider_nudges({}, ["G", "B"], frozenset({"G"}))
+
+
+def _right_ticks(run):
+    gr = json.loads((ROOT / "data/kb/case_groups.json").read_text())["groups"]
+    grp = {m: g["id"] for g in gr for m in g["members"]}
+    gt = run["ground_truth"]
+    true = grp.get(gt["root_cause_id"], gt["root_cause_id"])
+    out = {}
+    for a in run["assessments"]:
+        if a["tick"] * gt["tick_period_s"] >= gt["fault_onset_t"] and a["hypotheses"]:
+            c = a["hypotheses"][0].get("case_ref")
+            out[a["tick"]] = grp.get(c, c) == true
+    return out
+
+
+@needs_dev
+@pytest.mark.parametrize("ep", ["dev_A01_fcv_seize", "dev_B03_tube_leak_slow", "dev_D01_high_cv_coal"])
+def test_the_flat_guard_is_never_worse_tick_by_tick_and_does_bite(ep):
+    """The guard's claim, on episodes: with a decider that pushes flat cases,
+    every scored tick right without the guard is right with it."""
+    from bench.replay_multi import published, replay
+    on = _cfg("mock_flatlover")
+    off = _cfg("mock_flatlover")
+    off["multi"]["decider"]["guard_flat"] = False
+    r_on, r_off = _run(on, ep), _run(off, ep)
+    right_on, right_off = _right_ticks(r_on), _right_ticks(r_off)
+    assert right_on.keys() == right_off.keys()
+    assert all(right_on[t] for t in right_off if right_off[t])          # never worse
+    flat = {"RCA-09", "RCA-10", "RCA-15"}
+    pushed = lambda run: any(x.get("decider_offsets", {}).get(c, 0) > 0
+                             for x in _records(run, "rule") for c in flat)
+    assert not pushed(r_on)
+    if ep in ("dev_A01_fcv_seize", "dev_B03_tube_leak_slow"):          # the guard really acts here:
+        assert pushed(r_off) and _published(r_on) != _published(r_off)  # published differs and some
+        assert any(right_on[t] and not right_off[t] for t in right_on)  # ticks become right
+    for r in (r_on, r_off):
+        assert replay(r, "nudge") == published(r)
+
+
 # ------------------------------------------------------- offline replay
 @needs_dev
 def test_the_offline_replay_reproduces_decider_runs_tick_for_tick(runs):
@@ -270,8 +361,11 @@ def test_the_decider_asks_only_when_its_evidence_changed(runs):
         ins = {c: i for i, c in enumerate(a["belief_order"])}
         live = [b for b in a["belief_ranking"] if b.get("case_ref")]
         want = [b["case_ref"] for b in sorted(live, key=lambda b: (-b["confidence"], ins[b["case_ref"]]))][:3]
-        assert d["offered"] == want
-    assert all(d["ranking"] == d["offered"] for d in recs)        # the mock backs belief's order
+        assert d["offered"][:d["n_belief"]] == want                # belief's top 3 first, in order
+        extra = d["offered"][d["n_belief"]:]                        # then the model's, at most 3, new ones
+        assert len(extra) <= 3 and not set(extra) & set(want) and len(set(d["offered"])) == len(d["offered"])
+    assert all(d["ranking"] == d["offered"] for d in recs)        # the mock backs the first offered
+    assert any(len(d["offered"]) > d["n_belief"] for d in recs)    # union added cases somewhere
 
 
 @needs_dev
@@ -284,7 +378,7 @@ def test_every_decider_call_is_logged_with_its_size_and_stays_under_the_prompt_l
         req = json.loads(e["prompt"])
         assert set(req) == {"state", "questions"}
         q = req["questions"]["root_cause"]
-        assert q["type"] == "choice" and len(q["criteria"]) == 3
+        assert q["type"] == "choice" and 2 <= len(q["criteria"]) <= 6
         assert q["instructions"] == "Which root cause best explains the plant facts?"
         assert all(line.startswith("[") for line in req["state"].splitlines())
 

@@ -7,9 +7,15 @@ serves:
   state     the tick's facts, as the compact diagnosis prompt shows them
             ("[check/severity] detail", severity order, at most 9 lines) --
             facts only, never raw readings (invariant 1)
-  options   belief's top `multi.decider.top_k` live cases with a case id, in
-            belief's order, each "<case id>: <cause>" (bev cuts an option at
-            64 tokens itself)
+  options   `multi.decider.candidates`:
+              union   (default; HUMAN DECISION 2026-10-08) belief's top `top_k`
+                      live cases with a case id, in belief's order, then the
+                      diagnosticians' top `top_k` cases of THIS tick
+                      (`model_ranking`, written by the gate) that belief's
+                      list does not hold, in the model's order: 2 to 2*top_k
+              belief  belief's top `top_k` only
+            each "<case id>: <cause>" (belief's cause; the library's root cause
+            for a case belief does not hold); bev cuts an option at 64 tokens
   question  `multi.decider.question`, one fixed sentence
 
 Called only when its evidence changed (the offered cases, the signature, the
@@ -36,13 +42,19 @@ NAME = "decider"
 ROLE = "decider"
 PRIORITY = 3
 QUESTION_ID = "root_cause"
+CANDIDATES = ("union", "belief")
 
 
 class DeciderAgent:
-    def __init__(self, backend, dcfg: dict, log_prompts: bool = False):
+    def __init__(self, backend, dcfg: dict, log_prompts: bool = False,
+                 library: dict | None = None):
         self.backend = backend
         self.top_k = int(dcfg["top_k"])
         self.question = str(dcfg["question"])
+        self.candidates = dcfg.get("candidates", "union")
+        if self.candidates not in CANDIDATES:
+            raise ValueError(f"multi.decider.candidates must be one of {CANDIDATES}")
+        self.library = library or {}
         if self.top_k < 2:
             raise ValueError("multi.decider.top_k must be at least 2")
         self.log_prompts = log_prompts
@@ -50,11 +62,28 @@ class DeciderAgent:
         self.failed = 0
 
     # ------------------------------------------------------------------
-    def offered(self, bb) -> list:
-        """Belief's top live hypotheses with a case id, belief's order
-        (rank_hypotheses: confidence, ties in insertion order)."""
+    def offered(self, bb, tick: int) -> list[tuple[str, str]]:
+        """[(case id, cause)]: belief's top live hypotheses with a case id, in
+        belief's order (rank_hypotheses: confidence, ties in insertion order);
+        under `union`, then the diagnosticians' top cases of this tick that
+        belief's list does not hold, in the model's order."""
         live = [h for h in bb.read("belief") if not h.retired]
-        return [h for h in merge_rules._belief_order(live) if h.case_ref][:self.top_k]
+        out = [(h.case_ref, h.cause) for h in merge_rules._belief_order(live)
+               if h.case_ref][:self.top_k]
+        self._n_belief = len(out)
+        if self.candidates == "union":
+            mr = bb.read("model_ranking")
+            model = list(mr.get("cases", [])) if mr.get("tick") == tick else []
+            have = {c for c, _ in out}
+            cause = {h.case_ref: h.cause for h in live if h.case_ref}
+            for c in model[:self.top_k]:
+                if c in have:
+                    continue
+                text = cause.get(c) or (self.library.get(c) or {}).get("root_cause")
+                if text:
+                    out.append((c, text))
+                    have.add(c)
+        return out
 
     @staticmethod
     def state_text(facts) -> str:
@@ -74,17 +103,17 @@ class DeciderAgent:
         return json.dumps({"state": self.state_text(facts),
                            "questions": {QUESTION_ID: {
                                "type": "choice", "instructions": self.question,
-                               "criteria": {h.case_ref: h.cause for h in offered}}}},
+                               "criteria": dict(offered)}}},
                           ensure_ascii=False)
 
     # ------------------------------------------------------------------
     def make_job(self, bb, scheduler, tick: int, submit_s: float):
         """The tick's decider job, or None (fewer than two cases, or the
         evidence is unchanged since the last checked answer)."""
-        offered = self.offered(bb)
+        offered = self.offered(bb, tick)
         if len(offered) < 2:
             return None
-        ids = [h.case_ref for h in offered]
+        ids = [c for c, _ in offered]
         fp = self.fingerprint(bb, ids)
         if bb.read("decider_answer").get("fingerprint") == fp:
             return None
@@ -100,6 +129,8 @@ class DeciderAgent:
         job = scheduler.new_job(NAME, evidence_tick=tick, priority=PRIORITY,
                                 max_answer_tokens=0, submit_s=submit_s, work=work)
         job.line_map = {"kind": "decider", "offered": ids, "fingerprint": fp,
+                        "candidates": self.candidates,
+                        "n_belief": self._n_belief,      # offered[:n_belief] came from belief
                         "evidence_tick": tick, "prompt_tokens_est": est_tokens(prompt)}
         return job
 

@@ -25,7 +25,7 @@ eb59296, local only.
 | step | result |
 |---|---|
 | ran the module | converter: stops cleanly on the lfs pointer in `bev-decider-0.4B/` (weights not downloaded). Mock dev episode `dev_D01_high_cv_coal` with `bev.yaml`: 135 decider calls on lane `bev`, 0 failed, 0 rejected, every summed offset <= 1.2. 24 conformance requests built from the 8 dev quick-set fault episodes (`reports/data/bev_requests.json`) |
-| self-tests | 71 new tests, all passing (convert 10, core 12, manifest 1 [runs when `BEV_LLAMA_SRC` is set; ran here against the pinned headers], backend 11, decider 25, conformance 7, board 5). Full suite after task 5: **513 passed, 1 skipped, 1 deselected** (the known-flaky `test_kill_minus_9_mid_episode_then_resume_is_identical`, which passed 2 of 3 alone before this work) |
+| self-tests | 78 new tests (convert 10, core 12, manifest 1 [runs when `BEV_LLAMA_SRC` is set; ran here against the pinned headers], backend 11, decider 32, conformance 7, board 5), counts as of 2026-10-08. Full suite after task 5: **513 passed, 1 skipped, 1 deselected** (the known-flaky `test_kill_minus_9_mid_episode_then_resume_is_identical`, which passed 2 of 3 alone before this work) |
 | independent re-derivation | (1) parameter counts: closed-form per-layer algebra from the configs vs element counts summed over the 263 tensors of the REAL header (range request, 29,632 bytes): head 7,364,608 = 7,364,608, layers + final norm 314,619,904 = 314,619,904, rel. diff 0; header + data = 969,892,808 B = the lfs pointer's size. (2) token layout: C++ vs bev's OWN `encode.py` (copied unchanged), token ids, positions, read indices and full attention mask identical on 6 cases. (3) head: C++ vs a Python forward written from `model.py`, max abs diff < 1e-12; via the real manifest path 3.3e-16. (4) decider off vs the pre-decider code (exported commit 1aaeaec): 15 mock dev runs, 2,580 ticks, assessments, run telemetry and summaries identical |
 | mutation check | 29 mutations, all caught: convert 4 (o_proj shape, copy offset, rename, eps), core 7 (answer position, read index, GELU tanh, unbiased variance, sqrt(H) scale, option cells not copied to the answer seq, option text), manifest 1 (eps), backend 4 (dropped connection, ttft source, missing usage as 0, mock pick), decider 8 (uncapped sum, unoffered case accepted, rejected answer counted, no on-change rule, lane kind ignored, offered order reversed, decider without nudge, decider offsets leaking into the diagnosticians' — the last needed a new test), board 4 (binary sha, missing sha, port, ADSP path), conformance 1 (tokens never compared) |
 
@@ -41,7 +41,9 @@ eb59296, local only.
 ## Constants introduced
 | symbol | value | provenance | range | affects |
 |---|---|---|---|---|
-| `multi.decider.top_k` | 3 | HUMAN DECISION 2026-10-07 (belief's top 3) | — | the cases offered |
+| `multi.decider.top_k` | 3 | HUMAN DECISION 2026-10-07 (3 from each list) | — | the cases offered |
+| `multi.decider.candidates` | union | HUMAN DECISION 2026-10-08: belief's top 3 + the diagnosticians' top 3 of the tick | union / belief | the cases offered (2 to 6) |
+| `multi.decider.guard_flat` | true | DESIGN from Gagan's measured finding (`guarded`, 7 Oct board answers); proof below | true / false | the decider never pushes RCA-09/10/15 |
 | `multi.decider.question` | "Which root cause best explains the plant facts?" | HUMAN DECISION 2026-10-07, fixed, never tuned | — | bev's input |
 | `EXPECTED_SHA256` | e28f9f5a…4282 | CITED: lfs pointer, huggingface.co/avbiswas/bev-decider-0.4B | — | refuses another file |
 | task prompts, "The answer is:", `<option>`, 2048 / 64 tokens | — | CITED: bev_decider 0.2.1 `encode.py`, model `config.json` | — | the token layout |
@@ -71,8 +73,10 @@ None with the decider off (shown above). Mock, dev quick set (10 episodes), arm 
    decider had raised it on 79; A right / B wrong on 36, the reverse on 0. Under the conservative default (one cap for
    all model evidence), bev-decider can help only where it disagrees with belief and belief is wrong; where it agrees
    with a wrong belief it undoes Llama's corrections. Not changed.
-2. **Filler cases are offered.** The first conformance request (dev_A01, drum level falling) offers RCA-09 and RCA-10,
-   the all-FLAT cases that drew Llama on 7 October, because belief ranks them in its top 3. That is the agreed rule
+2. **Filler cases are offered, but never pushed (since 2026-10-08).** The first conformance request (dev_A01, drum
+   level falling) offers RCA-09 and RCA-10, the all-FLAT cases that drew Llama on 7 October, because belief ranks
+   them in its top 3 (and under `union` the model's top 3 often holds them). They stay in the options (bev compares
+   all of them) but the decider's push never goes to them (`guard_flat`, below). The original agreed rule
    ("offer what belief ranks"). Whether bev-decider avoids them is a Part C result.
 3. **The decider's evidence changes often.** 135 calls on mock dev_D01 (310 ticks, 250 not quiet), so offsets reach the 1.2 cap
    within a few calls on many cases. Not tuned.
@@ -80,7 +84,8 @@ None with the decider off (shown above). Mock, dev quick set (10 episodes), arm 
    readings. Recorded so it is not mistaken for a breach of invariant 1.
 
 ## Decisions taken (conservative defaults, under the sign-off)
-Belief's top 3 as candidates (needs no Llama answer); its answer enters only through `nudge`, never as the ranking;
+Candidates (2026-10-08, human instruction): belief's top 3 then the diagnosticians' top 3 of the same tick, each
+once (was belief's top 3 alone); its answer enters only through `nudge`, never as the ranking;
 one shared cap (the bound `nudge` already had); decider off by default, its absence byte-identical to before; Q8_0;
 NPU first, board CPU as fallback; `LlamaServerBackend`'s missing `RemoteDisconnected` catch not touched here (shared
 runtime; Gagan fixed it in 348bd0e, merged 2026-10-08); existing board commands unchanged, `stop bev` separate.
@@ -89,7 +94,7 @@ runtime; Gagan fixed it in 348bd0e, merged 2026-10-08); existing board commands 
 1. **Shared or separate cap** for the decider's offsets (disagreement 1). Options: keep one cap (today); give the
    decider its own cap; let the decider replace the diagnosticians' nudge. Changes what arm B measures, so it is a
    human decision, best taken before Part C step 6.
-2. **Offer the filler cases or not** (disagreement 2) — same reason.
+2. **Offer the filler cases or not** (disagreement 2). Partly settled by `guard_flat`: offered, never pushed.
 3. **Arm A's run-to-run noise** needs arm A run twice on the board (about 1 h of board time per run, estimate from the
    accuracy-fix report); confirm the budget.
 4. **Conformance drift**: no automatic threshold (one relative to the board's own drift let a broken port pass — caught
@@ -121,6 +126,35 @@ Gagan's five commits (b7f6e45 .. 95fb39b) merged into `bev-decider` without a te
   when the decider is enabled. The runner never starts or stops bev-decide.
 - New open decision: the accuracy work's primary rule is now `guarded`; the decider has a path only through `nudge`.
   Whether to give it one under `guarded` / `tiebreak` (or to compare candidate B with the decider) is not decided here.
+
+## Combined candidates and the filler guard (2026-10-08)
+**Combined candidates (human instruction).** The decider is shown belief's top 3 live cases (belief's order), then the
+diagnosticians' top 3 of the SAME tick that belief's list does not hold (model order): 3 to 6 options. The gate
+writes the diagnosticians' combined ranking to a new gate-owned section, `model_ranking`, only when the decider is on;
+a model-named case belief does not hold takes the library's root cause as its option text. Rebuilt conformance
+requests: 24, with 3 / 4 / 5 / 6 options in 4 / 15 / 3 / 2 of them; largest request ~746 tokens (limit 1,280).
+
+**Filler guard (from Gagan's `guarded` finding).** The decider's push never goes to a case with no moving signature
+(RCA-09, RCA-10, RCA-15, read from the library by `merge_rules.flat_case_ids`). Implemented as: compute the decider's
+offsets exactly as before (`add_nudges`), then give the flat cases back their previous value. Every other case gets
+exactly what it got without the guard.
+
+Why it cannot lower group top-1 on these episodes: (1) no dev or reporting episode has a flat true cause (checked on
+all 36 + 30 ground truths); (2) the guard only lowers flat cases' scores and leaves every other case's score unchanged,
+the true case's included; so a tick whose published rank 1 was in the true group without the guard still is with it.
+Checked on episodes (mock decider that pushes flat cases whenever offered), all 21 dev fault episodes: the guard
+changes the published ranking on 369 ticks; 14 ticks become right, **0 become wrong**. The variant that passes the
+refused push on to the next case (as `guarded` does with the model's list) was mutation M2 below: the never-worse
+test FAILED for it on dev_B03 and dev_D01, so it can make ticks worse; it was not used.
+
+Checks: decider off still equals Gagan's tip on 25 mock dev runs / 4,300 ticks (0 differences). New tests: union
+order and this-tick-only (unit), the guard's arithmetic (unit), never-worse tick by tick on 3 dev episodes with the
+guard shown to act on 2, replay of guarded and unguarded decider runs. Mutations caught: guard removed (M1), push
+shifted to the next case (M2), union ignoring the model (M3), using a stale model ranking (M4), taking more than the
+model's top 3 (M5).
+
+**Not done, needs the board or a decision:** whether union beats belief-only candidates (it changes what bev sees);
+a decider path under `guarded` / candidate B (`accuracy_v2.yaml`).
 
 ## Pass rule for Part C step 6 (fixed 2026-10-07, before any board run)
 Dev quick set (the 8 fault episodes and 2 normal ones of `reports/multi_accuracy_fix.md`), lockstep, Llama 3.2 3B on

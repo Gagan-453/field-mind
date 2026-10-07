@@ -15,7 +15,8 @@ Read first, in this order: `CLAUDE.md` (project rules: they apply to every step 
   first 20 layers of Qwen3-0.6B plus a small decision head. Given a state and a few options it returns one
   probability per option in a single forward pass, no text generated, and the option order cannot change the answer.
 - In FieldMind it is a **third model agent, the decider**: whenever its evidence changes, it is shown the tick's facts
-  and belief's top 3 cases, and picks one. Its pick enters the published ranking only through `nudge`, as a capped
+  and the combined candidates (belief's top 3 + the Llama diagnosticians' top 3 of that tick, each once: 3 to 6
+  cases), and picks one. Its push never goes to the all-FLAT filler cases RCA-09/10/15 (`guard_flat`). Its pick enters the published ranking only through `nudge`, as a capped
   offset (+0.35 / +0.175, the diagnosticians' and the decider's offsets summed and capped at 1.2 per case per episode).
   It never writes belief and never has the last word (the gate checks every answer).
 - On the board it runs as **`bev-decide`**, a small C++ server built from the SAME llama.cpp as `llama-server`
@@ -58,7 +59,7 @@ adb shell "cd /data/local/tmp/llm/llama.cpp && LD_LIBRARY_PATH=/data/local/tmp/l
 ls data/episodes_dev | wc -l                                              # 36; if missing:
 #   .venv/bin/python -m data.generator.episode_build --set dev
 .venv/bin/python -m pytest -q tests/test_bev_convert.py tests/test_bev_core.py tests/test_bev_backend.py \
-    tests/test_decider.py tests/test_bev_conformance.py tests/test_bev_board.py      # 72 passed
+    tests/test_decider.py tests/test_bev_conformance.py tests/test_bev_board.py      # 77 passed
 BEV_LLAMA_SRC="$BUILD/llama.cpp" .venv/bin/python -m pytest -q tests/test_bev_manifest.py   # 1 passed
 ```
 
@@ -188,7 +189,7 @@ If nobody answers, the defaults below are what is built; changing 1 or 2 needs a
 | decision | default (as built) | why it matters |
 |---|---|---|
 | 1. one cap shared by the diagnosticians' and the decider's offsets | shared | on the mock a decider agreeing with belief cancelled the diagnosticians' corrections (report, disagreement 1) |
-| 2. offer the all-FLAT filler cases (RCA-09/10/15) when belief ranks them | offer | they drew Llama on 7 Oct; whether they draw bev-decider is a result |
+| 2. offer the all-FLAT filler cases (RCA-09/10/15) | offer, but never push (`guard_flat: true`) | they drew Llama on 7 Oct; the guard is proven never worse on these episodes (report) |
 | 3. run arm A twice (noise) | yes, about 1 h of board time each (estimate) | the pass rule needs the run-to-run difference |
 | 4. decider placement | HTP0 if step 5 passed there, else board CPU | changes latency and what shares the NPU |
 | 5. the decider only has a path through `nudge`; the accuracy work's primary rule is now `guarded` | measure under `nudge` as built | a decider path under `guarded`, or with candidate B (`accuracy_v2.yaml`), would be new code |

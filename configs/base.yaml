@@ -222,7 +222,15 @@ multi:
   # nudge. Off = the earlier behaviour exactly. On in configs/bev.yaml.
   decider:
     enabled: false
-    top_k: 3        # HUMAN DECISION 2026-10-07: belief's top 3
+    top_k: 3        # HUMAN DECISION 2026-10-07: 3 from each list
+    # union (HUMAN DECISION 2026-10-08): belief's top 3 + the diagnosticians'
+    # top 3 of the tick, duplicates once (2 to 6 options); belief: belief's only
+    candidates: union
+    # The decider's push never goes to a case with no moving signature
+    # (merge_rules.flat_case_ids: RCA-09/10/15), as `guarded` refuses the
+    # model's. Only flat cases lose push; no other case moves. No dev or
+    # reporting episode has a flat true cause (checked 2026-10-08).
+    guard_flat: true
     question: "Which root cause best explains the plant facts?"   # HUMAN DECISION 2026-10-07; fixed, never tuned
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json

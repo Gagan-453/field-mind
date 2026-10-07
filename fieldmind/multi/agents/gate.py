@@ -63,6 +63,11 @@ class GateMemoryAgent:
         self._fresh_payload = None      # the ones answered THIS tick (not reused)
         self._decider_fresh = None      # bev-decider: this tick's checked ranking
         self.decider_rejected = 0       # run-level: answers that failed the check
+        # bev-decider, set by the orchestrator when the decider is on: publish
+        # the diagnosticians' top cases (`model_ranking`) for the decider's
+        # candidates, and refuse the decider's push for flat cases.
+        self.publish_model_ranking = False
+        self.decider_guard_flat = False
 
     # ------------------------------------------------------------------
     def begin_tick(self, bb, rung: int) -> None:
@@ -224,6 +229,12 @@ class GateMemoryAgent:
                                      "reused_shown": dict(getattr(self, "_reused_shown", {}))
                                      if reused else {}})
         bb.write("diagnosis", claims, NAME)
+        if self.publish_model_ranking:
+            # bev-decider: the diagnosticians' combined ranking of THIS tick
+            # (accepted side answers, cached ones included), case ids only
+            hyps = (self._tick_payload or {}).get("hypotheses", []) if self.merge_rule != "model" else []
+            bb.write("model_ranking", {"tick": now_tick,
+                                       "cases": [h["case_ref"] for h in hyps if h.get("case_ref")]}, NAME)
         if degraded is not None:
             bb.write("status", {"degraded_mode": degraded}, NAME)
             asmt.degraded_mode = degraded
@@ -252,8 +263,9 @@ class GateMemoryAgent:
             # own offsets; the two are summed, the sum capped (total_offsets)
             dec = dict(bb.read("decider_evidence"))
             if self._decider_fresh:
-                dec = merge_rules.add_nudges(
-                    dec, [{"case_ref": c} for c in self._decider_fresh])
+                dec = merge_rules.decider_nudges(
+                    dec, self._decider_fresh,
+                    self.flat_ids if self.decider_guard_flat else frozenset())
                 bb.write("decider_evidence", dec, NAME)
             hyps, info = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
             if dec:
@@ -377,7 +389,8 @@ class GateMemoryAgent:
         env, lm = result.envelope, result.job.line_map
         asmt.envelopes.append(env.to_dict())
         record = {"agent": "decider", "evidence_tick": lm["evidence_tick"],
-                  "offered": list(lm["offered"]), "status": env.status}
+                  "offered": list(lm["offered"]), "n_belief": lm.get("n_belief"),
+                  "status": env.status}
         if self._drop_if_stale(result, now_tick):
             record["why"] = "stale"
         elif env.status != "ok":
@@ -391,6 +404,7 @@ class GateMemoryAgent:
                 record["why"] = why
             else:
                 record["ranking"] = ranking
+                record["guard_flat"] = self.decider_guard_flat
                 self._decider_fresh = ranking
                 bb.write("decider_answer", {"fingerprint": lm["fingerprint"],
                                             "ranking": ranking,

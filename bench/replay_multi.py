@@ -160,7 +160,8 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                     # in its own offsets, summed and capped as the gate does
                     d = next((r for r in recs if r.get("agent") == "decider" and r.get("ranking")), None)
                     if d:
-                        dec = merge_rules.add_nudges(dec, [{"case_ref": c} for c in d["ranking"]])
+                        dec = merge_rules.decider_nudges(
+                            dec, d["ranking"], FLAT if d.get("guard_flat") else frozenset())
                     hyps, _ = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
                 claims = dict(claims, hypotheses=hyps)
             v = next((r for r in recs if r.get("agent") == "verifier"), None)
