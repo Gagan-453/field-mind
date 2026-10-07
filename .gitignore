@@ -59,3 +59,5 @@ results/benchmarks/**/.tmp_*/
 # --- bev-decider weights (huggingface.co/avbiswas/bev-decider-0.4B, ~1 GB, CC-BY-NC):
 #     a separate git-lfs clone, never committed here
 bev-decider-0.4B/
+build-bev-android/
+build-bev/
