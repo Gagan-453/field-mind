@@ -10,7 +10,8 @@ L = bp.LLAMA
 
 
 def R(text="OK", model=f"/data/local/tmp/llm/{L}", backend="npu", status="ok"):
-    return SimpleNamespace(text=text, model=model, backend=backend, status=status, error="")
+    return SimpleNamespace(text=text, model=model, backend=backend, status=status, error="",
+                           latency_ms=1.0)
 
 
 def test_a_good_reply_passes():
@@ -78,3 +79,51 @@ def test_runs_cli_exit_code(tmp_path):
     r = subprocess.run([sys.executable, "-m", "bench.board_preflight", "runs", "multi", str(f)],
                        capture_output=True, text=True)
     assert r.returncode == 1 and "problems" in r.stdout
+
+
+def test_memory_logging_is_non_fatal_when_pidof_or_proc_fail():
+    def no_pidof(cmd):
+        if "pidof" in cmd:
+            return "/system/bin/sh: pidof: inaccessible or not found\n"
+        return "MemTotal: 100 kB\nMemAvailable: 50 kB\n"
+    mem, rss, warn = bp.collect_memory(no_pidof)
+    assert mem == {"MemTotal_kB": 100, "MemAvailable_kB": 50}
+    assert rss is None and any("RSS" in w for w in warn)
+
+    def adb_down(cmd):
+        raise OSError("adb: device offline")
+    mem, rss, warn = bp.collect_memory(adb_down)
+    assert mem is None and rss is None and len(warn) >= 2
+
+    def ok(cmd):
+        return ("8080 VmRSS: 10 kB\n8081 VmRSS: 20 kB\n" if "pidof" in cmd
+                else "MemAvailable: 50 kB\n")
+    assert bp.collect_memory(ok) == ({"MemAvailable_kB": 50}, {8080: 10, 8081: 20}, [])
+
+
+def test_preflight_does_not_fail_on_memory_but_does_on_a_wrong_model(monkeypatch, tmp_path):
+    """The whole preflight with a fake board: no pidof -> exit 0 with rss null;
+    a lane serving another model -> exit 1."""
+    from bench import board
+    log = {"npu": NPU_LOG, "cpu": CPU_LOG}
+    monkeypatch.setattr(board, "stop_lanes", lambda *a, **k: "")
+    monkeypatch.setattr(board, "start_lane", lambda lane, m, **k: {"lane": lane})
+    monkeypatch.setattr(board, "wait_health", lambda url, **k: 1.0)
+    monkeypatch.setattr(board, "lane_log", lambda lane, **k: log[lane])
+    monkeypatch.setattr(board, "_adb", lambda *a, **k: SimpleNamespace(
+        stdout="sh: pidof: not found" if "pidof" in a[-1] else "MemAvailable: 5 kB\n"))
+    served = {"model": f"/data/local/tmp/llm/{L}"}
+
+    class FakeBackend:
+        def __init__(self, url, lane, **k):
+            self.lane = lane
+
+        def generate(self, prompt, max_tokens=8):
+            return R(model=served["model"], backend=self.lane)
+    import fieldmind.runtime.llm_backend as lb
+    monkeypatch.setattr(lb, "LlamaServerBackend", FakeBackend)
+    assert bp.preflight(str(tmp_path / "p.json")) == 0
+    rec = json.loads((tmp_path / "p.json").read_text())
+    assert rec["rss"] is None and rec["warnings"] and rec["problems"] == []
+    served["model"] = "/data/local/tmp/llm/gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf"
+    assert bp.preflight(str(tmp_path / "p2.json")) == 1

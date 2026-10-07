@@ -439,7 +439,27 @@ lane with an HTP0 buffer, run lane, run model, text-reader calls skipped, CLI ex
 added. **Not verified here:** the preflight against a real board (no board attached); that `pidof` and the
 `/proc/<pid>/cmdline` port extraction work on the QIDK's Android shell; memory headroom for two 3B servers.
 
-Full suite: 447 passed, 1 failed (the intermittent campaign test above).
+### Follow-up checks (before the push)
+**The verifier cannot change which answer is merged or its place.** From code: the gate merges the side answers (or
+applies the merge rule) BEFORE the verifier runs in the tick (`orchestrator.tick`). `apply_verdict` folds a verdict
+with the single agent's `Verifier.apply`, which only caps a failed claim's confidence at 0.35, flags it
+`failed check`, sets a revised rank-1 confidence (always None in the compact format) and adds an `unexplained` line;
+it never removes, replaces or moves a hypothesis, and nothing re-sorts after it (`finalize` publishes the list as
+is). The `verdict` section it writes has no reader. So the cross-rule replay of group top-1 stays exact.
+Test `tests/test_verifier_never_reorders.py`: under tiebreak and nudge, on two dev episodes, a verifier that fails
+EVERY claim and one that fails only the FIRST claim (failing all cannot reveal a demotion, since all move together),
+each on every eligible tick, against the same run with the verifier off: published order identical tick for tick,
+every failed claim's confidence = min(its unverified confidence, 0.35). Mutations "a failed claim is demoted to the
+end" and "a failed claim is dropped" are caught, by the fail-first case only (the fail-all case alone let both
+through; recorded as the reason for the second pattern).
+
+**Preflight memory logging is non-fatal.** `collect_memory` reads `/proc/meminfo` and each server's RSS; if `pidof`,
+`/proc` or adb fails it records `rss: null` (and/or `meminfo: null`), prints a warning and the preflight continues.
+The model, lane, placement and HTP0 checks stay fatal. Tests: missing `pidof`, adb failing, normal output; and the
+whole preflight on a fake board: no `pidof` gives exit 0 with `rss: null`, a lane serving the Gemma file gives
+exit 1. Mutations "memory failure fatal again" and "model check not fatal" are caught.
+
+Full suite after these follow-ups: 453 passed, 1 failed (the intermittent campaign test, unrelated; see risk 2).
 
 ## Blocked / needs a decision
 1. **The board session.** At the board laptop (Fedora, QIDK on USB), from the repo root:

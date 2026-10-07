@@ -6,8 +6,9 @@ Preflight and model checks for bench/board_session.sh (accuracy-fix work).
         start BOTH lanes with Llama 3.2 3B (NPU :8080, CPU :8081), confirm each
         answers a trivial prompt with the expected model on the expected
         backend, check placement from each server's own startup log, log
-        /proc/meminfo and each llama-server's RSS; stop the lanes. Exit 0 only
-        when everything holds; otherwise print every problem and exit 1.
+        /proc/meminfo and each llama-server's RSS (non-fatal: a warning and
+        null when they cannot be read); stop the lanes. Exit 0 only when the
+        model, lane, placement and HTP0 checks hold; else print them, exit 1.
 
     .venv/bin/python -m bench.board_preflight runs multi|single RUN.json.gz...
         every model call in saved runs must report the expected model and the
@@ -88,6 +89,32 @@ def parse_rss(text: str) -> dict:
     return out
 
 
+def collect_memory(adb) -> tuple[dict | None, dict | None, list[str]]:
+    """Free memory and each llama-server's RSS, NON-FATAL: a board shell
+    without pidof or a readable /proc gives None and a warning, never a failed
+    preflight. `adb(cmd)` returns the shell's stdout and may raise."""
+    warnings, meminfo, rss = [], None, None
+    try:
+        meminfo = parse_meminfo(adb("cat /proc/meminfo")) or None
+    except Exception as e:                                  # noqa: BLE001
+        warnings.append(f"meminfo not read: {e}")
+    if meminfo is None or "MemAvailable_kB" not in meminfo:
+        warnings.append("MemAvailable not found in /proc/meminfo")
+    try:
+        rss = parse_rss(adb("for p in $(pidof llama-server); do "
+                            "echo $(tr '\\0' ' ' < /proc/$p/cmdline | sed -n 's/.*--port \\([0-9]*\\).*/\\1/p') "
+                            "$(grep VmRSS /proc/$p/status); done")) or None
+    except Exception as e:                                  # noqa: BLE001
+        warnings.append(f"RSS not read: {e}")
+    if rss is None:
+        warnings.append("no llama-server RSS read (pidof or /proc unavailable?)")
+    else:
+        for lane, port in (("npu", 8080), ("cpu", 8081)):
+            if port not in rss:
+                warnings.append(f"{lane}: no RSS for a llama-server on port {port}")
+    return meminfo, rss, warnings
+
+
 def check_run_models(run: dict, arch: str, model: str = LLAMA) -> list[str]:
     """Every model call in a saved run: expected model, expected lane."""
     p = []
@@ -138,23 +165,17 @@ def preflight(out: str) -> int:
             problems += check_reply(r, lane)
             rec["lanes"][lane].update(answer=r.text, reply_model=r.model, reply_backend=r.backend,
                                       status=r.status, latency_ms=round(r.latency_ms, 1))
-        rec["meminfo"] = parse_meminfo(board._adb("shell", "cat /proc/meminfo").stdout)
-        rss = board._adb("shell", "for p in $(pidof llama-server); do "
-                         "echo $(tr '\\0' ' ' < /proc/$p/cmdline | sed -n 's/.*--port \\([0-9]*\\).*/\\1/p') "
-                         "$(grep VmRSS /proc/$p/status); done").stdout
-        rec["rss_kB_by_port"] = parse_rss(rss)
-        for lane, port in (("npu", 8080), ("cpu", 8081)):
-            if port not in rec["rss_kB_by_port"]:
-                problems.append(f"{lane}: no llama-server process on port {port} found for RSS")
-        if not rec["meminfo"].get("MemAvailable_kB"):
-            problems.append("could not read MemAvailable from /proc/meminfo")
+        rec["meminfo"], rec["rss"], rec["warnings"] = collect_memory(
+            lambda cmd: board._adb("shell", cmd).stdout)
+        for w in rec["warnings"]:
+            print(f"preflight WARNING (not fatal): {w}", file=sys.stderr)
     finally:
         board.stop_lanes()
     rec["problems"] = problems
     Path(out).write_text(json.dumps(rec, indent=1) + "\n")
-    m = rec.get("meminfo", {})
+    m = rec.get("meminfo") or {}
     print(f"preflight: MemAvailable {m.get('MemAvailable_kB')} kB of {m.get('MemTotal_kB')} kB; "
-          f"RSS by port {rec.get('rss_kB_by_port')}")
+          f"RSS by port {rec.get('rss')}")
     for lane, i in rec["lanes"].items():
         print(f"  {lane}: ready after {i.get('ready_after_s')} s, answered {i.get('answer')!r} "
               f"as {Path(str(i.get('reply_model'))).name} on {i.get('reply_backend')}")
