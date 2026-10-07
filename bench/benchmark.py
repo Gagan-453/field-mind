@@ -592,7 +592,7 @@ def main() -> int:
                     help="lockstep (default): ticks back to back, each waits for its model "
                          "answers; realtime: a tick every --tick-s seconds, never waits")
     ap.add_argument("--tick-s", type=float, default=30.0, help="realtime: seconds per tick")
-    ap.add_argument("--merge-rule", choices=["model", "belief_only", "tiebreak", "nudge"],
+    ap.add_argument("--merge-rule", choices=["model", "belief_only", "tiebreak", "nudge", "guarded"],
                     default=None, help="multi: overrides multi.merge_rule")
     ap.add_argument("--again", action="store_true",
                     help="run episodes this test already has once more (saved as _r2, _r3, ...)")

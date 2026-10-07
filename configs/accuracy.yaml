@@ -30,5 +30,8 @@ multi:
     ver_claims: true
   split: true
   split_on_change: true
-  merge_rule: tiebreak             # accuracy-fix decision 1 (primary); baseline 3 runs with --merge-rule model
+  # tiebreak + the model may never promote a case with no moving signature.
+  # Chosen 2026-10-07 by the human's delegation ("do what you think is right");
+  # see reports/multi_accuracy_fix.md, "Step 3 (guarded)". Baseline: --merge-rule model.
+  merge_rule: guarded
   grammar: true

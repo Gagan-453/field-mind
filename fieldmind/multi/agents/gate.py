@@ -57,6 +57,7 @@ class GateMemoryAgent:
         # ranking (fieldmind/multi/merge_rules.py). "model" = the single
         # agent's merge (Phases 1-4). Set by the orchestrator.
         self.merge_rule = "model"
+        self.flat_ids = frozenset()     # merge_rule guarded: set by the orchestrator
         self._tick_payload = None       # all accepted side answers, this tick
         self._fresh_payload = None      # the ones answered THIS tick (not reused)
 
@@ -236,6 +237,8 @@ class GateMemoryAgent:
             hyps, info = merge_rules.belief_only(live)
         elif self.merge_rule == "tiebreak":
             hyps, info = merge_rules.tiebreak(live, model)
+        elif self.merge_rule == "guarded":
+            hyps, info = merge_rules.guarded(live, model, self.flat_ids)
         elif self.merge_rule == "nudge":
             offsets = dict(bb.read("model_evidence"))
             fresh = (self._fresh_payload or {}).get("hypotheses", [])

@@ -461,6 +461,50 @@ exit 1. Mutations "memory failure fatal again" and "model check not fatal" are c
 
 Full suite after these follow-ups: 453 passed, 1 failed (the intermittent campaign test, unrelated; see risk 2).
 
+## 7 October: board benchmarks reviewed; human delegation
+The human ran `scripts/benchmark.sh` on the board (multi-agent `fast.yaml`, merge rule `model`, and the single agent)
+on the six REPORTING episodes and uploaded the results (`fieldmind_benchmarks_2026-10-07.zip`). The human then
+decided: use the teammate's runner (`bench/benchmark.py`), and "for the other questions do what you think is right
+and make sure the multi-agent at least beats belief on the QIDK". Decisions taken under that delegation are marked
+DELEGATED below.
+
+**Exposure recorded.** The 7 October analysis replayed merge rules on reporting episodes, and the guarded rule below
+was checked on the same reporting answers. The reporting set has therefore influenced the choice of rule. The proof
+that the multi-agent beats belief must come from the dev board run, not from these replays.
+
+### Runner (human decision)
+`bench/benchmark.py` committed unchanged (`b7f6e45`), then given the preflight, a replay check and a model/lane check
+before an episode is kept (`0707735`); `bench/board_session.sh` retired.
+
+### Dropped connection (DELEGATED)
+`LlamaServerBackend.generate` treats `RemoteDisconnected`, `ConnectionResetError` and other connection errors as a
+failed call (`348bd0e`); before, the single-agent B01 board run died on one.
+
+### Step 3 (guarded): a merge rule that cannot be dragged down by flat cases (DELEGATED)
+`merge_rule: guarded` = `tiebreak` (belief's order; the model reorders only cases within 0.35 log-odds of belief's
+leader) except that the model may never promote a case with no moving signature. Those are RCA-09, RCA-10, RCA-15,
+found from the library data (`merge_rules.flat_case_ids`). Reason: such a case has no evidence that can separate
+it from a tied case, and the model's habit of ranking them first is the measured failure. On the 7 October board
+answers the model ranked one first in 57 of 96 D01 and 29 of 52 B01 answers, which is how `tiebreak` fell to 0.375
+on B01 against 0.555 for belief alone. Belief may still rank a flat case first by itself; only the model's
+promotion is refused. Set as the default of `configs/accuracy.yaml`.
+
+Replay of the 7 October board answers (reporting set; explanation only, see exposure above), group top-1 per tick:
+
+| episode | belief alone | tiebreak | **guarded** | nudge |
+|---|---|---|---|---|
+| A01 | 0.547 | 0.566 | **0.566** | 0.670 |
+| B01 | 0.555 | 0.375 | **0.586** | 0.500 |
+| C01 | 0.977 | 0.977 | **1.000** | 1.000 |
+| D01 | 0.816 | 0.843 | **0.843** | 0.812 |
+
+Guarded is above belief on all four; tiebreak is below it on B01, nudge on B01 and D01. Mock dev: replay of the
+guarded run reproduces it with 0 differences over 5,850 ticks. Tests: unit tests (no flat promotion; a moving case
+is promoted; belief's own flat rank 1 stays; equals tiebreak without flat picks; a balance-only case is not flat)
+and an episode test with a mock model that ranks every flat case first: guarded never publishes a flat case above
+belief's place for it, while tiebreak does. Mutations caught: guard removed, flat detection wrong on balance
+triples, gate ignoring the guard set (the last two only after the two tests were added).
+
 ## Blocked / needs a decision
 1. **The board session.** At the board laptop (Fedora, QIDK on USB), from the repo root:
 

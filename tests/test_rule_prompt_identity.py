@@ -17,7 +17,7 @@ from fieldmind.runtime.llm_backend import MockBackend, register_backend
 ROOT = Path(__file__).resolve().parent.parent
 DEV = ROOT / "data/episodes_dev"
 EPISODES = ("dev_B01_tube_leak", "dev_D01_high_cv_coal", "dev_C01_wet_coal")
-RULES = ("model", "belief_only", "tiebreak", "nudge")
+RULES = ("model", "belief_only", "tiebreak", "nudge", "guarded")
 
 
 class FailVerMock(MockBackend):

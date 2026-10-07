@@ -197,6 +197,8 @@ multi:
   #   belief_only  belief's top 3, model answers logged and ignored
   #   tiebreak     belief's order; the model reorders only cases within 0.35
   #                log-odds of belief's leader, every tick (PRIMARY)
+  #   guarded      tiebreak, but the model may never promote a case with no
+  #                moving signature (RCA-09/10/15); see merge_rules.py
   #   nudge        belief log-odds + capped model offsets, +0.35 / +0.175,
   #                at most 1.2 per case per episode (SECONDARY arm)
   # Needs multi.split. Default = model (earlier behaviour exactly).

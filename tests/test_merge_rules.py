@@ -129,7 +129,7 @@ def _run(rule, ep="dev_D01_high_cv_coal"):
 
 
 @pytest.mark.skipif(not (DEV / "dev_D01_high_cv_coal").exists(), reason="dev episodes not generated")
-@pytest.mark.parametrize("rule", ["belief_only", "tiebreak", "nudge"])
+@pytest.mark.parametrize("rule", ["belief_only", "tiebreak", "nudge", "guarded"])
 def test_every_non_quiet_tick_logs_the_rule_and_whether_it_differs_from_belief(rule):
     from bench.replay_multi import published, replay
     run = _run(rule)
@@ -169,3 +169,85 @@ def test_unknown_rule_and_rule_without_split_are_refused():
     cfg["multi"]["split"] = False
     with pytest.raises(ValueError):
         build_multi_agent(cfg, [])
+
+
+# --------------------------------------------------------------------- guarded
+FLAT = frozenset({"F1", "F2"})
+
+
+def test_flat_case_ids_come_from_the_library_signatures():
+    lib = json.loads((ROOT / "data/kb/case_library.json").read_text())["cases"]
+    assert mr.flat_case_ids(lib) == {"RCA-09", "RCA-10", "RCA-15"}
+
+
+def test_guarded_never_promotes_a_flat_case_but_does_promote_a_moving_one():
+    live = [H("M1", 2.0), H("F1", 2.0), H("M2", 1.9)]          # all three tied leaders
+    got, info = mr.guarded(live, M("F1", "M2"), FLAT)
+    assert refs(got) == ["M2", "M1", "F1"]                      # M2 promoted, F1 not
+    assert info["model_flat_ignored"] == ["F1"] and info["rule"] == "guarded"
+    got, info = mr.guarded(live, M("F1"), FLAT)
+    assert refs(got) == ["M1", "F1", "M2"] and not info["differs_from_belief"]   # belief order
+    assert info["why"] == "model ranked only flat cases (ignored)"
+
+
+def test_guarded_leaves_a_flat_case_where_belief_put_it():
+    live = [H("F1", 3.0), H("M1", 2.9)]
+    assert refs(mr.guarded(live, [], FLAT)[0]) == ["F1", "M1"]
+    assert refs(mr.guarded(live, M("M1"), FLAT)[0]) == ["M1", "F1"]          # band: 2.9 >= 2.65
+
+
+def test_guarded_equals_tiebreak_when_the_model_names_no_flat_case():
+    live = [H("A", 3.0), H("B", 2.8), H("C", 2.5)]
+    assert mr.guarded(live, M("B", "C"), FLAT)[0] == mr.tiebreak(live, M("B", "C"))[0]
+
+
+def test_a_case_moving_only_on_a_balance_triple_is_not_flat():
+    cases = [{"case_id": "B", "signature": {"drum_level": ["FLAT", "-"], "water_balance|DEFICIT|MED": 1.0}},
+             {"case_id": "F", "signature": {"drum_level": ["FLAT", "-"], "water_balance|FLAT|-": 1.0}}]
+    assert mr.flat_case_ids(cases) == {"F"}
+
+
+def _flatfirst_backend():
+    """The mock, except the compact diagnostician ranks every flat case it was
+    shown first (the failure measured on the board), then the others."""
+    from fieldmind.runtime.llm_backend import MockBackend, register_backend
+
+    class _B(MockBackend):
+        name = "mock_flatfirst"
+
+        def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None, **kw):
+            r = super().generate(prompt, role=role, max_tokens=max_tokens, mock_hint=mock_hint)
+            h = mock_hint or {}
+            if role == "diagnostician" and h.get("compact"):
+                lines = h["case_lines"]
+                order = sorted(range(len(lines)), key=lambda i: lines[i] not in {"RCA-09", "RCA-10", "RCA-15"})
+                r.text = json.dumps({"g": h["letters"][order[0]] if lines else "A",
+                                     "r": [[i + 1, [1]] for i in order[:3]] if h["fact_lines"] else [],
+                                     "sep": None, "n": [], "x": []}, separators=(",", ":"))
+            return r
+    register_backend("mock_flatfirst", _B)
+
+
+@pytest.mark.skipif(not (DEV / "dev_B01_tube_leak").exists(), reason="dev episodes not generated")
+def test_the_gate_never_publishes_a_model_promoted_flat_case():
+    from bench.replay_multi import FLAT
+    _flatfirst_backend()
+
+    def run(rule):
+        from bench.harness import Episode, run_episode
+        from run_demo import _deep_merge
+        cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+        _deep_merge(cfg, yaml.safe_load((ROOT / "configs/accuracy.yaml").read_text()))
+        cfg["llm"]["backend"] = "mock_flatfirst"
+        cfg["multi"]["merge_rule"] = rule
+        return run_episode(Episode(DEV / "dev_B01_tube_leak"), cfg, arch="multi")
+    g, t, b = run("guarded"), run("tiebreak"), run("belief_only")
+    promoted_flat_tb = ignored = 0
+    for ag, at, ab in zip(g["assessments"], t["assessments"], b["assessments"]):
+        bel = [h["case_ref"] for h in ab["hypotheses"]]
+        for i, h in enumerate(ag["hypotheses"]):
+            if h["case_ref"] in FLAT:                     # a flat case never sits higher than belief put it
+                assert bel.index(h["case_ref"]) <= i if h["case_ref"] in bel else True
+        promoted_flat_tb += any(h["case_ref"] in FLAT and h.get("tiebreak") for h in at["hypotheses"])
+        ignored += sum(len(c.get("model_flat_ignored", [])) for c in ag["multi"]["compact"] if c.get("agent") == "rule")
+    assert promoted_flat_tb > 0 and ignored > 0          # the model did push flat cases; tiebreak took them

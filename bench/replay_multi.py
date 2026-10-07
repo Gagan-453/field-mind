@@ -47,6 +47,9 @@ CASES = {c["case_id"]: c for c in
          json.loads(Path("data/kb/case_library.json").read_text())["cases"]}
 
 
+FLAT = merge_rules.flat_case_ids(list(CASES.values()))
+
+
 def load_run(path: str) -> dict:
     raw = Path(path).read_bytes()
     d = json.loads(gzip.decompress(raw) if path.endswith(".gz") else raw)
@@ -147,6 +150,8 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                     hyps, _ = merge_rules.belief_only(live)
                 elif rule == "tiebreak":
                     hyps, _ = merge_rules.tiebreak(live, model)
+                elif rule == "guarded":
+                    hyps, _ = merge_rules.guarded(live, model, FLAT)
                 else:
                     if fresh and fresh["hypotheses"]:
                         offsets = merge_rules.add_nudges(offsets, fresh["hypotheses"])
