@@ -4,8 +4,9 @@
 //              [--device HTP0 -ngl 99 | --device none] [-t 6] [-c 4096] \
 //              [--host 127.0.0.1] [--port 8082] [--max-options 16]
 //
-//   POST /v1/systemone   {"state": str, "questions": {id: {type, instructions, criteria}}}
-//                        -> {"model", "answers": {id: answer}, "latency_ms", "usage", "timings"}
+//   POST /v1/systemone   {"state": str, "questions": {id: {type, instructions, criteria}}[, "debug": true]}
+//                        -> {"model", "answers": {id: answer}, "latency_ms", "usage", "timings"
+//                            [, "token_ids": {id: {prompt, options, answer}}]}
 //                        answer as bev_decider: choice {type, choice, probabilities},
 //                        noul {type, noul}, score {type, score, probabilities}
 //   GET  /health         {"status": "ok"}
@@ -196,6 +197,10 @@ class Decider {
             throw BadRequest("state must be a string (JSON states are not supported by bev-decide)");
         const std::string state = req["state"].get<std::string>();
         json answers = json::object();
+        // "debug": true -> the token ids of every question (conformance:
+        // bench/bev_conformance.py compares them with bev_decider's encoder)
+        const bool debug = req.value("debug", false);
+        json token_ids = json::object();
         int64_t tokens = 0;
         double t_tok = 0, t_dec = 0, t_head = 0;
         for (auto it = req["questions"].begin(); it != req["questions"].end(); ++it) {
@@ -224,12 +229,15 @@ class Decider {
             t_head += ms_since(t3);
             tokens += L.n_tokens();
             answers[it.key()] = answer(q.type, L.keys, p);
+            if (debug) token_ids[it.key()] = {{"prompt", L.prompt}, {"options", L.options}, {"answer", L.answer}};
         }
-        return {{"model", req.value("model", std::string("bev-decider-0.4b"))},
-                {"answers", answers},
-                {"latency_ms", std::round(ms_since(t0) * 10) / 10},
-                {"usage", {{"prompt_tokens", tokens}}},
-                {"timings", {{"tokenize_ms", t_tok}, {"decode_ms", t_dec}, {"head_ms", t_head}}}};
+        json out = {{"model", req.value("model", std::string("bev-decider-0.4b"))},
+                    {"answers", answers},
+                    {"latency_ms", std::round(ms_since(t0) * 10) / 10},
+                    {"usage", {{"prompt_tokens", tokens}}},
+                    {"timings", {{"tokenize_ms", t_tok}, {"decode_ms", t_dec}, {"head_ms", t_head}}}};
+        if (debug) out["token_ids"] = token_ids;
+        return out;
     }
 
   private:
