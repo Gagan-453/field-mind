@@ -82,8 +82,8 @@ None with the decider off (shown above). Mock, dev quick set (10 episodes), arm 
 ## Decisions taken (conservative defaults, under the sign-off)
 Belief's top 3 as candidates (needs no Llama answer); its answer enters only through `nudge`, never as the ranking;
 one shared cap (the bound `nudge` already had); decider off by default, its absence byte-identical to before; Q8_0;
-NPU first, board CPU as fallback; `LlamaServerBackend`'s missing `RemoteDisconnected` catch NOT fixed (shared runtime,
-needs agreement), only the new backend catches it; existing board commands unchanged, `stop bev` separate.
+NPU first, board CPU as fallback; `LlamaServerBackend`'s missing `RemoteDisconnected` catch not touched here (shared
+runtime; Gagan fixed it in 348bd0e, merged 2026-10-08); existing board commands unchanged, `stop bev` separate.
 
 ## Blocked / needs a decision
 1. **Shared or separate cap** for the decider's offsets (disagreement 1). Options: keep one cap (today); give the
@@ -106,6 +106,21 @@ needs agreement), only the new backend catches it; existing board commands uncha
 - That `venv-convert` has torch >= 2.4 and transformers >= 4.56 for `bev_decider` (reference step).
 - The weights themselves: only the header was read; the file was never downloaded here.
 - Whether bev-decider helps on boiler faults at all: it was trained on support routing, policy and similar text.
+
+## Merge of multi-agent-fix (2026-10-08)
+Gagan's five commits (b7f6e45 .. 95fb39b) merged into `bev-decider` without a text conflict: the benchmark runner
+(`scripts/benchmark.sh`, `bench/benchmark.py`), the connection-drop fix in `LlamaServerBackend`, merge rule `guarded`
+(tiebreak; the model never promotes a flat case), `configs/accuracy.yaml` now `verifier: never` and
+`merge_rule: guarded`, and candidate B (`configs/accuracy_v2.yaml`, lean answer). Follow-ups made here:
+- `configs/bev.yaml` takes `verifier: never` from the new `accuracy.yaml` and keeps `merge_rule: nudge` (the decider
+  enters only through nudge). Arm A stays `accuracy.yaml` + `--merge-rule nudge`, so the arms differ by the decider
+  alone (test-enforced).
+- `bench/replay_multi.py` replays the decider's accepted rankings in `nudge` (summed, capped, as the gate does); without
+  it the runner's keep-check rejected every decider run. A run with no decider records replays as before.
+- `bench/benchmark.py`'s board check expects the decider's calls from bev-decide's model on the decider's lane, only
+  when the decider is enabled. The runner never starts or stops bev-decide.
+- New open decision: the accuracy work's primary rule is now `guarded`; the decider has a path only through `nudge`.
+  Whether to give it one under `guarded` / `tiebreak` (or to compare candidate B with the decider) is not decided here.
 
 ## Pass rule for Part C step 6 (fixed 2026-10-07, before any board run)
 Dev quick set (the 8 fault episodes and 2 normal ones of `reports/multi_accuracy_fix.md`), lockstep, Llama 3.2 3B on

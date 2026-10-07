@@ -200,6 +200,8 @@ class MockBackend(LLMBackend):
              for cid in hint.get("cases_by_score", [])[:3] if cid in lines]
         letters = hint.get("letters", [])
         g = letters[r[0][0] - 1] if r and letters else ""
+        if hint.get("lean"):
+            return {"r": r}
         return {"g": g, "r": r, "sep": r[0][0] if r else None, "n": [], "x": []}
 
     @staticmethod
@@ -753,6 +755,7 @@ class LlamaServerBackend(LLMBackend):
 
     def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None,
                  grammar=None):
+        import http.client
         import socket
         import urllib.error
         import urllib.request
@@ -781,6 +784,12 @@ class LlamaServerBackend(LLMBackend):
             if isinstance(e.reason, (TimeoutError, socket.timeout)):
                 return fail("timeout", f"llama-server exceeded {self.timeout_s}s")
             return fail("error", f"connection: {e.reason}")
+        except (http.client.HTTPException, ConnectionError, OSError) as e:
+            # The board's USB / adb link dropping mid-call surfaces here
+            # (RemoteDisconnected, ConnectionResetError, IncompleteRead), not as
+            # a URLError. A failed call, never a crash: the tick keeps the
+            # deterministic answer (board run of 2026-10-07, single-agent B01).
+            return fail("error", f"connection dropped: {type(e).__name__}: {e}")
         latency = (time.perf_counter() - t0) * 1000
 
         try:
@@ -826,8 +835,8 @@ class BevDeciderBackend(LLMBackend):
 
     Every failure is a failed call (status timeout | error), never an
     exception -- including a dropped connection (http.client.RemoteDisconnected,
-    ConnectionError), which LlamaServerBackend does not catch (7 Oct 2026
-    benchmark, single-agent B01).
+    ConnectionError; the 7 Oct 2026 single-agent B01 crash, which
+    LlamaServerBackend also catches since commit 348bd0e).
     """
 
     name = "bevdecider"

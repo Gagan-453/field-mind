@@ -23,3 +23,5 @@ Updated and committed after every step. No accuracy claim until the final gate p
 3. **Pre-board risks closed.** Replay claim proven from code and by a cross-rule prompt-identity test (verifier is
    the documented exception); session resume shown independent of the campaign's and tested with SIGKILL mid-episode;
    preflight and per-run model/lane checks added. Board commands are in the report.
+4. **7 October delegation.** Runner adopted with safety checks; dropped-connection fix; guarded rule (accuracy A);
+   lean answer + case slots + no model reader (accuracy B); board check pre-registered. Waiting for the board run.

@@ -22,8 +22,9 @@ Read first, in this order: `CLAUDE.md` (project rules: they apply to every step 
   (b11371, commit 99b95488), on **port 8082**, beside the two Llama lanes (8080 NPU, 8081 CPU).
 - **No new libraries go on the board.** Three new files only: the `bev-decide` binary, one GGUF, the head
   (`bev_head.bin` + `bev_head.json`). It reuses `/data/local/tmp/llm/llama.cpp/lib`.
-- Config: `configs/bev.yaml` (= `configs/accuracy.yaml` + `merge_rule: nudge` + the decider + the bev lane). The
-  decider is OFF in `configs/base.yaml`; with it off, everything is byte-identical to before.
+- Config: `configs/bev.yaml` (= `configs/accuracy.yaml` + `merge_rule: nudge` + the decider + the bev lane; since the
+  2026-10-08 merge that includes `verifier: never`). `accuracy.yaml`'s own rule is now `guarded`; arm A overrides it
+  to `nudge` so the arms differ by the decider alone. The decider is OFF in `configs/base.yaml`.
 
 ## 2. Rules for this session
 
@@ -57,7 +58,7 @@ adb shell "cd /data/local/tmp/llm/llama.cpp && LD_LIBRARY_PATH=/data/local/tmp/l
 ls data/episodes_dev | wc -l                                              # 36; if missing:
 #   .venv/bin/python -m data.generator.episode_build --set dev
 .venv/bin/python -m pytest -q tests/test_bev_convert.py tests/test_bev_core.py tests/test_bev_backend.py \
-    tests/test_decider.py tests/test_bev_conformance.py tests/test_bev_board.py      # 70 passed
+    tests/test_decider.py tests/test_bev_conformance.py tests/test_bev_board.py      # 72 passed
 BEV_LLAMA_SRC="$BUILD/llama.cpp" .venv/bin/python -m pytest -q tests/test_bev_manifest.py   # 1 passed
 ```
 
@@ -190,41 +191,47 @@ If nobody answers, the defaults below are what is built; changing 1 or 2 needs a
 | 2. offer the all-FLAT filler cases (RCA-09/10/15) when belief ranks them | offer | they drew Llama on 7 Oct; whether they draw bev-decider is a result |
 | 3. run arm A twice (noise) | yes, about 1 h of board time each (estimate) | the pass rule needs the run-to-run difference |
 | 4. decider placement | HTP0 if step 5 passed there, else board CPU | changes latency and what shares the NPU |
+| 5. the decider only has a path through `nudge`; the accuracy work's primary rule is now `guarded` | measure under `nudge` as built | a decider path under `guarded`, or with candidate B (`accuracy_v2.yaml`), would be new code |
 
 ## 10. Step 6: the measurement (dev quick set; several hours)
 
-Order A1, B, A2, so slow drift (heat, the board) does not favour one arm. `bev-decide` can stay up through all three
-(arm A never calls it; the batch script restarts only `llama-server` between episodes).
+Order A1, B, A2, so slow drift (heat, the board) does not favour one arm. Use Gagan's runner (`scripts/benchmark.sh`,
+`BENCHMARK_GUIDE.md`): per batch it runs the preflight, per episode it restarts the Llama lanes, waits for the chip
+to cool, and keeps a run only if its replay reproduces the published ranking and every model call came from the
+configured model on its lane (the decider: bev-decide's model on lane `bev`; a failed call also rejects the run). It
+restarts only `llama-server`, never `bev-decide`, so `bev-decide` stays up through all three arms (arm A never calls it).
 ```bash
 unset PYTHONPATH
-L=Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf
 Q=(dev_A01_fcv_seize dev_A02_fcv_seize_fast dev_B01_tube_leak dev_B02_tube_leak_fast dev_C01_wet_coal
    dev_C02_feeder_trip dev_D01_high_cv_coal dev_D03_high_cv_severe dev_N01_normal dev_N02_normal)
 
 # arm A, run 1: accuracy.yaml + nudge, no decider
-OVERLAY=configs/accuracy.yaml MERGE_RULE=nudge NPU_MODEL=$L CPU_MODEL=$L EPISODES_DIR=data/episodes_dev \
-    OUT=results/bev/armA_run1 LOG_PROMPTS=1 scripts/benchmark_multi_lockstep_all.sh "${Q[@]}"
+scripts/benchmark.sh bev_armA_run1 "${Q[@]}" --overlay configs/accuracy.yaml --merge-rule nudge
 
 # arm B: bev.yaml (the decider on). bev-decide must answer for the whole batch
 curl -s http://localhost:8082/health                     # {"status":"ok"}
-OVERLAY=configs/bev.yaml NPU_MODEL=$L CPU_MODEL=$L EPISODES_DIR=data/episodes_dev \
-    OUT=results/bev/armB LOG_PROMPTS=1 scripts/benchmark_multi_lockstep_all.sh "${Q[@]}"
+scripts/benchmark.sh bev_armB "${Q[@]}" --overlay configs/bev.yaml
 
 # arm A, run 2
-OVERLAY=configs/accuracy.yaml MERGE_RULE=nudge NPU_MODEL=$L CPU_MODEL=$L EPISODES_DIR=data/episodes_dev \
-    OUT=results/bev/armA_run2 LOG_PROMPTS=1 scripts/benchmark_multi_lockstep_all.sh "${Q[@]}"
+scripts/benchmark.sh bev_armA_run2 "${Q[@]}" --overlay configs/accuracy.yaml --merge-rule nudge
 ```
-Each command resumes where it stopped if run again. Live view in a second terminal:
-`.venv/bin/python bench/stage_monitor_multi.py`. If the decider sits on HTP0, `bev-decide` and the Llama NPU lane
-share the NPU: watch for stalls and report them.
+Results go to `results/benchmarks/<name>/` (`RESULTS.md`, `test.json`, per episode `run.json.gz` / `summary.json` /
+`log`). The same command resumes after a stop; the runner refuses to mix settings under one name. A rejected episode is
+saved apart and the batch stops: read why before rerunning. If the decider sits on HTP0, `bev-decide` and the Llama
+NPU lane share the NPU: watch for stalls and report them. (Fallback if the runner itself fails: the older
+`scripts/benchmark_multi_lockstep_all.sh` with `OVERLAY=`, `MERGE_RULE=`, `NPU_MODEL=`, `CPU_MODEL=`, `EPISODES_DIR=`,
+`OUT=`, `LOG_PROMPTS=1`; it has no keep-checks, so check `failed` yourself.)
 
 Compare the arms (the evaluator `run_demo.py` uses, pooled over the episodes of each folder):
 ```bash
-.venv/bin/python - results/bev/armA_run1 results/bev/armB results/bev/armA_run2 <<'EOF'
+.venv/bin/python - results/benchmarks/bev_armA_run1 results/benchmarks/bev_armB results/benchmarks/bev_armA_run2 <<'PY'
 import glob, gzip, json, sys
 from bench.evaluator import aggregate, evaluate
+def load(f):                       # a run, a list of runs, or {"runs": [...]}
+    d = json.load(gzip.open(f))
+    return d if isinstance(d, list) else d.get("runs", [d])
 for arm in sys.argv[1:]:
-    runs = [r for f in sorted(glob.glob(f"{arm}/*_multi.run.json.gz")) for r in json.load(gzip.open(f))]
+    runs = [r for f in sorted(glob.glob(f"{arm}/*_multi.run.json.gz")) for r in load(f)]
     s = aggregate([evaluate(r) for r in runs])
     print(f"== {arm}  ({len(runs)} episodes)")
     print("  library group top-1", s["Q2_library"]["group_top1"], "| belief alone", s["Q2_library"]["belief_group"],
@@ -233,11 +240,11 @@ for arm in sys.argv[1:]:
         d = r["multi"].get("decider")
         if d is not None:
             print(f"  {r['episode_id']:28} decider calls {d['calls']:4}  failed {d['failed']}  rejected {d['rejected']}")
-EOF
+PY
 ```
 **Arm B is valid only if every episode shows `failed 0`.** A failed call (server down, timeout) silently leaves the
-episode without the decider. If any episode has failed > 0, move its files to `results/bev/armB/invalid/`, fix the
-cause, and rerun that episode. `rejected` > 0 is a result (the gate refused bev's answer), not an error: report it.
+episode without the decider (the runner rejects such a run; with the fallback script you must check). If any kept
+episode has failed > 0, move its files to an `invalid/` subfolder, fix the cause, and rerun that episode. `rejected` > 0 is a result (the gate refused bev's answer), not an error: report it.
 
 Pass rule (written before the run, `reports/bev_decider.md`): arm B's library group top-1 must be above BOTH arm A
 runs and above belief alone, each by more than |A1 - A2|. Held-out (family C, RCA-06) is reported, never used to
@@ -288,5 +295,6 @@ Do not push. Tell the human the report is committed and what the pass rule gave.
 | `bench/bev_conformance.py` | step 3 and step 5 |
 | `bench/board.py` | `start bev` / `log bev` / `stop bev`; record the sha256 here |
 | `configs/bev.yaml`, `configs/accuracy.yaml` | arm B, arm A |
-| `scripts/benchmark_multi_lockstep_all.sh` | the quick-set runs |
+| `scripts/benchmark.sh`, `bench/benchmark.py`, `BENCHMARK_GUIDE.md` | the quick-set runs (Gagan's runner) |
+| `bench/replay_multi.py` | the runner's replay keep-check; replays the decider's offsets too |
 | `fieldmind/multi/agents/decider.py`, `fieldmind/multi/agents/gate.py` (`fold_decider`, `apply_rule`) | the agent side |

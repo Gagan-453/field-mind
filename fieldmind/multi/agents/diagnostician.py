@@ -53,6 +53,10 @@ class DiagnosticianAgent:
         mcfg = mcfg or {}
         self.sw = compact.compact_switches(mcfg.get("compact"))
         self.letters = letters or {}
+        # accuracy-fix step 6 (case_slots: belief); set by the orchestrator
+        self.library: dict = {}
+        self.flat_ids: frozenset = frozenset()
+        self.k_cases = (cfg.get("retrieval") or {}).get("k_cases", 4)
         self.cap = (mcfg.get("answer_caps") or {}).get("diagnostician", 60)
         self.guard_cpt = mcfg.get("compact_guard_cpt")
         self.split = bool(mcfg.get("split", False))
@@ -67,7 +71,8 @@ class DiagnosticianAgent:
             raise ValueError("multi.split needs multi.compact.schema on: the side "
                              "prompts are the compact (B') prompts")
         if self.sw["schema"]:
-            self.templates = {"body": compact.load_prompt("diag_compact.txt"),
+            body = "diag_compact_lean.txt" if self.sw["answer"] == "lean" else "diag_compact.txt"
+            self.templates = {"body": compact.load_prompt(body),
                               "rules_full": compact.load_prompt("diag_rules_full.txt"),
                               "rules_compact": compact.load_prompt("diag_rules_compact.txt")}
             self.repair = compact.load_prompt("repair_lines.txt")
@@ -99,12 +104,28 @@ class DiagnosticianAgent:
         side has evidence (Phase 3 decision 5)."""
         return sides.sides_to_run(bb.read("facts").facts_of(tick), bb.read("findings"))
 
+    def side_cases(self, bb, side) -> list[dict]:
+        """The cases a side's prompt shows (retrieval's, filtered by side; with
+        case_slots belief, limited and completed by select_cases)."""
+        cases = bb.read("retrieval").get("cases", [])
+        if side is not None:
+            cases = sides.cases_for_side(cases, side)
+        if self.sw.get("case_slots") == "belief":
+            live = sorted((h for h in bb.read("belief") if not h.retired),
+                          key=lambda h: -h.confidence)
+            cases = compact.select_cases(list(cases), [h.case_ref for h in live],
+                                         self.library, self.flat_ids, side, self.k_cases)
+        return list(cases)
+
     @staticmethod
-    def fingerprint(bb, side: str) -> tuple:
-        """The evidence a side's diagnosis depends on, as on the board now."""
+    def fingerprint(bb, side: str, agent=None) -> tuple:
+        """The evidence a side's diagnosis depends on, as on the board now,
+        including the cases its prompt would show (`agent` gives its case
+        selection; without one, retrieval's side cases, the Phase 3 rule)."""
         retrieved = bb.read("retrieval")
-        shown = ([c.get("case_id") for c in
-                  sides.cases_for_side(retrieved.get("cases", []), side)]
+        cases = (agent.side_cases(bb, side) if agent is not None else
+                 sides.cases_for_side(retrieved.get("cases", []), side))
+        shown = ([c.get("case_id") for c in cases]
                  + [e.get("case_id") for e in retrieved.get("experience", [])])
         return sides.side_fingerprint(bb.read("signature").get("signature", {}),
                                       bb.read("findings"),
@@ -123,7 +144,7 @@ class DiagnosticianAgent:
         cached = bb.read("side_answers")
         jobs = []
         for s in self.sides_to_run(bb, tick):
-            fp = self.fingerprint(bb, s)
+            fp = DiagnosticianAgent.fingerprint(bb, s, self)
             if self.on_change and s in cached and cached[s]["fingerprint"] == fp:
                 continue
             job = self._compact_job(bb, scheduler, tick, level, rung, submit_s, side=s)
@@ -150,7 +171,7 @@ class DiagnosticianAgent:
             # the side's view: its facts, its cases, its notes; retrieval and
             # belief themselves are not split (decision 4)
             facts = sides.facts_for_side(all_facts, side)
-            retrieved["cases"] = sides.cases_for_side(retrieved.get("cases", []), side)
+            retrieved["cases"] = self.side_cases(bb, side)
             if self.sw["notes"]:
                 # note-facts: by the note-fact's own subjects (commit 0 design)
                 notefacts = {k: v for k, v in notefacts.items()
@@ -198,5 +219,6 @@ class DiagnosticianAgent:
             # exactly the lines THIS prompt showed
             job.grammar = grammar.to_gbnf(grammar.diagnosis(
                 len(line_map["facts"]), len(line_map["cases"]),
-                len(line_map["context"]), line_map["letters"]))
+                len(line_map["context"]), line_map["letters"],
+                lean=self.sw["answer"] == "lean"))
         return job

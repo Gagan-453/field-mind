@@ -47,6 +47,9 @@ CASES = {c["case_id"]: c for c in
          json.loads(Path("data/kb/case_library.json").read_text())["cases"]}
 
 
+FLAT = merge_rules.flat_case_ids(list(CASES.values()))
+
+
 def load_run(path: str) -> dict:
     raw = Path(path).read_bytes()
     d = json.loads(gzip.decompress(raw) if path.endswith(".gz") else raw)
@@ -113,7 +116,7 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
     flags)] under `rule`. QUIET ticks give []."""
     if rule == "model":
         rule = "current"
-    out, cache, offsets = [], {}, {}
+    out, cache, offsets, dec = [], {}, {}, {}
     for a in run["assessments"]:
         if a["triage"] == "QUIET" or not a.get("belief_ranking") and not a["hypotheses"]:
             out.append({"tick": a["tick"], "hyps": []})
@@ -147,10 +150,18 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                     hyps, _ = merge_rules.belief_only(live)
                 elif rule == "tiebreak":
                     hyps, _ = merge_rules.tiebreak(live, model)
+                elif rule == "guarded":
+                    hyps, _ = merge_rules.guarded(live, model, FLAT)
                 else:
                     if fresh and fresh["hypotheses"]:
                         offsets = merge_rules.add_nudges(offsets, fresh["hypotheses"])
-                    hyps, _ = merge_rules.nudge(live, offsets)
+                    # bev-decider: an accepted decider answer of this tick (its
+                    # record carries the checked ranking) is one more fresh answer
+                    # in its own offsets, summed and capped as the gate does
+                    d = next((r for r in recs if r.get("agent") == "decider" and r.get("ranking")), None)
+                    if d:
+                        dec = merge_rules.add_nudges(dec, [{"case_ref": c} for c in d["ranking"]])
+                    hyps, _ = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
                 claims = dict(claims, hypotheses=hyps)
             v = next((r for r in recs if r.get("agent") == "verifier"), None)
             if v and v.get("answer") is not None:

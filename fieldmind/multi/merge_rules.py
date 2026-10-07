@@ -19,6 +19,14 @@ offline replay (bench/replay_multi.py), so the two cannot disagree.
                the band come first, in its order; the rest of the band follows
                in belief's order; everything outside the band keeps its place.
                Recomputed every tick; nothing is written to belief.
+  guarded      `tiebreak`, except that a case with NO moving signature (every
+               triple FLAT: RCA-09, RCA-10, RCA-15 in today's library) is never
+               promoted by the model. Such a case carries no evidence that can
+               separate it from a tied case; on the 7 October board runs the
+               model ranked one of them first in 57 of 96 D01 answers and 29 of
+               52 B01 answers, which is how tiebreak fell below belief alone on
+               B01. Belief may still rank a flat case first on its own; only
+               the model's promotion is refused.
   nudge        SECONDARY arm (option A). Every tick a FRESH answer (not a
                reused one) adds STEP to its rank-1 case and STEP/2 to its
                rank-2 case, at most once per case per tick, each case's total
@@ -41,7 +49,7 @@ from __future__ import annotations
 
 import math
 
-RULES = ("model", "belief_only", "tiebreak", "nudge")
+RULES = ("model", "belief_only", "tiebreak", "nudge", "guarded")
 BAND = 0.35
 STEP = 0.35
 CAP = 1.2
@@ -150,3 +158,29 @@ def nudge(live: list, offsets: dict) -> tuple[list[dict], dict]:
                            "why": "model offsets reorder belief" if differs else
                            ("offsets do not change belief's top 3" if offsets else "no offsets"),
                            "offsets": {k: round(v, 4) for k, v in sorted(offsets.items())}}
+
+
+def flat_case_ids(cases: list[dict]) -> frozenset:
+    """Library cases whose signature has no moving triple (every direction
+    FLAT). Read from the case data, not listed by hand."""
+    out = set()
+    for c in cases:
+        moving = False
+        for k, v in (c.get("signature") or {}).items():
+            d = v[0] if isinstance(v, list) else k.split("|")[1]
+            moving = moving or d != "FLAT"
+        if not moving:
+            out.add(c["case_id"])
+    return frozenset(out)
+
+
+def guarded(live: list, model_hyps: list[dict], flat_ids, band: float = BAND):
+    """tiebreak with the model's promotion of a flat case refused."""
+    kept = [m for m in model_hyps if m.get("case_ref") not in flat_ids]
+    hyps, info = tiebreak(live, kept, band)
+    info.update(rule="guarded",
+                model_flat_ignored=[m.get("case_ref") for m in model_hyps
+                                    if m.get("case_ref") in flat_ids])
+    if model_hyps and not kept and not info["differs_from_belief"]:
+        info["why"] = "model ranked only flat cases (ignored)"
+    return hyps, info

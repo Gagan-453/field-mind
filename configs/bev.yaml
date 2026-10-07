@@ -1,10 +1,11 @@
 # bev-decider runs (reports/bev_decider.md; HUMAN SIGN-OFF 2026-10-07).
 # An OVERLAY on configs/base.yaml (run_demo.py takes one overlay): EXACTLY
 # configs/accuracy.yaml, with merge_rule nudge, plus the decider and its lane.
-# tests/test_bev_config.py holds it to that, so arm A (accuracy.yaml +
+# tests/test_decider.py holds it to that, so arm A (accuracy.yaml +
 # --merge-rule nudge) and arm B (this file) differ by the decider only.
 agent:
-  verifier: conditional
+  # as configs/accuracy.yaml (accuracy-fix decision 2, 2026-10-07): verifier off
+  verifier: never
 multi:
   placement: fixed
   fixed_placement:
@@ -39,7 +40,10 @@ multi:
     ver_claims: true
   split: true
   split_on_change: true
-  merge_rule: nudge                 # the decider enters through nudge only
+  # the decider enters through nudge only (accuracy.yaml's own rule is now
+  # `guarded`; arm A for the decider comparison is accuracy.yaml + --merge-rule
+  # nudge, so the two arms differ by the decider alone)
+  merge_rule: nudge
   grammar: true
   decider:
     enabled: true

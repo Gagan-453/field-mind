@@ -146,7 +146,7 @@ def main():
                     help="real time: wall-clock seconds per tick (default the agent's "
                          "30 s; shorter for tests and quick demonstrations)")
     ap.add_argument("--merge-rule", default=None,
-                    choices=["model", "belief_only", "tiebreak", "nudge"],
+                    choices=["model", "belief_only", "tiebreak", "nudge", "guarded"],
                     help="overrides multi.merge_rule (--arch multi only)")
     ap.add_argument("--placement", default=None,
                     choices=["fixed", "earliest_finish"],

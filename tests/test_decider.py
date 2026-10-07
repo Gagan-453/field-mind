@@ -205,6 +205,45 @@ def test_total_offsets_sums_and_caps_and_is_the_identity_without_a_decider():
     assert mr.total_offsets(model, {"A": 0.35, "C": 0.175}) == {"A": 1.2, "B": 0.35, "C": 0.175}
 
 
+# ------------------------------------------------------- offline replay
+@needs_dev
+def test_the_offline_replay_reproduces_decider_runs_tick_for_tick(runs):
+    """bench/replay_multi.py (and so bench/benchmark.py's keep-check) replays a
+    nudge run with the decider exactly, from the run file alone."""
+    from bench.replay_multi import published, replay
+    for k in ("mock", "contrarian", "rogue", "A"):
+        assert replay(runs[k], "nudge") == published(runs[k]), k
+
+
+@needs_dev
+def test_the_benchmark_runner_keeps_a_correct_board_decider_run_and_rejects_a_wrong_lane(runs):
+    """bench/benchmark.py's keep-check on a decider run: the replay passes, and on
+    the board the decider's calls must come from bev-decide's model on its lane."""
+    import copy
+    from types import SimpleNamespace
+    from bench.benchmark import Runner
+    L, BEV = "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf", "bev-decider-0.4B-backbone-Q8_0.gguf"
+    cfg = _cfg()
+    run = copy.deepcopy(runs["mock"])
+    for a in run["assessments"]:                       # what a correct board run reports
+        for e in a["envelopes"]:
+            lane = cfg["multi"]["fixed_placement"].get(e["agent"], "npu")
+            e["backend"] = lane
+            e["model"] = f"/data/local/tmp/llm/{BEV if lane == 'bev' else L}"
+        for t in (a.get("multi") or {}).get("text", []):
+            t["envelope"].update(backend="cpu", model=f"/data/local/tmp/llm/{L}")
+
+    def check(c):
+        me = SimpleNamespace(args=SimpleNamespace(arch="multi"), board=True, cfg=c,
+                             test=SimpleNamespace(params={"merge_rule": "nudge",
+                                                          "models": {"npu": L, "cpu": L}}))
+        return Runner.check_run(me, run)
+    assert check(cfg) == []
+    e = next(e for a in run["assessments"] for e in a["envelopes"] if e["agent"] == "decider")
+    e["backend"] = "npu"                                  # the decider answered from the wrong lane
+    assert any("decider" in p and "backend" in p for p in check(cfg))
+
+
 # -------------------------------------------------- belief is never written
 @needs_dev
 def test_belief_is_identical_with_and_without_the_decider(runs):

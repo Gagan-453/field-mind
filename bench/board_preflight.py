@@ -51,15 +51,15 @@ def check_reply(reply, lane: str, model: str = LLAMA) -> list[str]:
     return p
 
 
-def check_lane_log(lane: str, log: str) -> list[str]:
+def check_lane_log(lane: str, log: str, model: str = LLAMA) -> list[str]:
     """The server's own startup log. NPU: every layer offloaded and a nonzero
     HTP0 buffer. CPU: no layer offloaded and no HTP0 buffer. Both: the model
     path loaded is the expected file."""
     p = []
     m = re.search(r"offloaded (\d+)/(\d+) layers", log)
     htp = re.search(r"HTP0 model buffer size =\s*([0-9.]+)", log)
-    if LLAMA not in log:
-        p.append(f"{lane}: startup log does not name {LLAMA}")
+    if model not in log:
+        p.append(f"{lane}: startup log does not name {model}")
     if m is None:
         p.append(f"{lane}: no 'offloaded N/M layers' line in the startup log")
     elif lane == "npu" and (m.group(1) != m.group(2) or not htp or float(htp.group(1)) <= 0):
@@ -115,18 +115,24 @@ def collect_memory(adb) -> tuple[dict | None, dict | None, list[str]]:
     return meminfo, rss, warnings
 
 
-def check_run_models(run: dict, arch: str, model: str = LLAMA) -> list[str]:
-    """Every model call in a saved run: expected model, expected lane."""
+def check_run_models(run: dict, arch: str, model: str = LLAMA,
+                     lane_models: dict | None = None, placement: dict | None = None) -> list[str]:
+    """Every model call in a saved run: expected model, expected lane.
+    `lane_models` {lane: gguf} (default: `model` on every lane) and `placement`
+    {agent: lane} (default: MULTI_LANE) come from the run's config."""
+    placement = placement or MULTI_LANE
     p = []
     for a in run["assessments"]:
         envs = list(a.get("envelopes", []))
         envs += [t["envelope"] for t in (a.get("multi") or {}).get("text", [])]
         for e in envs:
-            want = "npu" if arch == "single" else MULTI_LANE.get(e["agent"])
+            want = "npu" if arch == "single" else placement.get(e["agent"])
+            wants = tuple(want) if isinstance(want, (tuple, list, set)) else (want,)
             calls = e.get("calls") or [{}]
-            if Path(str(e.get("model") or "")).name != model:
+            ok_models = {(lane_models or {}).get(w, model) for w in wants}
+            if Path(str(e.get("model") or "")).name not in ok_models:
                 p.append(f"t{a['tick']} {e['agent']}: model {e.get('model')!r}")
-            if e.get("backend") != want:
+            if e.get("backend") not in wants:
                 p.append(f"t{a['tick']} {e['agent']}: backend {e.get('backend')!r}, expected {want}")
             if any(c.get("status") not in (None, "ok") for c in calls):
                 p.append(f"t{a['tick']} {e['agent']}: a call failed ({[c.get('status') for c in calls]})")
@@ -139,15 +145,19 @@ def _load(path: str) -> dict:
     return d["runs"][0] if "runs" in d else d
 
 
-def preflight(out: str) -> int:
+def preflight(out: str, models: dict | None = None) -> int:
+    """`models` {lane: gguf}; default Llama 3B on both lanes."""
+    models = models or {lane: LLAMA for lane in LANES}
     from bench import board
     from fieldmind.runtime.llm_backend import LlamaServerBackend
-    rec, problems = {"laptop_time": board.laptop_time(), "model": LLAMA, "lanes": {}}, []
+    rec, problems = {"laptop_time": board.laptop_time(), "models": models, "lanes": {}}, []
     board.stop_lanes()
     try:
         for lane, url in LANES.items():
+            if lane not in models:
+                continue
             try:
-                info = board.start_lane(lane, LLAMA)
+                info = board.start_lane(lane, models[lane])
             except board.ModelNotAllowed as e:
                 problems.append(f"{lane}: {e}")
                 continue
@@ -159,10 +169,10 @@ def preflight(out: str) -> int:
             if lane not in rec["lanes"] or rec["lanes"][lane]["ready_after_s"] is None:
                 continue
             log = board.lane_log(lane)
-            problems += check_lane_log(lane, log)
-            r = LlamaServerBackend(url=url, lane=lane, model_file=LLAMA,
+            problems += check_lane_log(lane, log, models[lane])
+            r = LlamaServerBackend(url=url, lane=lane, model_file=models[lane],
                                    timeout_s=120).generate(TRIVIAL, max_tokens=8)
-            problems += check_reply(r, lane)
+            problems += check_reply(r, lane, models[lane])
             rec["lanes"][lane].update(answer=r.text, reply_model=r.model, reply_backend=r.backend,
                                       status=r.status, latency_ms=round(r.latency_ms, 1))
         rec["meminfo"], rec["rss"], rec["warnings"] = collect_memory(

@@ -142,6 +142,10 @@ SECTIONS = ("schema", "rules", "cases", "notes", "world")
 VER_SECTIONS = ("ver_schema", "ver_rules", "ver_claims")
 ALL_SECTIONS = SECTIONS + VER_SECTIONS
 CASE_ORDERS = ("score", "shuffled")
+ANSWERS = ("full", "lean")          # accuracy-fix steps 2+3: lean = {"r": ...} only
+CASE_SLOTS = ("retrieval", "belief")  # accuracy-fix step 6
+BELIEF_SLOTS = 2        # DESIGN (accuracy-fix step 6): belief's top 2 are always shown
+MAX_FLAT_SLOTS = 1      # DESIGN (accuracy-fix step 6): at most one case with no moving signature
 MAX_CLAIMS = 3          # HUMAN DECISION (b): claims beyond rank 3 are not shown
 
 SEV_ORDER = {"CRITICAL": 0, "ALARM": 1, "WATCH": 2, "INFO": 3}   # = evidence_packet
@@ -162,6 +166,14 @@ def compact_switches(ccfg: dict | None) -> dict:
     sw["case_order"] = ccfg.get("case_order", "score")
     if sw["case_order"] not in CASE_ORDERS:
         raise ValueError(f"multi.compact.case_order must be one of {CASE_ORDERS}")
+    sw["answer"] = ccfg.get("answer", "full")
+    if sw["answer"] not in ANSWERS:
+        raise ValueError(f"multi.compact.answer must be one of {ANSWERS}")
+    sw["case_slots"] = ccfg.get("case_slots", "retrieval")
+    if sw["case_slots"] not in CASE_SLOTS:
+        raise ValueError(f"multi.compact.case_slots must be one of {CASE_SLOTS}")
+    if (sw["answer"] != "full" or sw["case_slots"] != "retrieval") and not sw.get("schema"):
+        raise ValueError("multi.compact.answer / case_slots need `schema` on")
     needs = [s for s in SECTIONS[1:] if sw[s]]
     if needs and not sw["schema"]:
         raise ValueError(f"multi.compact {needs} need `schema` on: their compact "
@@ -191,6 +203,39 @@ def group_letters(groups_doc: dict, library_ids: list[str]) -> tuple[dict, dict]
             groups[L] = cid
             letters[cid] = L
     return letters, groups
+
+
+def select_cases(cases: list[dict], belief_top: list[str], library: dict,
+                 flat_ids, side: str | None, k: int) -> list[dict]:
+    """Accuracy-fix step 6 (case_slots: belief). The side's retrieved cases in
+    retrieval order, with at most MAX_FLAT_SLOTS case(s) that have no moving
+    signature, plus belief's top BELIEF_SLOTS cases (from the library) when
+    retrieval did not return them and they belong to this side. At most `k`;
+    when over, the lowest-scoring retrieved case that is not one of belief's
+    top cases is dropped first."""
+    from . import sides as _sides
+    out, flat_n = [], 0
+    for c in cases:
+        if c.get("case_id") in flat_ids:
+            if flat_n >= MAX_FLAT_SLOTS:
+                continue
+            flat_n += 1
+        out.append(c)
+    have = {c.get("case_id") for c in out}
+    top = list(belief_top[:BELIEF_SLOTS])
+    for cid in top:
+        lc = library.get(cid)
+        if cid in have or lc is None or cid in flat_ids:
+            continue
+        if side is not None and side not in _sides.case_sides(lc):
+            continue
+        out.append(dict(lc, score=0.0, belief_slot=True))
+    while len(out) > k:
+        drop = [c for c in out if c.get("case_id") not in top]
+        if not drop:
+            break
+        out.remove(min(drop, key=lambda c: c.get("score", 0.0)))
+    return out
 
 
 def first_sentence(text: str) -> str:
@@ -366,7 +411,7 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
         "context": [i for i, _ in notes] + [i for i, _ in recs],
         "retrieved_cases": [c.get("case_id") for c in retrieved.get("cases", [])],
     }
-    hint = {"compact": True,
+    hint = {"compact": True, "lean": sw.get("answer") == "lean",
             "cases_by_score": [c.get("case_id") for c in retrieved.get("cases", [])],
             "case_lines": [c.get("case_id") for c in cases],
             "facts": [f.id for f in facts],
@@ -476,7 +521,10 @@ def expand_diag_answer(p: dict, lm: dict) -> tuple[dict, dict]:
     if not hyps:
         unexplained.append(NO_CASE_FITS)
     payload = {"headline": "", "hypotheses": hyps, "unexplained": unexplained}
-    info = {"g": p.get("g"), "sep": sep_id, "n": n_ids, "empty_ranking": not hyps,
+    first = p.get("r", [[None]])[0][0] if p.get("r") else None
+    g = p.get("g") if "g" in p else (lm.get("letters", [None] * 99)[first - 1]
+                                    if _is_int(first) and 1 <= first <= len(lm.get("letters", [])) else None)
+    info = {"g": g, "g_from": "model" if "g" in p else "code", "sep": sep_id, "n": n_ids, "empty_ranking": not hyps,
             "bad_case_lines": bad_case, "bad_fact_lines": bad_fact,
             "bad_x_lines": bad_x, "bad_note_lines": bad_n,
             "bad_sep": sep is not None and sep_id is None}

@@ -71,6 +71,11 @@ class MultiOrchestrator:
         self.compact = mcfg.get("compact") or {}
         from .merge_rules import RULES
         self.gate.merge_rule = mcfg.get("merge_rule", "model")
+        from .merge_rules import flat_case_ids
+        self.gate.flat_ids = flat_case_ids(retriever.cases.cases)
+        self.diag.library = {c["case_id"]: c for c in retriever.cases.cases}
+        self.diag.flat_ids = self.gate.flat_ids
+        self.gate.fingerprint_fn = lambda bb, s: DiagnosticianAgent.fingerprint(bb, s, self.diag)
         if self.gate.merge_rule not in RULES:
             raise ValueError(f"multi.merge_rule must be one of {RULES}")
         if self.gate.merge_rule != "model" and not mcfg.get("split"):
