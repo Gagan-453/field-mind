@@ -94,7 +94,10 @@ class MultiOrchestrator:
                 raise ValueError("multi.decider needs a lane of kind 'decider' "
                                  "(multi.lanes.<lane>.kind: decider)")
             self.decider = DeciderAgent(diag.backend, dcfg,
-                                        log_prompts=bool(acfg.get("log_prompts")))
+                                        log_prompts=bool(acfg.get("log_prompts")),
+                                        library={c["case_id"]: c for c in retriever.cases.cases})
+            self.gate.publish_model_ranking = self.decider.candidates == "union"
+            self.gate.decider_guard_flat = bool(dcfg.get("guard_flat", True))
         self.text = None
         if self.compact.get("text_reader"):
             vocab = compact.NoteVocab(TAGS, retriever.asset.equipment,
@@ -413,7 +416,8 @@ class MultiOrchestrator:
         pct = (lambda q: round(p[min(len(p) - 1, int(q * len(p)))], 4)) if p else (lambda q: None)
         extra = {} if self.decider is None else {"decider": {
             "calls": self.decider.calls, "failed": self.decider.failed,
-            "rejected": self.gate.decider_rejected, "top_k": self.decider.top_k}}
+            "rejected": self.gate.decider_rejected, "top_k": self.decider.top_k,
+            "candidates": self.decider.candidates, "guard_flat": self.gate.decider_guard_flat}}
         return {**extra, "placement": self.scheduler.placement,
                 "compact_switches": dict(self.diag.sw),
                 "split": self.diag.split,

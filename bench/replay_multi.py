@@ -114,7 +114,7 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
     flags)] under `rule`. QUIET ticks give []."""
     if rule == "model":
         rule = "current"
-    out, cache, offsets = [], {}, {}
+    out, cache, offsets, dec = [], {}, {}, {}
     for a in run["assessments"]:
         if a["triage"] == "QUIET" or not a.get("belief_ranking") and not a["hypotheses"]:
             out.append({"tick": a["tick"], "hyps": []})
@@ -156,7 +156,14 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                 else:
                     if fresh and fresh["hypotheses"]:
                         offsets = merge_rules.add_nudges(offsets, fresh["hypotheses"])
-                    hyps, _ = merge_rules.nudge(live, offsets)
+                    # bev-decider: an accepted decider answer of this tick (its
+                    # record carries the checked ranking) is one more fresh answer
+                    # in its own offsets, summed and capped as the gate does
+                    d = next((r for r in recs if r.get("agent") == "decider" and r.get("ranking")), None)
+                    if d:
+                        dec = merge_rules.decider_nudges(
+                            dec, d["ranking"], FLAT if d.get("guard_flat") else frozenset())
+                    hyps, _ = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
                 claims = dict(claims, hypotheses=hyps)
             v = next((r for r in recs if r.get("agent") == "verifier"), None)
             if v and v.get("answer") is not None:

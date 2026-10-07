@@ -144,6 +144,21 @@ def total_offsets(model: dict, decider: dict, cap: float = CAP) -> dict:
             for c in sorted(set(model) | set(decider))} if decider else dict(model)
 
 
+def decider_nudges(offsets: dict, ranking: list[str], flat_ids=frozenset(),
+                   step: float = STEP, cap: float = CAP) -> dict:
+    """bev-decider: one checked decider ranking as a fresh answer (add_nudges),
+    except that a case in `flat_ids` gains nothing (multi.decider.guard_flat).
+    Every other case gets exactly what add_nudges gives it, so the guard can
+    only lower flat cases, never move any other case."""
+    new = add_nudges(offsets, [{"case_ref": c} for c in ranking], step, cap)
+    for c in flat_ids:
+        if c in offsets:
+            new[c] = offsets[c]
+        else:
+            new.pop(c, None)
+    return new
+
+
 def nudge(live: list, offsets: dict) -> tuple[list[dict], dict]:
     """Belief log-odds + the model's offset; ties keep insertion order."""
     order = _belief_order(live)

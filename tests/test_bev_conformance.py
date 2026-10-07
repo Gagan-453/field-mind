@@ -19,7 +19,7 @@ def test_requests_are_dev_decider_requests():
     for it in items:
         assert it["id"].startswith("dev_A01_fcv_seize@t")
         q = it["request"]["questions"]["root_cause"]
-        assert q["type"] == "choice" and len(q["criteria"]) == 3
+        assert q["type"] == "choice" and 2 <= len(q["criteria"]) <= 6
         assert set(it["request"]) == {"state", "questions"}
 
 

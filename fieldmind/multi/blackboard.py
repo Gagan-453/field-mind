@@ -84,6 +84,9 @@ OWNERS: dict[str, str] = {
     # reported; never written into belief). Written by the gate only.
     "decider_answer": "gate",
     "decider_evidence": "gate",
+    # bev-decider: the diagnosticians' combined case ranking of the current
+    # tick, for the decider's candidates. Written only when the decider is on.
+    "model_ranking": "gate",
 }
 
 # Every agent that takes a step. The diagnostician and verifier own no section:
@@ -223,6 +226,7 @@ class Blackboard:
             "side_answers": {},         # side -> {fingerprint, payload, evidence_tick}
             "decider_answer": {},       # {fingerprint, ranking, probabilities, evidence_tick}
             "decider_evidence": {},     # case id -> offset
+            "model_ranking": {},        # {tick, cases}
         }
         self._active: str | None = None
         self.writes: dict[str, int] = {s: 0 for s in OWNERS}
