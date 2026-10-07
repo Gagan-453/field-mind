@@ -80,7 +80,8 @@ def _number_list(rules: dict, name: str, n: int, most: int) -> None:
     rules[name] = [[lit("[]")], [lit("["), ref(start), lit("]")]]
 
 
-def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str]) -> dict:
+def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str],
+              lean: bool = False) -> dict:
     """Answer format B' for a prompt that showed `n_facts` fact lines,
     `n_cases` case lines (their group `letters`) and `n_context` note and
     record lines."""
@@ -112,7 +113,30 @@ def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str]) ->
     rules["root"] = [[lit('{"g":"'), ref("g"), lit('","r":'), ref("r"),
                       lit(',"sep":'), ref("sep"), lit(',"n":'), ref("notes"),
                       lit(',"x":'), ref("unexpl"), lit("}")]]
+    if lean:
+        # accuracy-fix steps 2+3: only the ranking; no group letter to lead the
+        # pick, no `x` / `n` (unchecked and self-contradicting on the board)
+        rules["root"] = [[lit('{"r":'), ref("r"), lit("}")]]
+        for unused in ("g", "sep", "notes", "unexpl", "notes_list", "unexpl_list"):
+            rules.pop(unused, None)
+        rules = _reachable(rules)
     return rules
+
+
+def _reachable(rules: dict) -> dict:
+    """Only the rules `root` can reach (GBNF rejects undefined, tolerates none
+    unused, but a smaller grammar is easier to read in the logs)."""
+    seen, todo = set(), ["root"]
+    while todo:
+        n = todo.pop()
+        if n in seen or n not in rules:
+            continue
+        seen.add(n)
+        for alt in rules[n]:
+            for sym in alt:
+                if sym[0] == "ref":
+                    todo.append(sym[1])
+    return {k: v for k, v in rules.items() if k in seen}
 
 
 def verification(n_claims: int, n_facts: int) -> dict:

@@ -6,7 +6,10 @@
 #   OVERLAY=configs/accuracy.yaml CPU_MODEL=Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf \
 #   EPISODES_DIR=data/episodes_dev scripts/benchmark_multi_lockstep_all.sh <dev episodes>
 agent:
-  verifier: conditional
+  # Decision 2 (verifier off until it passes the known-wrong-answer test). It
+  # can only cap confidences, never reorder (tests/test_verifier_never_reorders.py),
+  # so turning it off cannot change the published order.
+  verifier: never
 multi:
   placement: fixed
   fixed_placement:

@@ -505,22 +505,33 @@ and an episode test with a mock model that ranks every flat case first: guarded 
 belief's place for it, while tiebreak does. Mutations caught: guard removed, flat detection wrong on balance
 triples, gate ignoring the guard set (the last two only after the two tests were added).
 
-## Blocked / needs a decision
-1. **The board session.** At the board laptop (Fedora, QIDK on USB), from the repo root:
+### Steps 2, 3, 6 and decisions 2, 3 as a second candidate (DELEGATED)
+These change what the model is asked, so only the board can show their effect. To keep the guarded result (measured
+on answers to today's prompt) safe, they go into a second candidate instead of replacing it:
 
-   ```
-   git fetch origin && git switch multi-agent-fix && git pull     # after this branch is pushed
-   source .venv/bin/activate
-   adb devices                                                     # the QIDK must be listed
-   adb shell sha256sum /data/local/tmp/llm/Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf
-   #   expect 5aa3ece50ab33d09a7181888a75f8755f924c662dc99626e7f45440adfeadcdb
-   ls data/episodes_dev | wc -l                                    # expect 36; else regenerate the dev set
-   .venv/bin/python -m pytest -q tests/test_board_preflight.py tests/test_board_session.py
-   bench/board_session.sh 2>&1 | tee logs/board_session_$(date +%Y%m%dT%H%M%S).log
-   ```
-   Same command again resumes. Exit 3 = preflight failed, nothing measured; exit 1 = (a), (b) or a (c) episode failed
-   (the message says which). Bring back `results/accuracy_fix/board_session/` and the log.
-2. Then: the A-vs-B adoption check on the replay of baseline 3, and the step-1 board run of the adopted rule.
+| | `configs/accuracy.yaml` (candidate A) | `configs/accuracy_v2.yaml` (candidate B) |
+|---|---|---|
+| merge rule | guarded | guarded |
+| verifier | off (decision 2; it never reorders, so order is unaffected) | off |
+| answer | `{"g","r","sep","n","x"}` with the worked example | **lean**: `{"r": ...}` only, no example; group derived by code |
+| case slots | retrieval's top 4 for the side | **at most one flat case; belief's top 2 always shown** |
+| notes | Llama note reader -> note-facts | **no model reader; raw notes in the data fence** (decision 3) |
+
+Mock dev checks (not agent results): v2 replay reproduces its runs (0 differences over 5,850 ticks); no prompt shows
+more than one flat case; the true library case is missing from the prompt in 20.8% of scored diagnosis prompts
+against 33.0% for A; prompt tokens max 827 / 833 / 864 / 850 on the four tokenizers, + 60 cap < 1,280. Tests
+`tests/test_accuracy_v2.py`; 8 mutations caught.
+
+## Board check (pre-registered, DELEGATED; committed before any board run of A or B)
+Dev quick set only. For each candidate, `bench/beats_belief.py` on its test folder:
+**PASS** when the mean published group top-1 over the scored quick-set episodes is above the mean belief group top-1
+(both from `bench/evaluator.py`) AND no episode is more than 0.05 below its own belief. If both pass, the candidate
+with the larger mean margin is kept; if only one passes, it is kept; if neither passes, nothing is claimed and the
+replay table (`--replay`) shows where each rule loses. One run per candidate; the run-to-run noise (about one answer
+in seven changes) is recorded as a limit, and a second run of the kept candidate is the confirmation.
+
+## Blocked / needs a decision
+Nothing blocked. The next step is the board run below (see the final message for the exact commands).
 
 ## Open, not fixed here
 - `tests/test_campaign.py::test_kill_minus_9_mid_episode_then_resume_is_identical` is intermittent on unchanged code.

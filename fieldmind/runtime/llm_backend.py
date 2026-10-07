@@ -197,6 +197,8 @@ class MockBackend(LLMBackend):
              for cid in hint.get("cases_by_score", [])[:3] if cid in lines]
         letters = hint.get("letters", [])
         g = letters[r[0][0] - 1] if r and letters else ""
+        if hint.get("lean"):
+            return {"r": r}
         return {"g": g, "r": r, "sep": r[0][0] if r else None, "n": [], "x": []}
 
     @staticmethod

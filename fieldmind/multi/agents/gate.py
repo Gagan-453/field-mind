@@ -58,6 +58,7 @@ class GateMemoryAgent:
         # agent's merge (Phases 1-4). Set by the orchestrator.
         self.merge_rule = "model"
         self.flat_ids = frozenset()     # merge_rule guarded: set by the orchestrator
+        self.fingerprint_fn = None      # the diagnostician's fingerprint: set by the orchestrator
         self._tick_payload = None       # all accepted side answers, this tick
         self._fresh_payload = None      # the ones answered THIS tick (not reused)
 
@@ -256,11 +257,15 @@ class GateMemoryAgent:
         bb.write("diagnosis", claims, NAME)
         return claims
 
-    @staticmethod
-    def _unchanged_since(bb, result) -> bool:
+    def _fp(self, bb, side):
+        if self.fingerprint_fn is not None:
+            return self.fingerprint_fn(bb, side)
+        return DiagnosticianAgent.fingerprint(bb, side)
+
+    def _unchanged_since(self, bb, result) -> bool:
         """The side's evidence now equals the evidence its job was built on."""
         fp = (result.job.line_map or {}).get("fingerprint")
-        return fp is not None and fp == DiagnosticianAgent.fingerprint(
+        return fp is not None and fp == self._fp(
             bb, result.job.line_map["side"])
 
     def _reuse(self, bb, accepted, results, now_tick):
@@ -287,7 +292,7 @@ class GateMemoryAgent:
         for side in run:
             if side in called or side not in cache:
                 continue
-            fp = DiagnosticianAgent.fingerprint(bb, side)
+            fp = self._fp(bb, side)
             if cache[side]["fingerprint"] != fp:
                 del cache[side]                             # evidence moved on
                 continue
