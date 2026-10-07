@@ -107,6 +107,15 @@ needs agreement), only the new backend catches it; existing board commands uncha
 - The weights themselves: only the header was read; the file was never downloaded here.
 - Whether bev-decider helps on boiler faults at all: it was trained on support routing, policy and similar text.
 
+## Pass rule for Part C step 6 (fixed 2026-10-07, before any board run)
+Dev quick set (the 8 fault episodes and 2 normal ones of `reports/multi_accuracy_fix.md`), lockstep, Llama 3.2 3B on
+both lanes. Arm A = `configs/accuracy.yaml` + `merge_rule: nudge`, run twice (A1, A2). Arm B = `configs/bev.yaml`.
+Order A1, B, A2. Metric: library group top-1, pooled by `bench.evaluator.aggregate` over the arm's episodes.
+- **Pass:** B > A1, B > A2 and B > belief alone, each by more than |A1 - A2|.
+- Arm B is valid only if no decider call failed in any episode (`multi.decider.failed == 0`).
+- Held-out (family C, RCA-06) and every other metric are reported, never used to decide.
+- A pass is a result on the dev quick set only; the 30 reporting episodes are run once afterwards, to report.
+
 ## Process findings
 - A same-size edit restored within the same second left stale bytecode (`bench/__pycache__`); the existing test caught
   it. Caches are now cleared after every mutation restore.
