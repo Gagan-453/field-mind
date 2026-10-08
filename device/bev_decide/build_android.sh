@@ -33,9 +33,15 @@ for f in include/llama.h lib/libllama.so lib/libggml.so lib/libggml-base.so; do
   [ -e "$PKG/$f" ] || { echo "STOP: $PKG/$f missing (not an installed llama.cpp package)"; exit 3; }
 done
 
-"$ENGINE" run --rm -u "$(id -u):$(id -g)" --platform linux/amd64 \
+# label=disable: on an SELinux-enforcing host (Fedora) the bind mounts are
+# otherwise unreadable in the container ("does not appear to contain
+# CMakeLists.txt"); it relabels nothing on disk. keep-id (rootless podman
+# only): the container's uid is the caller's on the host, so it can write
+# build-bev-android/ ("Unable to (re)create ... pkgRedirects" without it).
+USERNS=(); [ "$ENGINE" = podman ] && USERNS=(--userns=keep-id)
+"$ENGINE" run --rm "${USERNS[@]}" -u "$(id -u):$(id -g)" --platform linux/amd64 --security-opt label=disable \
   -v "$REPO":/repo -v "$SRC":/llama:ro -v "$PKG":/pkg:ro "$IMAGE" \
-  bash -lc 'cmake -S /repo/device/bev_decide -B /repo/build-bev-android \
+  bash -lc 'cmake -G Ninja -S /repo/device/bev_decide -B /repo/build-bev-android \
               -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake" \
               -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-34 \
               -DCMAKE_BUILD_TYPE=Release -DLLAMA_PKG=/pkg -DLLAMA_SRC=/llama \

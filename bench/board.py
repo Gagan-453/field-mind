@@ -164,14 +164,15 @@ BEV_PORT = 8082
 # refuses until the value is recorded here (the CANDIDATES rule, applied to the
 # third lane). The 16-bit GGUF is for the board-CPU conformance run only.
 BEV_FILES: dict[str, str | None] = {
-    "bev-decider-0.4B-backbone-Q8_0.gguf": None,
-    "backbone-16bit.gguf": None,
-    "bev_head.bin": None,
-    "bev_head.json": None,
+    # built 2026-10-08 on the QIDK laptop; laptop == board, checked after the push
+    "bev-decider-0.4B-backbone-Q8_0.gguf": "da8243f690026122654ab8cbcc51e7bc7d2ba99ab315726712b9aa9ebe60300b",
+    "backbone-16bit.gguf": "4712816c0c834fcb2ceb4b6f013d7fa99f4a11ae9492fa519dd69af2262fb4f4",
+    "bev_head.bin": "17000e160f67f26daad8ccf5c3e027009dc0822278d7d6f59912105d3d4bb0e2",
+    "bev_head.json": "390561c37a82bbb9e94af42b249bbd0eab104e050f7a60f8c4af038c1c37a2a1",
 }
 BEV_MODELS = ("bev-decider-0.4B-backbone-Q8_0.gguf", "backbone-16bit.gguf")
 BEV_BINARY = "bin/bev-decide"
-BEV_BINARY_SHA256: str | None = None
+BEV_BINARY_SHA256: str | None = "b56071e7005a4db2616e4c578a685524424f5f7d8a16162cf02008bc09968fe9"
 
 
 def bev_command(model_file: str, device: str = "npu", threads: int = 6) -> str:
