@@ -424,3 +424,74 @@ def test_only_the_gate_writes_the_decider_sections():
                 bb.write(sec, {"x": 1}, agent)
     bb.write("decider_evidence", {"A": 0.35}, "gate")
     assert dict(bb.read("decider_evidence")) == {"A": 0.35}
+
+
+# ------------------------------------------- the decider on multi_v3 (hybrid)
+def _cfg3(backend="mock", decider=True, guard=True, overlay="bev3.yaml"):
+    from run_demo import _deep_merge
+    cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    _deep_merge(cfg, yaml.safe_load((ROOT / "configs" / overlay).read_text()))
+    cfg["llm"]["backend"] = backend
+    cfg["agent"]["log_prompts"] = True
+    if overlay == "bev3.yaml":
+        cfg["multi"]["decider"]["enabled"] = decider
+        cfg["multi"]["decider"]["guard_flat"] = guard
+    return cfg
+
+
+@pytest.fixture(scope="module")
+def runs3():
+    if not (DEV / EP).exists():
+        pytest.skip("dev episodes not generated")
+    return {"v3": _run(_cfg3(overlay="v3.yaml")),
+            "off": _run(_cfg3(decider=False)),
+            "mock": _run(_cfg3()),
+            "contrarian": _run(_cfg3("mock_contrarian"))}
+
+
+def test_bev3_yaml_is_v3_yaml_plus_the_decider_and_nothing_else():
+    v3 = yaml.safe_load((ROOT / "configs/v3.yaml").read_text())
+    b3 = yaml.safe_load((ROOT / "configs/bev3.yaml").read_text())
+    assert b3["multi"]["fixed_placement"].pop("decider") == "bev"
+    assert b3["multi"]["lanes"].pop("bev")["kind"] == "decider"
+    assert b3["multi"].pop("decider") == {"enabled": True}
+    assert b3 == v3
+
+
+@needs_dev
+def test_under_hybrid_decider_off_publishes_exactly_what_v3_publishes(runs3):
+    a, off = runs3["v3"], runs3["off"]
+    for k in ("hypotheses", "actions", "state"):
+        assert [x[k] for x in off["assessments"]] == [x[k] for x in a["assessments"]], k
+
+
+@needs_dev
+def test_under_hybrid_the_decider_never_changes_a_model_led_top_cause(runs3):
+    """hybrid's regime is read from belief, and on weak / tied ticks the model's
+    picks lead: there the decider, whatever it says, leaves rank 1 alone."""
+    led = {x["now_tick"] for x in _records(runs3["v3"], "rule") if x.get("model_led")}
+    assert led, "no model-led tick: the test would prove nothing"
+    pub = {a["tick"]: [h.get("case_ref") for h in a["hypotheses"]] for a in runs3["v3"]["assessments"]}
+    for k in ("mock", "contrarian"):
+        got = {a["tick"]: [h.get("case_ref") for h in a["hypotheses"]] for a in runs3[k]["assessments"]}
+        assert {x["now_tick"] for x in _records(runs3[k], "rule") if x.get("model_led")} == led, k
+        assert all(got[t][:1] == pub[t][:1] for t in led), k
+    assert _published(runs3["contrarian"]) != _published(runs3["v3"])     # it does act on clear ticks
+
+
+@needs_dev
+def test_under_hybrid_the_offline_replay_reproduces_decider_runs(runs3):
+    from bench.replay_multi import published, replay
+    for k in ("v3", "mock", "contrarian"):
+        assert replay(runs3[k], "hybrid") == published(runs3[k]), k
+
+
+@needs_dev
+@pytest.mark.parametrize("ep", ["dev_A01_fcv_seize", "dev_B03_tube_leak_slow"])
+def test_under_hybrid_the_flat_guard_is_never_worse_tick_by_tick(ep):
+    r_on, r_off = _run(_cfg3("mock_flatlover"), ep), _run(_cfg3("mock_flatlover", guard=False), ep)
+    right_on, right_off = _right_ticks(r_on), _right_ticks(r_off)
+    assert right_on.keys() == right_off.keys()
+    assert all(right_on[t] for t in right_off if right_off[t])
+    flat = {"RCA-09", "RCA-10", "RCA-15"}
+    assert not any(x.get("decider_offsets", {}).get(c, 0) > 0 for x in _records(r_on, "rule") for c in flat)

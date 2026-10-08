@@ -257,18 +257,9 @@ class GateMemoryAgent:
             if fresh:
                 offsets = merge_rules.add_nudges(offsets, fresh)
                 bb.write("model_evidence", offsets, NAME)
-            # bev-decider: its checked ranking is one more fresh answer, in its
-            # own offsets; the two are summed, the sum capped (total_offsets)
-            dec = dict(bb.read("decider_evidence"))
-            if self._decider_fresh:
-                dec = merge_rules.decider_nudges(
-                    dec, self._decider_fresh,
-                    self.flat_ids if self.decider_guard_flat else frozenset())
-                bb.write("decider_evidence", dec, NAME)
+            dec = self._decider_offsets(bb)
             hyps, info = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
-            if dec:
-                info["model_offsets"] = {k: round(v, 4) for k, v in sorted(offsets.items())}
-                info["decider_offsets"] = {k: round(v, 4) for k, v in sorted(dec.items())}
+            self._log_offsets(info, offsets, dec)
         elif self.merge_rule == "hybrid":
             offsets = dict(bb.read("model_evidence"))
             fresh = [m for m in (self._fresh_payload or {}).get("hypotheses", [])
@@ -276,7 +267,13 @@ class GateMemoryAgent:
             if fresh:
                 offsets = merge_rules.add_nudges(offsets, fresh)
                 bb.write("model_evidence", offsets, NAME)
-            hyps, info = merge_rules.hybrid(live, model, offsets, self.flat_ids)
+            # bev-decider: the same capped offsets as under nudge. hybrid's regime
+            # (who leads) is read from belief alone and the model's picks still
+            # lead on weak / tied ticks; the decider moves only the offset order.
+            dec = self._decider_offsets(bb)
+            hyps, info = merge_rules.hybrid(live, model, merge_rules.total_offsets(offsets, dec),
+                                            self.flat_ids)
+            self._log_offsets(info, offsets, dec)
         else:
             raise ValueError(f"unknown merge_rule {self.merge_rule!r}")
         claims = dict(claims, hypotheses=hyps,
@@ -378,6 +375,25 @@ class GateMemoryAgent:
         env = dataclasses.replace(env, payload=payload,
                                   cited_facts=[stamp(c) for c in env.cited_facts])
         return env, [dataclasses.replace(f, id=stamp(f.id)) for f in facts]
+
+    def _decider_offsets(self, bb) -> dict:
+        """bev-decider: this tick's checked ranking (if any) as one more fresh
+        answer, in the decider's own offsets (flat cases never pushed under
+        guard_flat). Summed with the diagnosticians' and capped by the caller
+        (merge_rules.total_offsets). Empty while the decider is off."""
+        dec = dict(bb.read("decider_evidence"))
+        if self._decider_fresh:
+            dec = merge_rules.decider_nudges(
+                dec, self._decider_fresh,
+                self.flat_ids if self.decider_guard_flat else frozenset())
+            bb.write("decider_evidence", dec, NAME)
+        return dec
+
+    @staticmethod
+    def _log_offsets(info: dict, model: dict, dec: dict) -> None:
+        if dec:
+            info["model_offsets"] = {k: round(v, 4) for k, v in sorted(model.items())}
+            info["decider_offsets"] = {k: round(v, 4) for k, v in sorted(dec.items())}
 
     def fold_decider(self, bb, asmt: Assessment, result, now_tick: int) -> None:
         """bev-decider: check the answer against the cases offered (the job's

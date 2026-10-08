@@ -87,9 +87,9 @@ class MultiOrchestrator:
         self.decider = None
         dcfg = mcfg.get("decider") or {}
         if dcfg.get("enabled"):
-            if self.gate.merge_rule != "nudge":
-                raise ValueError("multi.decider needs merge_rule 'nudge' (its pick "
-                                 "enters as a capped offset, never as the ranking)")
+            if self.gate.merge_rule not in ("nudge", "hybrid"):
+                raise ValueError("multi.decider needs merge_rule 'nudge' or 'hybrid' (its "
+                                 "pick enters as a capped offset, never as the ranking)")
             if not any(getattr(l, "kind", "llm") == "decider" for l in scheduler.lanes):
                 raise ValueError("multi.decider needs a lane of kind 'decider' "
                                  "(multi.lanes.<lane>.kind: decider)")

@@ -109,6 +109,16 @@ def expand(rec: dict, live: list) -> dict:
     return payload
 
 
+def _decider(recs: list, dec: dict) -> dict:
+    """bev-decider: an accepted decider answer of this tick (its record carries
+    the checked ranking) is one more fresh answer in the decider's own offsets,
+    as the gate's _decider_offsets does; summed and capped by the caller."""
+    d = next((r for r in recs if r.get("agent") == "decider" and r.get("ranking")), None)
+    if d:
+        dec = merge_rules.decider_nudges(dec, d["ranking"], FLAT if d.get("guard_flat") else frozenset())
+    return dec
+
+
 def replay(run: dict, rule: str = "current") -> list[dict]:
     """Per assessment: the published hypotheses [(case_ref, confidence,
     flags)] under `rule`. QUIET ticks give []."""
@@ -152,17 +162,12 @@ def replay(run: dict, rule: str = "current") -> list[dict]:
                     if fresh and fresh["hypotheses"]:
                         offsets = merge_rules.add_nudges(
                             offsets, [m for m in fresh["hypotheses"] if m.get("case_ref") not in FLAT])
-                    hyps, _ = merge_rules.hybrid(live, model, offsets, FLAT)
+                    dec = _decider(recs, dec)
+                    hyps, _ = merge_rules.hybrid(live, model, merge_rules.total_offsets(offsets, dec), FLAT)
                 else:
                     if fresh and fresh["hypotheses"]:
                         offsets = merge_rules.add_nudges(offsets, fresh["hypotheses"])
-                    # bev-decider: an accepted decider answer of this tick (its
-                    # record carries the checked ranking) is one more fresh answer
-                    # in its own offsets, summed and capped as the gate does
-                    d = next((r for r in recs if r.get("agent") == "decider" and r.get("ranking")), None)
-                    if d:
-                        dec = merge_rules.decider_nudges(
-                            dec, d["ranking"], FLAT if d.get("guard_flat") else frozenset())
+                    dec = _decider(recs, dec)
                     hyps, _ = merge_rules.nudge(live, merge_rules.total_offsets(offsets, dec))
                 claims = dict(claims, hypotheses=hyps)
             v = next((r for r in recs if r.get("agent") == "verifier"), None)
