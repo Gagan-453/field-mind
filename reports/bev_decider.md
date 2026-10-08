@@ -132,7 +132,8 @@ changes the published ranking on 369 ticks; 14 ticks become right, **0 become wr
 refused push on to the next case (as `guarded` does with the model's list) was mutation M2 below: the never-worse
 test FAILED for it on dev_B03 and dev_D01, so it can make ticks worse; it was not used.
 
-Checks: decider off still equals Gagan's tip on 25 mock dev runs / 4,300 ticks (0 differences). New tests: union
+Checks (measured on branch `bev-decider-2`, nudge, `configs/bev.yaml`): decider off equalled that branch's base on
+25 mock dev runs / 4,300 ticks (0 differences). New tests: union
 order and this-tick-only (unit), the guard's arithmetic (unit), never-worse tick by tick on 3 dev episodes with the
 guard shown to act on 2, replay of guarded and unguarded decider runs. Mutations caught: guard removed (M1), push
 shifted to the next case (M2), union ignoring the model (M3), using a stale model ranking (M4), taking more than the
@@ -157,36 +158,50 @@ Order A1, B, A2. Metric: library group top-1, pooled by `bench.evaluator.aggrega
   was reversed by exact replacement (each found once), the diff reviewed, and the restored code reproduced the
   pre-mutation decider-off output byte for byte; the check was then redone as a bash script.
 
+## bev-decider-3: the decider on multi-agent v3 (2026-10-08)
+Branch `bev-decider-3` = `main` at 56e8bcf (Pranav's multi-agent v3: merge rule `hybrid` with the flat-case guard,
+raw notes, group letters off, the benchmark runner, the v3 board results) + the bev-decider commits (Part A, the
+combined candidates and the filler guard), cherry-picked. It does NOT contain `multi-agent-fix`'s later commits
+(Gagan's candidate A/B, his runner keep-checks and connection-drop fix); those are on `bev-decider-2`.
+
+**How the decider enters `hybrid`.** Exactly as under `nudge`: its checked pick is one more fresh answer in its own
+offsets (flat cases never pushed), summed with the diagnosticians' offsets, the sum capped at 1.2
+(`gate._decider_offsets`, shared by both rules; `replay_multi._decider` mirrors it). `hybrid`'s regime (weak / tie /
+clear) is read from belief alone and on weak or tied ticks the model's picks still lead. So the decider changes only
+the offset order: clear ticks, and the cases after the model's picks. DECISION (conservative): it does not act as a
+tie-breaker on model-led ticks; that could address v3's C-episode losses (the RCA-14 / RCA-18 look-alike tie,
+`reports/multi_v3_results.md`) but changes v3's own rule, so it is left as a human decision.
+`configs/bev3.yaml` = `configs/v3.yaml` + the decider + the bev lane (test-enforced). Arm A = `v3.yaml`, arm B =
+`bev3.yaml`.
+
+**Checks (mock backend: plumbing, not bev-decider).**
+- Decider off: this branch publishes exactly what `main` publishes: 20 mock dev runs (A01, B01, C01, D01, N01 under
+  fast/model, v3/hybrid, accuracy/tiebreak, accuracy/nudge), 3,440 ticks, assessments, run telemetry and summaries
+  identical; `section_writes` gains three zero counters.
+- On every model-led tick the published top cause is the same with any decider (mock, contrarian), and the set of
+  model-led ticks is the same: the decider never changes who leads.
+- Replay reproduces hybrid decider runs tick for tick (in tests, and on `main`'s runner output).
+- Filler guard under `hybrid`, all 21 dev fault episodes, mock decider pushing flat cases: 835 ticks change, 22
+  become right, **0 become wrong**.
+- `main`'s runner (`scripts/benchmark.sh`) runs both arms on the mock and the handoff's comparison and replay
+  snippets read its files.
+- Mutations caught: decider ignored under hybrid; replay ignoring it; the decider's pick put first on model-led
+  ticks; hybrid's regime read from belief + offsets (the decider deciding who leads). A first version of that last
+  mutation changed the shared `regime` for both arms and so could not be detected by an A-vs-B test; it was
+  redesigned, not counted.
+- Mock arm A vs B (dev_A01 + dev_N01 through the runner): A 0.614, B 0.333 library group top-1. The same mechanism
+  as disagreement 1: the mock decider always backs belief's leader. Not a bev-decider result.
+
+**Differences from `bev-decider-2` that matter on the board:** `main`'s runner has no preflight or keep-checks (the
+decider-failure check is manual, handoff step 6); `main`'s `LlamaServerBackend` lacks the connection-drop fix (a
+dropped connection stops the runner; it resumes); no `bench/beats_belief.py`.
+
+**Pass rule for the v3 measurement (fixed 2026-10-08, before any board run):** dev quick set (the 8 fault + 2 normal
+episodes), lockstep, v3's models (Llama 3.2 3B NPU, Gemma 3 1B CPU). Arm A = `configs/v3.yaml`, run twice (A1, A2);
+arm B = `configs/bev3.yaml`; order A1, B, A2. Metric: library group top-1 pooled by `bench.evaluator.aggregate`.
+Pass: B > A1, B > A2 and B > belief alone, each by more than |A1 - A2|. Arm B valid only if no decider call failed
+in any episode. Held-out and every other metric reported, never used to decide.
+
 ## Part C: commands for the QIDK laptop
-Run in order; stop at the first failure and report it.
-```
-# 0. code and weights
-git fetch && git checkout bev-decider
-cd bev-decider-0.4B && git lfs pull && cd ..           # 970 MB; also tokenizer.json
-# 1-2. split, 16-bit GGUF, Q8_0 GGUF, type check  (prints sizes and sha256)
-device/bev_decide/build_gguf.sh bev-decider-0.4B
-# 3. reference (bev_decider, fp32, CPU) on the 24 dev requests
-$BUILD/venv-convert/bin/pip install --no-deps bev-decider==0.2.1
-$BUILD/venv-convert/bin/python -m bench.bev_conformance reference bev-decider-0.4B \
-    --requests reports/data/bev_requests.json --out reports/data/bev_reference.json
-# 4. build bev-decide in the board's container, against the package on the board
-adb pull /data/local/tmp/llm/llama.cpp /tmp/board-pkg
-device/bev_decide/build_android.sh $BUILD/llama.cpp /tmp/board-pkg
-adb push build-bev-android/bev-decide /data/local/tmp/llm/llama.cpp/bin/
-adb push $BUILD/gguf/bev/{bev-decider-0.4B-backbone-Q8_0.gguf,backbone-16bit.gguf,bev_head.bin,bev_head.json} /data/local/tmp/llm/
-#    record every sha256 (laptop == board) in bench/board.py BEV_FILES / BEV_BINARY_SHA256, commit
-#    (optional, on the laptop: BEV_LLAMA_SRC=$BUILD/llama.cpp .venv/bin/python -m pytest tests/test_bev_manifest.py)
-# 5. conformance: port first (16-bit, board CPU), then the deployed form (Q8_0, HTP0)
-.venv/bin/python -m bench.board start bev backbone-16bit.gguf cpu && .venv/bin/python -m bench.board log bev
-.venv/bin/python -m bench.bev_conformance compare http://localhost:8082 --reference reports/data/bev_reference.json \
-    --label cpu-16bit --out reports/data/bev_conformance_cpu-16bit.json
-.venv/bin/python -m bench.board stop bev
-.venv/bin/python -m bench.board start bev bev-decider-0.4B-backbone-Q8_0.gguf && .venv/bin/python -m bench.board log bev
-.venv/bin/python -m bench.bev_conformance compare http://localhost:8082 --reference reports/data/bev_reference.json \
-    --label htp0-q8 --out reports/data/bev_conformance_htp0-q8.json
-#    with the NPU Llama lane also up (/board-up): repeat the compare, then one Llama call (bench.board speed :8080)
-# 6. measurement (dev quick set only), after the decisions above
-#    arm A twice:  run_demo.py --arch multi --backend llamaserver --overlay configs/accuracy.yaml --merge-rule nudge ...
-#    arm B:        run_demo.py --arch multi --backend llamaserver --overlay configs/bev.yaml ...
-#    chip temperature before/after each run, cooling gaps; the 30 reporting episodes only after a pass
-```
+The board steps, every command, and what to report are in `HANDOFF_BEV_DECIDER_3.md` on this branch (v3 arms), the
+only copy of the commands for `bev-decider-3`.
