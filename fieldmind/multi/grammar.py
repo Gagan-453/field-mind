@@ -121,6 +121,29 @@ def diagnosis(n_facts: int, n_cases: int, n_context: int, letters: list[str],
     return rules
 
 
+def rank_only(n_cases: int) -> dict:
+    """bev ideas, explain on: {"r":[2,1]} -- 0 to MAX_RANKED distinct case
+    lines, best first, nothing else (bev supplies the citations)."""
+    rules: dict = {}
+    most = min(MAX_RANKED, n_cases)
+
+    def ranked(used: tuple) -> str:
+        name = "ro" + "".join(map(str, used))
+        if name not in rules:
+            alts = []
+            for c in range(1, n_cases + 1):
+                if c in used:
+                    continue
+                alts.append([lit(str(c))])
+                if len(used) + 1 < most:
+                    alts.append([lit(f"{c},"), ref(ranked(used + (c,)))])
+            rules[name] = alts
+        return name
+    rules["r"] = [[lit("[]")]] + ([[lit("["), ref(ranked(())), lit("]")]] if most else [])
+    rules["root"] = [[lit('{"r":'), ref("r"), lit("}")]]
+    return rules
+
+
 def verification(n_claims: int, n_facts: int) -> dict:
     """One verdict for every shown claim, in order; `c` a fact line or null."""
     rules = {"pf": [[lit("p")], [lit("f")]],

@@ -204,6 +204,8 @@ class MockBackend(LLMBackend):
                  if f in flines]
         r = [[lines.index(cid) + 1, list(cites)]
              for cid in hint.get("cases_by_score", [])[:3] if cid in lines]
+        if hint.get("rank_only"):                  # bev ideas, explain on
+            return {"r": [c for c, _ in r]}
         letters = hint.get("letters", [])
         g = letters[r[0][0] - 1] if r and letters else ""
         return {"g": g, "r": r, "sep": r[0][0] if r else None, "n": [], "x": []}

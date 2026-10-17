@@ -289,3 +289,109 @@ def test_clear_skip_saves_calls_and_shadow_changes_nothing(skip_runs):
         assert len(records(sh, "bev", "clear_skip")) > 0                 # would-skips logged
         assert on["diag_calls"] < off["diag_calls"]
         assert on["multi"]["bev"]["per_idea"]["clear_skip"]["used"] == len(records(on, "bev", "clear_skip"))
+
+
+# -------------------------------------------------- commit 5: explain
+class LastOptionBev(MockBackend):
+    """bev picks the LAST option of every choice and says yes to every
+    yes/no; everything else is the plain mock."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role != "decider" or "bev" not in (mock_hint or {}):
+            return super().generate(prompt, role, max_tokens, mock_hint)
+        ans = {}
+        for qid, q in mock_hint["bev"].items():
+            if q["type"] == "noul":
+                ans[qid] = {"type": "noul", "noul": 0.9}
+            else:
+                k = q["options"]
+                ans[qid] = {"type": "choice", "choice": k[-1],
+                            "probabilities": {o: (0.8 if o == k[-1] else 0.2 / max(1, len(k) - 1)) for o in k}}
+        return LLMReply(text=json.dumps({"answers": ans}), backend="mock", model="mock-0",
+                        prefill_tokens=None, decode_tokens=0)
+
+
+class DownBev(MockBackend):
+    """bev-decide unreachable; Llama and Gemma answer as the plain mock."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role == "decider":
+            return LLMReply(text="", status="error", error="connection: refused", backend="mock",
+                            model="mock-0", prefill_tokens=None, decode_tokens=None)
+        return super().generate(prompt, role, max_tokens, mock_hint)
+
+
+register_backend("mock_lastbev", LastOptionBev)
+register_backend("mock_downbev", DownBev)
+EXPLAIN_EP = "dev_A01_fcv_seize"     # sides show several facts (B01 shows one)
+
+
+@pytest.fixture(scope="module")
+def explain_runs():
+    if not (DEV / EXPLAIN_EP).exists():
+        pytest.skip("dev episodes not generated")
+    return {m: run(cfg_with(explain=m), EXPLAIN_EP) for m in ("off", "shadow", "on")} | {
+        "last": run(cfg_with(explain="on", backend="mock_lastbev"), EXPLAIN_EP),
+        "down": run(cfg_with(explain="on", backend="mock_downbev"), EXPLAIN_EP)}
+
+
+def test_explain_shadow_publishes_exactly_off_and_logs_bevs_picks(explain_runs):
+    off, sh = explain_runs["off"], explain_runs["shadow"]
+    assert published(sh) == published(off) and sh["diag_calls"] == off["diag_calls"]
+    recs = records(sh, "bev", "explain")
+    assert len(recs) == sh["diag_calls"] and all(r["status"] == "ok" and "cite_agreement" in r for r in recs)
+
+
+def test_explain_on_asks_llama_for_the_ranking_only(explain_runs):
+    envs = [e for a in explain_runs["on"]["assessments"] for e in a["envelopes"]
+            if e["agent"] == "diagnostician"]
+    assert envs
+    for e in envs:
+        assert '{"r":[<case line>,...]}' in e["prompt"] and '"sep"' not in e["prompt"]
+        assert set(json.loads(e["raw_reply"])) == {"r"}
+
+
+def test_explain_on_publishes_bevs_citations_through_the_gate(explain_runs):
+    from bench.evaluator import evaluate
+    r = explain_runs["last"]
+    n = 0
+    for a in r["assessments"]:
+        comp = a["multi"]["compact"]
+        for rec in [c for c in comp if c.get("idea") == "explain" and c.get("answers")]:
+            expanded = [c for c in comp if c.get("agent") == "diagnostician"
+                        and c.get("side") == rec["side"]]
+            assert expanded and expanded[0]["answer"] == rec["composed"]   # the gate expanded the rebuilt answer
+            for line, cites in rec["composed"]["r"]:
+                if f"cite{line}" in rec["answers"]:
+                    n += 1
+                    assert cites == [int(rec["answers"][f"cite{line}"]["ranking"][0])]
+    assert n > 10
+    # bev's citations are shown lines, so faithfulness does not fall below
+    # the plain run's (A01 is 0.99 there already: the evaluator's own scoring)
+    t3 = lambda x: evaluate(x)["T3_faithfulness"]["faithfulness"]     # noqa: E731
+    assert t3(r) >= t3(explain_runs["off"])
+
+
+def test_explain_with_bev_down_keeps_the_ranking_without_citations(explain_runs):
+    r = explain_runs["down"]
+    recs = records(r, "bev", "explain")
+    assert recs and all(x["status"] == "error" for x in recs)
+    assert all(all(c == [] for _, c in x["composed"]["r"]) and x["composed"]["sep"] is None
+               for x in recs)
+    assert published(r) and r["multi"]["bev"]["per_idea"]["explain"]["failed"] == len(recs)
+
+
+def test_explain_on_decodes_less_on_the_mock_plumbing_only(explain_runs):
+    dec = lambda run_: sum((e.get("tokens") or {}).get("decode") or 0          # noqa: E731
+                           for a in run_["assessments"] for e in a["envelopes"]
+                           if e["agent"] == "diagnostician")
+    assert dec(explain_runs["on"]) < dec(explain_runs["off"])   # mock counts: len(text)//4
+
+
+def test_rank_only_grammar_accepts_rankings_and_nothing_else():
+    from fieldmind.multi import grammar
+    g = grammar.rank_only(4)
+    for ok in ('{"r":[]}', '{"r":[2]}', '{"r":[2,1,4]}'):
+        assert grammar.accepts(g, ok), ok
+    for bad in ('{"r":[2,2]}', '{"r":[5]}', '{"r":[1,2,3,4]}', '{"r":[[1,[1]]]}', '{"r":[1],"sep":1}'):
+        assert not grammar.accepts(g, bad), bad

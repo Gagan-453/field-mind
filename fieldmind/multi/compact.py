@@ -380,6 +380,10 @@ def build_diagnosis(sw: dict, templates: dict, *, facts, level_cap: int,
         "kind": "diagnosis", "evidence_tick": evidence_tick,
         "facts": [f.id for f in shown_facts],
         "fact_detail": [f.detail for f in shown_facts],
+        # the lines exactly as shown (bev ideas, explain: bev reads the same)
+        "fact_text": list(fact_lines),
+        "context_text": [t for _, t in notes] + [t for _, t in recs],
+        "context_kind": ["note"] * len(notes) + ["record"] * len(recs),
         "cases": [{"case_id": c.get("case_id"), "root_cause": c.get("root_cause"),
                    "discriminating_evidence": c.get("discriminating_evidence", "")}
                   for c in cases],
@@ -458,6 +462,16 @@ def check_diag_answer_shape(p: dict) -> tuple[bool, str]:
         return False, '"sep" must be a line number or null'
     if "g" in p and not isinstance(p["g"], str):
         return False, '"g" must be a group letter'
+    return True, ""
+
+
+def check_rank_only_shape(p: dict) -> tuple[bool, str]:
+    """bev ideas, explain on: {"r":[<case line>, ...]} and nothing else."""
+    r = p.get("r")
+    if not isinstance(r, list) or not all(_is_int(c) for c in r):
+        return False, '"r" must be a list of case line numbers'
+    if set(p) != {"r"}:
+        return False, "only \"r\" may be given"
     return True, ""
 
 

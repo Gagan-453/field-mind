@@ -188,6 +188,8 @@ class MultiOrchestrator:
             llm_used = bool(jobs)
             self._take_skips()
             results += got
+            if self.bev.active("explain"):
+                results += self._explain(bb, asmt, got, tick_no, now_s)
             if self.diag.split:
                 # Phase 3: both sides' answers, checked one by one, merged once
                 with bb.step("gate"):
@@ -361,6 +363,46 @@ class MultiOrchestrator:
         self._record(tick_no, p0, arrived, p0_asmt, hard_ms, text=text)
         self.last_telemetry["submitted"] = submitted
         return asmt
+
+    def _explain(self, bb, asmt, got, tick_no: int, now_s: float) -> list:
+        """Idea 1 (reports/bev_ideas.md): for every successful side answer, ask
+        bev for each ranked case's citation, the separating case and the notes
+        used (one request per side). on: the answer is rebuilt from Llama's
+        ranking and bev's checked picks BEFORE the gate expands and checks it
+        as usual. shadow: logged with its agreement with Llama's citations;
+        the answer is untouched. Returns the bev results (telemetry)."""
+        import dataclasses
+        jobs, pairs = [], []
+        for r in got:
+            env, lm = r.envelope, r.job.line_map
+            if env.status != "ok" or not isinstance(env.payload, dict):
+                continue
+            ranked = bevmod.ranked_lines(env.payload, len(lm["cases"]))
+            qs = bevmod.explain_questions(self.bev, lm, ranked) if ranked else {}
+            if not qs:
+                if self.bev.used("explain"):    # nothing to ask: the ranking alone
+                    r.envelope = dataclasses.replace(env, payload=bevmod.compose_explain(
+                        lm, ranked, {}, self.bev.noul_threshold))
+                continue
+            jobs.append(self.bev.make_job(bb, self.scheduler, "explain", lm["evidence_tick"],
+                                          bevmod.lines_state(lm), qs, now_s,
+                                          meta={"side": lm["side"], "ranked": ranked},
+                                          side=lm["side"] or "all"))
+            pairs.append((r, ranked))
+        done = {x.job.job_id: x for x in self.bev.run_lockstep(bb, self.scheduler, jobs, now_s)}
+        for job, (r, ranked) in zip(jobs, pairs):
+            with bb.step("gate"):
+                answers = self.gate.fold_bev(bb, asmt, done[job.job_id], tick_no, self.bev)
+            rec = self.gate.compact_log[-1]
+            if self.bev.used("explain"):
+                r.envelope = dataclasses.replace(r.envelope, payload=bevmod.compose_explain(
+                    r.job.line_map, ranked, answers, self.bev.noul_threshold))
+                rec["composed"] = r.envelope.payload
+                self.bev.stats["explain"]["used"] += 1
+            else:
+                rec["cite_agreement"] = bevmod.cite_agreement(r.envelope.payload, answers)
+                self.bev.stats["explain"]["shadow"] += 1
+        return list(done.values())
 
     def _take_skips(self) -> None:
         """clear_skip records of this tick into the gate's log and the bev stats."""

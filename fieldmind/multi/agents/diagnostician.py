@@ -60,13 +60,6 @@ class DiagnosticianAgent:
         self.raw_notes = self.sw["notes"] and self.sw["note_source"] == "raw"
         self.on_change = bool(mcfg.get("split_on_change", False))
         self.grammar = bool(mcfg.get("grammar", False))
-        # bev ideas (reports/bev_ideas.md): clear_skip (code only) and the
-        # telemetry of the skips it made or (shadow) would have made
-        self.bev_sw = bev_switches(mcfg)
-        if self.bev_sw["clear_skip"] != "off" and not (self.split and self.on_change):
-            raise ValueError("multi.bev.clear_skip needs multi.split and multi.split_on_change "
-                             "(it skips a side whose evidence changed)")
-        self.skip_log: list[dict] = []
         if self.grammar and not self.sw["schema"]:
             raise ValueError("multi.grammar needs multi.compact.schema on: the grammar "
                              "is the compact (B') answer format")
@@ -75,6 +68,13 @@ class DiagnosticianAgent:
         if self.split and not self.sw["schema"]:
             raise ValueError("multi.split needs multi.compact.schema on: the side "
                              "prompts are the compact (B') prompts")
+        # bev ideas (reports/bev_ideas.md): clear_skip (code only) and the
+        # telemetry of the skips it made or (shadow) would have made
+        self.bev_sw = bev_switches(mcfg)
+        if self.bev_sw["clear_skip"] != "off" and not (self.split and self.on_change):
+            raise ValueError("multi.bev.clear_skip needs multi.split and multi.split_on_change "
+                             "(it skips a side whose evidence changed)")
+        self.skip_log: list[dict] = []
         if self.sw["schema"]:
             # group_letters off: the same body without the leading "g" in the
             # answer format and example
@@ -84,6 +84,19 @@ class DiagnosticianAgent:
                               "rules_full": compact.load_prompt("diag_rules_full.txt"),
                               "rules_compact": compact.load_prompt("diag_rules_compact.txt")}
             self.repair = compact.load_prompt("repair_lines.txt")
+        # bev ideas, explain on (reports/bev_ideas.md): Llama ranks the cases
+        # only; bev supplies citations, sep and notes (orchestrator._explain).
+        # shadow keeps the full prompt (bev is asked beside it, for agreement).
+        self.rank_only = self.bev_sw["explain"] == "on"
+        if self.rank_only:
+            if not self.sw["schema"] or self.sw["group_letters"]:
+                raise ValueError("multi.bev.explain on needs compact.schema on and "
+                                 "group_letters off (the ranking-only answer has no letter)")
+            if not self.split:
+                raise ValueError("multi.bev.explain needs multi.split (side prompts)")
+            rules = compact.load_prompt("diag_rules_rank_only.txt")
+            self.templates = {"body": compact.load_prompt("diag_rank_only.txt"),
+                              "rules_full": rules, "rules_compact": rules}
 
     def make_job(self, bb, scheduler, tick: int, level: str, rung: int,
                  submit_s: float):
@@ -219,6 +232,9 @@ class DiagnosticianAgent:
             evidence_tick=tick, letters=self.letters, cap=self.cap,
             guard_cpt=self.guard_cpt, **extra)
         line_map["side"] = side
+        if self.rank_only:
+            hint["rank_only"] = True
+            line_map["rank_only"] = True
         info.update(side=side, fact_ids=list(line_map["facts"]),
                     case_ids=[c["case_id"] for c in line_map["cases"]])
         line_map["info"] = info
@@ -229,7 +245,8 @@ class DiagnosticianAgent:
                 diag.calls += 1
                 env, failed = call_model(
                     diag.backend, prompt, NAME, self.cap, hint, NAME, tick,
-                    compact.check_diag_answer_shape, repair_template=self.repair,
+                    compact.check_rank_only_shape if self.rank_only
+                    else compact.check_diag_answer_shape, repair_template=self.repair,
                     log_prompts=diag.log_prompts)
                 diag.parse_failures += failed
                 diag.retries += env.retries
@@ -242,7 +259,9 @@ class DiagnosticianAgent:
                                 submit_s=submit_s, work=work,
                                 side="all" if side is None else side)
         job.line_map = line_map
-        if self.grammar:
+        if self.grammar and self.rank_only:
+            job.grammar = grammar.to_gbnf(grammar.rank_only(len(line_map["cases"])))
+        elif self.grammar:
             # exactly the lines THIS prompt showed
             job.grammar = grammar.to_gbnf(grammar.diagnosis(
                 len(line_map["facts"]), len(line_map["cases"]),

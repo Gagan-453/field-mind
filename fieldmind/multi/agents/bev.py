@@ -216,3 +216,81 @@ def check_answers(payload, spec: dict) -> tuple[bool, str, dict]:
         out[qid] = {"type": "choice", "ranking": ranking,
                     "p": {k: float(v) for k, v in probs.items()}}
     return True, "", out
+
+
+# ----------------------------------------------------------------------
+#  Idea 1, explain: Llama ranks the cases; bev picks each case's citation,
+#  the separating case and the notes used. The B' answer is rebuilt from
+#  both and then goes through the gate's existing expansion and checks.
+# ----------------------------------------------------------------------
+def ranked_lines(payload: dict, n_cases: int) -> list[int]:
+    """The ranked case lines of a diagnosis answer (rank-only ints or B'
+    [line, [facts]] entries): in range, distinct, at most 3, answer order."""
+    out = []
+    for e in (payload or {}).get("r") or []:
+        c = e[0] if isinstance(e, list) and e else e
+        if isinstance(c, int) and not isinstance(c, bool) and 1 <= c <= n_cases and c not in out:
+            out.append(c)
+    return out[:3]
+
+
+def explain_questions(agent: "BevAgent", lm: dict, ranked: list[int]) -> dict:
+    """Q_CITE per ranked case (a choice over the shown fact lines), Q_SEP among
+    the ranked cases (2 or more), Q_NOTE per shown raw note line for the top
+    case. Option keys are the prompt's own line numbers."""
+    from ..compact import first_sentence
+    facts = {str(i): t for i, t in enumerate(lm.get("fact_text") or [], 1)}
+    cause = {c: first_sentence(lm["cases"][c - 1].get("root_cause") or "") for c in ranked}
+    qs = {}
+    if len(facts) >= 2:
+        for c in ranked:
+            qs[f"cite{c}"] = choice(agent.q("q_cite", cause=cause[c]), facts)
+    if len(ranked) >= 2:
+        qs["sep"] = choice(agent.q("q_sep"), {str(c): cause[c] for c in ranked})
+    if ranked:
+        for i, (kind, text) in enumerate(zip(lm.get("context_kind") or [],
+                                             lm.get("context_text") or []), 1):
+            if kind == "note":
+                qs[f"note{i}"] = noul(agent.q("q_note", cause=cause[ranked[0]]) + " Note: " + text)
+    return qs
+
+
+def compose_explain(lm: dict, ranked: list[int], answers: dict | None,
+                    noul_threshold: float) -> dict:
+    """The B' answer from Llama's ranking and bev's checked answers. With one
+    fact line, it is the citation (nothing to choose). Without bev's answers
+    (failed / rejected): the ranking with no citations, sep null, no notes.
+    `x` is always empty: one citation per case cannot say a fact is
+    unexplained (decision recorded in reports/bev_ideas.md)."""
+    n_facts = len(lm.get("fact_text") or [])
+    a = answers or {}
+    r = []
+    for c in ranked:
+        if f"cite{c}" in a:
+            r.append([c, [int(a[f"cite{c}"]["ranking"][0])]])
+        elif answers is not None and n_facts == 1:
+            r.append([c, [1]])
+        else:
+            r.append([c, []])
+    sep = int(a["sep"]["ranking"][0]) if "sep" in a else None
+    notes = sorted(int(k[4:]) for k, v in a.items()
+                   if k.startswith("note") and v["p"] >= noul_threshold)
+    return {"r": r, "sep": sep, "n": notes, "x": []}
+
+
+def cite_agreement(payload: dict, answers: dict | None) -> float | None:
+    """shadow: share of Llama's ranked cases whose bev-picked fact is among
+    the facts Llama cited for that case (None when nothing to compare)."""
+    if not answers:
+        return None
+    hits = n = 0
+    for e in (payload or {}).get("r") or []:
+        if isinstance(e, list) and len(e) == 2 and f"cite{e[0]}" in answers and e[1]:
+            n += 1
+            hits += int(answers[f"cite{e[0]}"]["ranking"][0]) in e[1]
+    return round(hits / n, 3) if n else None
+
+
+def lines_state(lm: dict) -> str:
+    """bev's state for explain: the side's fact lines exactly as shown."""
+    return "\n".join(lm.get("fact_text") or []) or "(no facts above threshold)"
