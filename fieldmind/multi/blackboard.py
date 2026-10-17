@@ -234,7 +234,7 @@ class Blackboard:
             "decider_evidence": {},     # case id -> offset
             "model_ranking": {},        # {tick, cases}
             "bev_notes": {},            # note id -> {instructs, side, p_instructs, p_side}
-            "bev_flags": {},            # {tick, unknown_fault, p_none, actions_dropped}
+            "bev_flags": {},            # {tick, unknown_fault, p_none}: the last flag, with its tick
         }
         self._active: str | None = None
         self.writes: dict[str, int] = {s: 0 for s in OWNERS}

@@ -47,6 +47,9 @@ class GateMemoryAgent:
         self.stale_dropped: list[dict] = []
         self.raw_notes = False      # note_source raw: set by the orchestrator
         self.bev_notes = False      # bev ideas, notes on: set by the orchestrator
+        # bev ideas, shadow: their envelopes go to the tick record, never into
+        # the published assessment (review finding 6)
+        self.bev_shadow: list[dict] = []
         self.flat_ids: frozenset = frozenset()    # hybrid: set by the orchestrator
         # Compact-answer expansion records of the current tick (telemetry;
         # the orchestrator takes and clears them when it records the tick).
@@ -438,12 +441,15 @@ class GateMemoryAgent:
         `shadow` they are logged here and nothing else happens."""
         from .bev import check_answers
         env, lm = result.envelope, result.job.line_map
-        asmt.envelopes.append(env.to_dict())
+        (self.bev_shadow if lm["mode"] == "shadow" else asmt.envelopes).append(env.to_dict())
         rec = {"agent": "bev", "idea": lm["idea"], "mode": lm["mode"],
                "evidence_tick": lm["evidence_tick"], "status": env.status,
-               **{k: lm[k] for k in ("side", "about", "regime", "ranked") if k in lm}}
+               **{k: lm[k] for k in ("side", "about", "regime", "ranked", "over_limit") if k in lm}}
         out = None
-        if self._drop_if_stale(result, now_tick):
+        if self.is_stale(result, now_tick):
+            # counted in bev's own stats, not in the run's stale_dropped (Llama's)
+            result.stale = True
+            bev.stats[lm["idea"]]["stale"] += 1
             rec["why"] = "stale"
         elif env.status != "ok":
             rec["why"] = env.error
@@ -456,6 +462,10 @@ class GateMemoryAgent:
                 rec["answers"] = answers
                 out = answers
         self.compact_log.append(rec)
+        return out
+
+    def take_bev_shadow(self) -> list[dict]:
+        out, self.bev_shadow = self.bev_shadow, []
         return out
 
     def check_notefact(self, result, vocab) -> tuple[bool, str]:

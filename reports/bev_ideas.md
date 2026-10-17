@@ -1,8 +1,9 @@
 # bev ideas — switches for every bev-decider use, and the per-stage cost report — report
 
 ## Status
-PARTIAL — pre-registration (written before any code on branch `bev-ideas`, from `bev-decider-3` a8eddfe). Sections
-below "Pre-registration" are filled in as the commits land. Nothing here has run on the board; bev-decider's weights
+PARTIAL — every idea built behind its own switch, with per-stage timing, a board resource sampler, a comparison report
+and a threshold table, on branch `bev-ideas` (from `bev-decider-3` a8eddfe; commits 5992d94..). Host build and mock
+checks only; the board part is `HANDOFF_BEV_IDEAS.md`. The pre-registration below was written before any code. Nothing here has run on the board; bev-decider's weights
 have not been run anywhere (reports/bev_decider.md, Part C pending). Every number from this branch until the board runs
 is from the mock backend (plumbing only; the mock bev does not read the state). All plant data is synthetic.
 
@@ -92,25 +93,99 @@ Dev quick set, lockstep, v3's models. Arm A = `configs/v3.yaml`, run twice (A1, 
   clocks, thermal zones, and current x voltage only if readable. NPU: no hardware counter is assumed readable; the
   report shows NPU-lane compute time and says that is what it is. Energy is `null` unless measured.
 
+## Build (one commit each)
+| commit | what |
+|---|---|
+| 1 5992d94 | this pre-registration |
+| 2 8e0a83e | plumbing: switches, BevAgent (`fieldmind/multi/agents/bev.py`), gate check `fold_bev`, bev lane placement (`bev` key), mock answers, bev server timings on the call record, sections `bev_notes` / `bev_flags` (gate) |
+| 3 b67e807 | per-stage timing: each step's own ms (nested steps subtracted, audit apart), tick ms, lane measured busy time |
+| 4 091e6f2 | `clear_skip` |
+| 5 a110f6d | `explain` (ranking-only prompt and grammar, bev citations / sep / notes, rebuilt answer through the gate) |
+| 6 28ab6ac | `first` |
+| 7 3f1fa39 | `actions`, `unknown` |
+| 8 041ea44 | `verifier` |
+| 9a 73e5b8c | `notes` |
+| 9b 583c767 | `text_reader` (new PROPOSED question q_subject) |
+| 10 7abc2ad | `rt_fallback` (real time) |
+| 11 72f507a | board sampler, `--bev` flag, `configs/bev_ideas.yaml`, the runner refuses a down bev lane |
+| 12 baea14c | `bench/bev_report.py` (md + html), `bench/bev_calibrate.py` |
+| 13 | this report, `HANDOFF_BEV_IDEAS.md` |
+
 ## Verification
-(filled per commit)
+| step | result |
+|---|---|
+| ran the module | every idea on the mock dev set (`run_episode`) and end to end through `scripts/benchmark.sh --backend mock` (two arms, 3 dev episodes) and `bench.bev_report` (md + html written and read) |
+| self-tests | `tests/test_bev_ideas.py` 51, `tests/test_bev_report.py` 3, `tests/test_board_sampler.py` 3; existing related suites (decider, backend, blackboard writers, scheduler, realtime, split, on-change, sides, compact diagnostician / verifier, grammar, text reader, benchmark) pass; full suite: see "Full suite" below |
+| off-switch identity | after every commit: 10 mock dev runs (configs v3 and bev3, A01 B01 C01 D01 N01; 1,720 ticks) identical to a8eddfe, timing fields and new telemetry keys removed (script: scratchpad `identity.py`) |
+| independent re-derivation | (1) step timing: a model agent's step time >= the backend's own reported latency of its calls, on every model tick (a mock that really spends what it reports); (2) lane busy = the sum of its calls' latencies (< 1 ms); (3) the report's decode total = the envelopes' own `tokens.decode` fields (a different record than the per-call lists it sums): equal; (4) sampler parse: every figure of a hand-written sample worked out by hand in the test |
+| mutation check | 27 mutations, all caught in the end; 4 first survived and each exposed a weak or tautological test that was replaced: clear_skip regime (mutation text did not apply; rerun), unknown threshold (the harsh mock always flagged; added a low-P(none) case), text reader state (the test compared the note-fact with our own composed reading: tautological; now against bev's answers in the gate log), rt_fallback pending (Llama always slower in the test; added a slow-bev test), sampler iowait (sample had no iowait) |
+
+Full suite (2026-10-17, laptop, 23 min, the known-flaky kill -9 test deselected as before): **639 passed, 1 skipped,
+1 failed**: `tests/test_benchmark.py::test_real_time_answers_get_the_tokens_of_their_own_envelope` (real time at
+0.02 s ticks; it matches each job's tokens to its envelope). It fails on a8eddfe too (2 of 3 runs there), so it is
+timing-dependent and older than this branch; here it failed 3 of 3, so this branch may make it more likely (more
+per-step work on the tick thread). Recorded, not fixed: it is not one of this branch's tests and fixing it changes
+the stage monitor's matching.
 
 ## Direction checks
-(filled per commit)
+| claim | expected | measured (mock: plumbing) | |
+|---|---|---|---|
+| shadow never changes what is published | identical to off | identical for every idea (published ranking + actions; for notes also every prompt; for text_reader every note-fact) | OK |
+| `explain` shortens the diagnostician's answer | decode down | B01: 1,034 -> 227 nominal tokens; 3-episode benchmark: 7.81 -> 1.09 decode tokens per tick (mock counts len(text)//4) | OK (plumbing) |
+| `first` calls Llama less | fewer diagnosis calls | D01 at threshold 0.4: 127 -> 119 with explain on; threshold above every probability: identical to off | OK |
+| `clear_skip` calls Llama less | fewer calls | D01 127 -> 92 (52 skips), B01 58 -> 53 (11 skips), A01 0 skips | OK |
+| `actions` never removes a protected action, escalation unchanged | always | harsh mock (no to everything): 0 protected dropped, escalate identical on every tick | OK |
+| `notes` route by bev | as bev says | D01: bev "heat" keeps all 78 note lines in heat prompts; bev "water" removes all; instructing notes reach no prompt | OK |
+| `rt_fallback` stands in only while Llama is pending | always | slow-bev run: answers after Llama's were never used | OK |
+| bev answers the board's NPU / CPU question | – | not measured anywhere | PROVISIONAL |
 
 ## Constants introduced
-See Thresholds above. Others: none yet.
+| symbol | value | provenance | range | affects |
+|---|---|---|---|---|
+| `multi.bev.noul_threshold` | 0.5 | DESIGN (calibrated yes/no boundary; bev card ECE 0.065, unchecked) | 0.3-0.7 | ideas 3, 4, 5, 6, 8 |
+| `multi.bev.first_threshold` | none | to be chosen by a human from the dev shadow table | 0-1 | ideas 2, 7 |
+| `MAX_OPTIONS` (bev verifier contradiction options) | 16 | = bev-decide `--max-options` (DESIGN, device/bev_decide) | – | idea 5 |
+| equipment split for the text reader | 13 + 12 | DERIVED: 25 equipment ids + none must fit 16 options | – | idea 8 |
+| sampler period | 1 s | DESIGN | 0.5-5 s | resolution of board numbers; its own cost is measured |
+| `CLK_TCK` | 100 | CITED: proc(5) USER_HZ; the probe reads the board's own | – | CPU seconds |
 
 ## Numbers that changed
-(filled per commit)
+None with every switch off (identity above). Mock-only plumbing numbers are in "Direction checks"; none is a bev or an
+agent result.
 
 ## Disagreements recorded, not resolved
-(filled per commit)
+1. **clear_skip saves fewer calls than it skips** (D01: 52 skips, 35 calls saved). A skip deletes the side's cache
+   (its evidence changed), so a later tick with unchanged evidence has no cache and calls again. Not changed.
+2. **`explain` leaves `x` (unexplained facts) empty.** One bev citation per case cannot say a fact is unexplained; a
+   code proxy (facts nobody cited) would over-report. The published "unexplained" list therefore shrinks under
+   explain; recorded so it is not read as an improvement.
+3. **`explain` cites one fact per case** where Llama may cite several. Faithfulness stays >= off on the mock; the
+   citation-relevance metric (Q3_rel) moved 0.472 -> 0.44 on the 3-episode mock benchmark: a plumbing number, to be
+   measured on the board.
+4. **The mock backend's latency is nominal** (it adds 5 ms it never spends): mock call times and lane busy shares
+   are not times. The report says so at the top of every mock comparison.
+5. **`rt_fallback` needs bev within about one tick**: answers are drained at tick start and the stale rule drops
+   anything older than one tick unless its evidence is unchanged; a 0.25 s bev at 0.2 s ticks was always stale.
+6. **The decider in real time is moot**: real time needs merge rule `model`, the decider `nudge` / `hybrid` (plan
+   item dropped, not built).
+7. **`llm_invoked` counts bev calls** (as it already counts the decider's), so the model invocation rate rises with
+   any bev idea on, shadow included (mock: 0.389 -> 0.696). It is a cost figure, not accuracy.
+
+## Decisions taken (conservative)
+Besides decisions 1-6 above: a failed bev reading of a note is recorded and never re-asked (falls back to the tag
+rule); under `verifier` on, `ver.calls` counts bev verdicts so the disagreement rate keeps its denominator; bev
+stand-in answers are envelopes with backend `bev` and no calls (counted as stand-ins, never as model calls); the
+sampler never deletes a board file (a new stop file per episode); supply power is reported as supply energy, the
+headline `energy_mwh` stays null; `bev_calibrate` picks no threshold.
 
 ## Blocked / needs a decision
-1. Sign-off on the PROPOSED question sentences (all but Q_ROOT) before any `on` result is reported.
-2. `first_threshold` needs a dev shadow run on the board.
+1. Sign-off on the PROPOSED question sentences (all but q_root) before any `on` result is reported.
+2. `first_threshold`: a human choice from the dev shadow table (handoff step 3).
+3. Whether to add a `text_reader` arm (v3 sends raw notes; the text reader is not on in v3).
+4. bev-decide placement (HTP0 or board CPU) is still Part C's open item; every idea adds load on that lane.
 
 ## What I could not verify
-bev's accuracy and speed on any of these questions (no weights run anywhere); whether the board exposes power or NPU
-counters to adb (probed by the handoff's first step).
+bev's accuracy and speed on any of these questions (no weights run anywhere); the board sampler on a board (macOS has
+no /proc; the script is syntax-checked, its parser tested on a hand-written sample); whether the board exposes power
+or NPU counters to adb (handoff step 2); real-model prompt sizes for the ranking-only prompt (the guard estimate is
+unchanged; the answer is shorter, the prompt the same).

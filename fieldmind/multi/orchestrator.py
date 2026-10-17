@@ -139,6 +139,8 @@ class MultiOrchestrator:
         if bb is None or bb.wm is not wm:
             raise RuntimeError("bind(wm) the blackboard before ticking")
         t_tick = self._t_tick = time.perf_counter()
+        if self.bev.active("rt_fallback"):
+            raise ValueError("multi.bev.rt_fallback is real time only (--mode realtime)")
 
         with bb.step("gate"):
             self.gate.begin_tick(bb, self.rung)
@@ -268,7 +270,9 @@ class MultiOrchestrator:
             drop, bev_res = self._actions_unknown(bb, asmt, claims, facts, retrieved,
                                                   state, tick_no, now_s)
             results += bev_res
-            llm_used = llm_used or bool(bev_res)
+            # a bev call counts as a model call only when its answer is used
+            # (shadow publishes exactly off: review finding 1)
+            llm_used = llm_used or any(r.job.line_map["mode"] == "on" for r in bev_res)
 
         # ---------------- gate + memory -----------------------------------
         with bb.step("gate"):
@@ -378,7 +382,7 @@ class MultiOrchestrator:
                                                    bevmod.lines_state(j.line_map), qs, now_s,
                                                    meta={"side": j.line_map["side"]}, side=j.side)
                             rt.submit(bj, tick_wall_s)
-                            self._rt_bev[bj.job_id] = j
+                            self._rt_bev[bj.job_id] = (j, bj)
                 if jobs:
                     bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
             self._take_skips()
@@ -413,8 +417,10 @@ class MultiOrchestrator:
         from .jobs import Result
         arrived_ids = {r.job.job_id for r in arrived}
         out = []
+        for jid in [k for k, (j, bj) in self._rt_bev.items() if bj.replaced]:
+            del self._rt_bev[jid]             # replaced before it ran: never answers
         for r in [x for x in model if x.job.agent == "bev_rt_fallback"]:
-            j = self._rt_bev.pop(r.job.job_id, None)
+            j = (self._rt_bev.pop(r.job.job_id, None) or (None, None))[0]
             with bb.step("gate"):
                 answers = self.gate.fold_bev(bb, asmt, r, tick_no, self.bev)
             rec = self.gate.compact_log[-1]
@@ -647,6 +653,7 @@ class MultiOrchestrator:
         self.ver.ver.calls += 1        # verdicts, so verifier_disagreement_rate keeps its denominator
         stand = self.scheduler.new_job("verifier", evidence_tick=tick_no, priority=3,
                                        max_answer_tokens=0, submit_s=now_s)
+        lm["over_limit"] = any(x.job.line_map.get("over_limit") for x in bres)
         stand.line_map = lm
         env = AgentEnvelope(agent="verifier", tick=tick_no, status="ok", payload=verdict,
                             backend="bev", model=bres[0].envelope.model,
@@ -834,6 +841,7 @@ class MultiOrchestrator:
             # thread, nested steps subtracted; audit snapshots apart; the whole
             # tick. Laptop times until the agent code runs on the board.
             "stage_ms": stage, "audit_ms": audit,
+            **({"bev_shadow": self.gate.take_bev_shadow()} if self.gate.bev_shadow else {}),
             **({"bev_flags": self.__dict__.pop("_bev_flags")} if "_bev_flags" in self.__dict__ else {}),
             "tick_ms": None if tick_ms is None else round(tick_ms, 4),
         }

@@ -26,6 +26,7 @@ from collections import Counter, defaultdict
 from ...agent.l4_diagnose import est_tokens
 from ...runtime.llm_backend import call_record
 from ...schemas import AgentEnvelope
+from ..compact import PROMPT_LIMIT
 from .decider import DeciderAgent
 
 NAME = "bev"            # the blackboard step every bev job runs in
@@ -136,9 +137,15 @@ class BevAgent:
 
         job = scheduler.new_job(f"bev_{idea}", evidence_tick=tick, priority=PRIORITY,
                                 max_answer_tokens=0, submit_s=submit_s, work=work, side=side)
+        est = est_tokens(prompt)
+        # Flagged, never cut (as the compact verifier): the plan's prompt limit
+        # applies to bev's requests too (review finding 5); bev-decide itself
+        # truncates a state over 2,048 tokens.
+        over = est >= PROMPT_LIMIT
+        self.stats[idea]["over_limit"] += over
         job.line_map = {"kind": "bev", "idea": idea, "mode": self.sw[idea],
                         "questions": spec, "evidence_tick": tick,
-                        "prompt_tokens_est": est_tokens(prompt), **(meta or {})}
+                        "prompt_tokens_est": est, "over_limit": over, **(meta or {})}
         return job
 
     def _call(self, prompt: str, hint: dict, idea: str, tick: int) -> AgentEnvelope:

@@ -179,9 +179,11 @@ class DiagnosticianAgent:
         """clear_skip (code only, reports/bev_ideas.md): belief has a clear
         leader (merge_rules.regime, belief alone) and this side's last checked
         answer already put that leader first. Under hybrid the model does not
-        lead on a clear tick, so the call can only add a capped nudge; the
-        offline replay of the v3 board answers found no published change
-        (77 calls, 2,596 decode tokens). Logged either way."""
+        lead on a clear tick, so the call can only add a capped nudge. The only
+        evidence so far is an offline replay of the v3 board answers on the
+        REPORTING episodes (no published change; 77 calls, 2,596 decode tokens):
+        it motivated the idea and decides nothing; keep / revert is decided on
+        the dev set by the pass rule (reports/bev_ideas.md). Logged either way."""
         if side not in cached:
             return False
         hyps = (cached[side].get("payload") or {}).get("hypotheses") or []

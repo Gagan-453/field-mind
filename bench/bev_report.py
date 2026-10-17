@@ -110,6 +110,8 @@ def metrics(t: dict, eps: list[str]) -> dict:
     for r in runs:
         envs = [e for a in r["assessments"] for e in a.get("envelopes", [])]
         envs += [x["envelope"] for a in r["assessments"] for x in (a.get("multi") or {}).get("text", [])]
+        envs += [dict(e, agent=e["agent"] + " (shadow)") for a in r["assessments"]
+                 for e in (a.get("multi") or {}).get("bev_shadow", [])]
         for e in envs:
             key = f"{e['agent']}@{e.get('backend', '?')}"
             c = calls[key]

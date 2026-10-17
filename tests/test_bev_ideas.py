@@ -52,6 +52,15 @@ def published(run_):
             for a in run_["assessments"]]
 
 
+def published_full(run_):
+    """Every published assessment field (llm_invoked, escalate, confidence,
+    unexplained, state, ...) except the model envelopes, the multi telemetry
+    and the wall-clock fields. Shadow must leave all of it unchanged
+    (review finding 1: a narrower comparison missed llm_invoked)."""
+    drop = {"envelopes", "multi", "tick_latency_ms", "deadline_miss"}
+    return [{k: v for k, v in a.items() if k not in drop} for a in run_["assessments"]]
+
+
 # ------------------------------------------------------------- switches
 def test_switches_read_yaml_bools_and_refuse_anything_else():
     sw = bevmod.switches({"bev": {"explain": False, "first": "shadow", "actions": True}})
@@ -284,7 +293,7 @@ def test_clear_skip_skips_only_on_clear_ticks_and_makes_no_call_for_that_side(sk
 def test_clear_skip_saves_calls_and_shadow_changes_nothing(skip_runs):
     for ep in ("dev_B01_tube_leak", "dev_D01_high_cv_coal"):
         off, sh, on = (skip_runs[(ep, m)] for m in ("off", "shadow", "on"))
-        assert published(sh) == published(off)
+        assert published_full(sh) == published_full(off)
         assert sh["diag_calls"] == off["diag_calls"]
         assert len(records(sh, "bev", "clear_skip")) > 0                 # would-skips logged
         assert on["diag_calls"] < off["diag_calls"]
@@ -337,7 +346,7 @@ def explain_runs():
 
 def test_explain_shadow_publishes_exactly_off_and_logs_bevs_picks(explain_runs):
     off, sh = explain_runs["off"], explain_runs["shadow"]
-    assert published(sh) == published(off) and sh["diag_calls"] == off["diag_calls"]
+    assert published_full(sh) == published_full(off) and sh["diag_calls"] == off["diag_calls"]
     recs = records(sh, "bev", "explain")
     assert len(recs) == sh["diag_calls"] and all(r["status"] == "ok" and "cite_agreement" in r for r in recs)
 
@@ -417,7 +426,7 @@ def first_runs():
 
 def test_first_asks_only_on_weak_or_tied_ticks_and_shadow_changes_nothing(first_runs):
     off, sh = first_runs["off"], first_runs["shadow"]
-    assert published(sh) == published(off) and sh["diag_calls"] == off["diag_calls"]
+    assert published_full(sh) == published_full(off) and sh["diag_calls"] == off["diag_calls"]
     recs = records(sh, "bev", "first")
     assert recs
     rule = _rule(sh)
@@ -428,7 +437,7 @@ def test_first_asks_only_on_weak_or_tied_ticks_and_shadow_changes_nothing(first_
 
 def test_first_below_threshold_never_replaces_llama(first_runs):
     never = first_runs["never"]
-    assert published(never) == published(first_runs["off"])
+    assert published_full(never) == published_full(first_runs["off"])
     assert never["diag_calls"] == first_runs["off"]["diag_calls"]
     assert not any(r.get("replaced_llama") for r in records(never, "bev", "first"))
 
@@ -492,7 +501,7 @@ def act_runs():
 
 def test_actions_and_unknown_shadow_change_nothing_published(act_runs):
     sh = act_runs["shadow"]
-    assert published(sh) == published(act_runs["off"])
+    assert published_full(sh) == published_full(act_runs["off"])
     assert records(sh, "bev", "actions") and records(sh, "bev", "unknown")
     assert not any("bev_flags" in a["multi"] for a in sh["assessments"])
 
@@ -563,7 +572,7 @@ def ver_runs():
 
 def test_bev_verifier_shadow_changes_nothing_and_logs_agreement(ver_runs):
     sh, off = ver_runs["shadow"], ver_runs["off"]
-    assert published(sh) == published(off)
+    assert published_full(sh) == published_full(off)
     assert [a["unexplained"] for a in sh["assessments"]] == [a["unexplained"] for a in off["assessments"]]
     recs = records(sh, "bev", "verifier")
     claim_recs = [r for r in recs if any(k.startswith("claim") for k in (r.get("answers") or {}))]
@@ -643,7 +652,7 @@ def note_runs():
 
 def test_notes_shadow_reads_each_note_once_and_changes_nothing(note_runs):
     sh = note_runs["shadow"]
-    assert published(sh) == published(note_runs["off"])
+    assert published_full(sh) == published_full(note_runs["off"])
     ids = [r["about"] for r in records(sh, "bev", "notes")]
     assert ids and len(ids) == len(set(ids))
     assert _prompts_by_side(sh) == _prompts_by_side(note_runs["off"])
@@ -690,7 +699,7 @@ def _notefacts(run_):
 
 def test_bev_text_reader_shadow_changes_nothing(tr_runs):
     off, sh = tr_runs["off"], tr_runs["shadow"]
-    assert published(sh) == published(off) and _notefacts(sh) == _notefacts(off)
+    assert published_full(sh) == published_full(off) and _notefacts(sh) == _notefacts(off)
     recs = [r for r in records(sh, "bev", "text_reader") if "reading" in r]
     assert recs and all("agree_kind" in r for r in recs)
 
@@ -835,3 +844,78 @@ def test_bev_ideas_yaml_is_v3_plus_the_bev_lane_and_placement_only():
                                       if k not in ("lanes", "fixed_placement")}}
     assert strip(bi) == strip(v3)
     assert {k: v for k, v in bi["multi"]["lanes"].items() if k != "bev"} == v3["multi"]["lanes"]
+
+
+# ------------------------------------------------- review fixes (commit 13)
+def test_every_switch_off_reproduces_a8eddfe():
+    """Off-switch identity, test-enforced (review finding 2): per-tick
+    fingerprints of mock dev runs of commit a8eddfe (before any bev idea),
+    timing fields and the new telemetry removed (tests/data)."""
+    import hashlib
+    import re
+    from run_demo import load_config
+    from bench.harness import Episode, run_episode
+    ref = json.loads((ROOT / "tests/data/bev_ideas_identity.json").read_text())["runs"]
+    timing = re.compile(r"(_ms|_ms_p50|_ms_p95|_ms_max|wall_clock_s|wall_busy_s|_wall_s)$")
+    drop = {"p0_ms", "hard_ms", "tick_latency_ms", "latency_ms", "deadline_miss", "p0_deadline_miss",
+            "stage_ms", "bev", "audit_ms", "tick_ms", "audit_ms_total", "wall_calls", "bev_shadow"}
+
+    def canon(o, key=""):
+        if isinstance(o, dict):
+            return {k: canon(v, k) for k, v in o.items() if not (timing.search(k) or k in drop
+                    or (key == "section_writes" and k in ("bev_notes", "bev_flags")))}
+        if isinstance(o, list):
+            return [canon(x, key) for x in o]
+        return o
+    h = lambda o: hashlib.sha256(json.dumps(canon(o), sort_keys=True).encode()).hexdigest()[:16]  # noqa: E731
+    for key, want in ref.items():
+        ov, ep = key.split("/")
+        if not (DEV / ep).exists():
+            pytest.skip("dev episodes not generated")
+        cfg = load_config(str(ROOT / "configs/base.yaml"), "mock", str(ROOT / f"configs/{ov}.yaml"))
+        cfg.setdefault("agent", {})["log_prompts"] = False
+        r = run_episode(Episode(DEV / ep), cfg, arch="multi")
+        got = [h(a) for a in r["assessments"]]
+        first = next((i for i, (x, y) in enumerate(zip(got, want["ticks"])) if x != y), None)
+        assert len(got) == len(want["ticks"]) and first is None, f"{key}: first differing tick index {first}"
+        assert h({k: v for k, v in r.items() if k not in ("assessments", "wall_clock_s")}) == want["run"], key
+
+
+def test_finalize_drops_no_protected_action_even_when_bev_is_asked_about_it(monkeypatch):
+    """The defence-in-depth re-check in GateMemoryAgent.finalize (review
+    finding 3): make the question builder ask about EVERY action, protected
+    ones too, and let bev say no to all; finalize must still keep them."""
+    if not (DEV / ACT_EP).exists():
+        pytest.skip("dev episodes not generated")
+    from fieldmind.multi.agents import bev as b
+    monkeypatch.setattr(b, "action_questions", lambda agent, actions, cat, top: {
+        f"act_{a.id}": b.noul(agent.q("q_action", cause=top, action=a.text)) for a in actions})
+    on = run(cfg_with(actions="on", backend="mock_naybev"), ACT_EP)
+    off = run(cfg_with(), ACT_EP)
+    asked_now = 0
+    cat = _catalogue()
+    for a_off, a_on in zip(off["assessments"], on["assessments"]):
+        on_ids = {x["id"] for x in a_on["actions"]}
+        for x in a_off["actions"]:
+            e = cat.lookup(x["id"])
+            if x["urgency"] == "NOW" or e["category"] in ("ESCALATION", "MITIGATION"):
+                asked_now += 1
+                assert x["id"] in on_ids, (a_on["tick"], x["id"])
+    assert asked_now > 0
+
+
+def test_rt_fallback_refuses_lockstep():
+    cfg = cfg_with(rt_fallback="shadow")
+    with pytest.raises(ValueError, match="real time only"):
+        run(cfg)
+
+
+def test_an_oversized_bev_request_is_flagged_and_counted():
+    from fieldmind.agent.world_model import WorldModel
+    agent = BevAgent(MockBackend(), cfg_with(actions="shadow")["multi"])
+    s = Scheduler(lanes(), {"placement": "fixed", "fixed_placement": {"bev": "bev"}})
+    bb = Blackboard(WorldModel(), audit=False)
+    small = agent.make_job(bb, s, "actions", 1, "short", {"y": bevmod.noul("ok?")}, 0.0)
+    big = agent.make_job(bb, s, "actions", 1, "x " * 4000, {"y": bevmod.noul("ok?")}, 0.0)
+    assert not small.line_map["over_limit"] and big.line_map["over_limit"]
+    assert agent.stats["actions"]["over_limit"] == 1

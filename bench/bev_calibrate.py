@@ -38,6 +38,7 @@ def rows(tests: list[dict]) -> list[dict]:
             for a in d["run"]["assessments"]:
                 for c in (a.get("multi") or {}).get("compact", []):
                     if c.get("agent") == "bev" and c.get("idea") in ("first", "rt_fallback") \
+                            and c.get("mode") == "shadow" \
                             and c.get("p_top") is not None and c.get("answers"):
                         top = c["answers"]["root"]["ranking"][0]
                         out.append({"p": c["p_top"], "agree": c.get("agree_top"),
