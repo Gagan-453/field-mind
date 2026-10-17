@@ -177,3 +177,72 @@ def test_lockstep_only_ideas_refuse_real_time():
     orch.diag.split = orch.diag.on_change = True
     with pytest.raises(NotImplementedError, match="lockstep only"):
         orch.start_realtime(object())
+
+
+# ------------------------------------------------- commit 3: telemetry
+def test_nested_steps_are_timed_exclusively():
+    import time
+    from fieldmind.agent.world_model import WorldModel
+    bb = Blackboard(WorldModel(), audit=True)
+    with bb.step("scheduler"):
+        time.sleep(0.02)
+        with bb.step("diagnostician"):
+            time.sleep(0.05)
+    stage, audit = bb.take_stage_ms()
+    assert 50 <= stage["diagnostician"] < 80
+    assert 20 <= stage["scheduler"] < 45            # the child's 50 ms are not the scheduler's
+    assert audit >= 0 and bb.take_stage_ms() == ({}, 0.0)
+
+
+class SleepyMock(MockBackend):
+    """The mock's latency_ms is NOMINAL (it adds 5 ms it never spends); this
+    one really spends what it reports, so step times can be checked against it."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        import time
+        t0 = time.perf_counter()
+        time.sleep(0.004)
+        r = super().generate(prompt, role, max_tokens, mock_hint)
+        r.latency_ms = (time.perf_counter() - t0) * 1000
+        return r
+
+
+from fieldmind.runtime.llm_backend import register_backend  # noqa: E402
+register_backend("mock_sleepy", SleepyMock)
+
+
+@pytest.fixture(scope="module")
+def timed_run():
+    if not (DEV / EP).exists():
+        pytest.skip("dev episodes not generated")
+    return run(cfg_with(decider=True, backend="mock_sleepy"))
+
+
+def test_stage_times_cover_each_call_and_fit_inside_the_tick(timed_run):
+    model_ticks = 0
+    for a in timed_run["assessments"]:
+        m = a["multi"]
+        st = m["stage_ms"]
+        assert sum(st.values()) + m["audit_ms"] <= m["tick_ms"] + 1.0
+        for agent in ("diagnostician", "decider"):
+            calls = [c["latency_ms"] for e in a["envelopes"] if e["agent"] == agent
+                     for c in e.get("calls", [])]
+            if calls:
+                model_ticks += 1
+                # the step wraps the call: the backend's own latency is inside it
+                assert st[agent] >= sum(calls) - 0.5, (a["tick"], agent, st[agent], calls)
+    assert model_ticks > 10
+
+
+def test_lane_wall_busy_is_the_sum_of_its_calls(timed_run):
+    lanes_ = {l["lane"]: l for l in timed_run["multi"]["lanes"]}
+    by_lane = {}
+    for a in timed_run["assessments"]:
+        for e in a["envelopes"]:
+            for c in e.get("calls", []):
+                lane = "bev" if e["agent"] == "decider" else "npu" if e["agent"] == "diagnostician" else "cpu"
+                by_lane[lane] = by_lane.get(lane, 0.0) + c["latency_ms"] / 1000
+    for lane, s in by_lane.items():
+        assert abs(lanes_[lane]["wall_busy_s"] - s) < 1e-3, lane
+    summ = timed_run["multi"]["stage_ms"]
+    assert summ["sensor"]["n"] == len(timed_run["assessments"])

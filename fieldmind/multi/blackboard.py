@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 from dataclasses import asdict, is_dataclass
 from types import MappingProxyType
 
@@ -237,6 +238,15 @@ class Blackboard:
         }
         self._active: str | None = None
         self.writes: dict[str, int] = {s: 0 for s in OWNERS}
+        # Per-stage timing (reports/bev_ideas.md, commit 3): each step's own
+        # wall time on the tick thread, ms, nested steps subtracted (a model
+        # job's step inside the scheduler's is the job's, not the scheduler's),
+        # audit snapshots kept apart in `audit_ms`. Taken and reset per tick by
+        # the orchestrator (take_stage_ms). Steps on lane worker threads (real
+        # time) are not timed here; their calls carry their own times.
+        self.stage_ms: dict[str, float] = {}
+        self.audit_ms = 0.0
+        self._frames: list[dict] = []
 
     # ------------------------------------------------------------------
     def _get(self, section: str):
@@ -295,6 +305,12 @@ class Blackboard:
     def snapshot(self) -> dict[str, str]:
         return {s: fingerprint(self._get(s)) for s in OWNERS}
 
+    def take_stage_ms(self) -> tuple[dict, float]:
+        """This tick's per-agent step times and audit time, then reset."""
+        out, audit = self.stage_ms, self.audit_ms
+        self.stage_ms, self.audit_ms = {}, 0.0
+        return {k: round(v, 4) for k, v in out.items()}, round(audit, 4)
+
     def step(self, agent: str):
         """Context manager around one agent's step. Under audit, any section
         that changed and is not owned by `agent` raises WriterError."""
@@ -311,21 +327,36 @@ class _Step:
         self.off_thread = threading.get_ident() != self.bb._thread
         if self.off_thread:
             return self.bb
+        self.t0 = time.perf_counter()
         self.prev = self.bb._active
         self.bb._active = self.agent
         self.before = self.bb.snapshot() if self.bb.audit else None
+        self.frame = {"start": time.perf_counter(), "child": 0.0}
+        self.bb._frames.append(self.frame)
         return self.bb
 
     def __exit__(self, exc_type, exc, tb):
         if self.off_thread:
             return False
-        self.bb._active = self.prev
-        if exc_type is not None or self.before is None:
+        t_end = time.perf_counter()
+        self.bb._frames.pop()
+        body = t_end - self.frame["start"]
+        bb = self.bb
+        bb.stage_ms[self.agent] = (bb.stage_ms.get(self.agent, 0.0)
+                                   + (body - self.frame["child"]) * 1000)
+        try:
+            self.bb._active = self.prev
+            if exc_type is not None or self.before is None:
+                return False
+            after = self.bb.snapshot()
+            bad = [s for s in OWNERS
+                   if after[s] != self.before[s] and OWNERS[s] != self.agent]
+            if bad:
+                raise WriterError(f"{self.agent!r} changed sections it does not "
+                                  f"own: {bad}")
             return False
-        after = self.bb.snapshot()
-        bad = [s for s in OWNERS
-               if after[s] != self.before[s] and OWNERS[s] != self.agent]
-        if bad:
-            raise WriterError(f"{self.agent!r} changed sections it does not "
-                              f"own: {bad}")
-        return False
+        finally:
+            total = time.perf_counter() - self.t0
+            bb.audit_ms += (total - body) * 1000
+            if bb._frames:                       # the enclosing step: all of this is its child
+                bb._frames[-1]["child"] += total

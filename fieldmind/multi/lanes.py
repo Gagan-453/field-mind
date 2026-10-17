@@ -59,6 +59,10 @@ class SimLane:
         self.busy_s = 0.0
         self.n_jobs = 0
         self._elapsed = 0.0
+        # Measured (not simulated): the wall time of this lane's calls as the
+        # client saw them, and how many (reports/bev_ideas.md, commit 3).
+        self.wall_busy_s = 0.0
+        self.wall_calls = 0
 
     # ------------------------------------------------------------------
     def service_s(self, prompt_tokens: int, answer_tokens: int) -> float:
@@ -97,6 +101,8 @@ class SimLane:
         dtok = min(reply.decode_tokens, max_tokens) \
             if reply.decode_tokens is not None else max_tokens
         self._elapsed += self.service_s(ptok, dtok)
+        self.wall_busy_s += (reply.latency_ms or 0.0) / 1000
+        self.wall_calls += 1
         return reply
 
     def end(self, job) -> None:
@@ -112,7 +118,8 @@ class SimLane:
         extra = {} if self.kind == "llm" else {"kind": self.kind}
         return {"lane": self.name, **extra, "prefill_tok_s": self.prefill_tok_s,
                 "decode_tok_s": self.decode_tok_s, "n_jobs": self.n_jobs,
-                "busy_s": round(self.busy_s, 3), "free_at": round(self.free_at, 3)}
+                "busy_s": round(self.busy_s, 3), "free_at": round(self.free_at, 3),
+                "wall_busy_s": round(self.wall_busy_s, 3), "wall_calls": self.wall_calls}
 
 
 class LaneBackend(LLMBackend):

@@ -121,6 +121,10 @@ class MultiOrchestrator:
         self.bb: Blackboard | None = None
         self.last_telemetry: dict = {}
         self.p0_ms: list[float] = []
+        self._t_tick = None
+        self._stage_hist: dict[str, list] = {}   # agent -> per-tick ms (ticks it ran)
+        self._tick_ms: list[float] = []
+        self._audit_ms = 0.0
 
     def bind(self, wm) -> None:
         self.bb = Blackboard(wm, audit=bool(self.mcfg.get("audit_writes", True)))
@@ -130,7 +134,7 @@ class MultiOrchestrator:
         bb = self.bb
         if bb is None or bb.wm is not wm:
             raise RuntimeError("bind(wm) the blackboard before ticking")
-        t_tick = time.perf_counter()
+        t_tick = self._t_tick = time.perf_counter()
 
         with bb.step("gate"):
             self.gate.begin_tick(bb, self.rung)
@@ -272,7 +276,7 @@ class MultiOrchestrator:
         # a late answer is accepted while its side's evidence is unchanged; its
         # citations need the facts of its evidence tick, so keep more of them
         bb.keep_fact_ticks(int(self.mcfg.get("realtime_fact_ticks", 40)))
-        t_tick = time.perf_counter()
+        t_tick = self._t_tick = time.perf_counter()
         with bb.step("gate"):
             self.gate.begin_tick(bb, self.rung)
         with bb.step("sensor"):
@@ -416,6 +420,14 @@ class MultiOrchestrator:
     def _record(self, tick, p0_ms, results, p0_asmt, hard_ms=None,
                 text=None) -> None:
         self.p0_ms.append(p0_ms)
+        stage, audit = self.bb.take_stage_ms() if self.bb else ({}, 0.0)
+        tick_ms = ((time.perf_counter() - self._t_tick) * 1000
+                   if self._t_tick is not None else None)
+        for k, v in stage.items():
+            self._stage_hist.setdefault(k, []).append(v)
+        if tick_ms is not None:
+            self._tick_ms.append(tick_ms)
+        self._audit_ms += audit
         self.last_telemetry = {
             "p0_ms": round(p0_ms, 4),
             "p0_deadline_miss": p0_ms > self.cfg.get("hard_stage_deadline_ms", 200),
@@ -424,6 +436,11 @@ class MultiOrchestrator:
             "results": [r.telemetry() for r in results],
             "text": text or [],
             "compact": list(self.gate.compact_log),
+            # commit 3 (reports/bev_ideas.md): per-agent step ms on the tick
+            # thread, nested steps subtracted; audit snapshots apart; the whole
+            # tick. Laptop times until the agent code runs on the board.
+            "stage_ms": stage, "audit_ms": audit,
+            "tick_ms": None if tick_ms is None else round(tick_ms, 4),
         }
         self.gate.compact_log.clear()
 
@@ -453,9 +470,22 @@ class MultiOrchestrator:
                 "notefacts_rejected": self.text.rejected if self.text else 0,
                 "p0_ms_p50": pct(0.5), "p0_ms_p95": pct(0.95),
                 "p0_ms_max": p[-1] if p else None,
+                "stage_ms": {k: _summ(v) for k, v in sorted(self._stage_hist.items())},
+                "tick_ms": _summ(self._tick_ms),
+                "audit_ms_total": round(self._audit_ms, 3),
                 "realtime": self.rt.telemetry() if getattr(self, "rt", None) else None,
                 "audit_writes": self.bb.audit if self.bb else None,
                 "section_writes": dict(self.bb.writes) if self.bb else {}}
+
+
+def _summ(xs: list) -> dict:
+    """n, total, p50, p95, max of per-tick ms (telemetry)."""
+    if not xs:
+        return {"n": 0}
+    s = sorted(xs)
+    q = lambda f: round(s[min(len(s) - 1, int(f * len(s)))], 4)   # noqa: E731
+    return {"n": len(s), "total": round(sum(s), 3), "p50": q(0.5), "p95": q(0.95),
+            "max": round(s[-1], 4)}
 
 
 # =======================================================================
