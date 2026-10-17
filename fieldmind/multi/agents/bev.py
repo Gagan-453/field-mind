@@ -357,3 +357,35 @@ def unknown_questions(agent: "BevAgent", hypotheses: list) -> dict:
     if not opts:
         return {}
     return {"root": choice(agent.q("q_root"), {**opts, NONE_KEY: NONE_TEXT})}
+
+
+# ----------------------------------------------------------------------
+#  Idea 5, verifier: one yes/no per shown claim; if any fails, a second
+#  request picks the strongest contradiction. The verdict is the compact
+#  verifier's answer format, expanded and applied by the existing path.
+# ----------------------------------------------------------------------
+MAX_OPTIONS = 16        # = bev-decide --max-options (DESIGN, device/bev_decide)
+
+
+def ver_state(lm: dict, facts) -> tuple[str, dict]:
+    """The verifier's facts (every fact of the evidence tick, the compact
+    verifier's line order) as bev's state, and the contradiction options:
+    non-INFO facts first, at most MAX_OPTIONS, keyed by the prompt's line."""
+    by_id = {f.id: f for f in facts}
+    text = {i: f"[{by_id[fid].check}/{by_id[fid].severity}] {by_id[fid].detail}"
+            for i, fid in enumerate(lm["facts"], 1) if fid in by_id}
+    order = sorted(text, key=lambda i: (by_id[lm["facts"][i - 1]].severity == "INFO", i))
+    return "\n".join(text[i] for i in sorted(text)), {str(i): text[i] for i in order[:MAX_OPTIONS]}
+
+
+def ver_questions(agent: "BevAgent", lm: dict) -> dict:
+    from ..compact import first_sentence
+    return {f"claim{i}": noul(agent.q("q_supports", claim=first_sentence(c or "")))
+            for i, c in enumerate(lm["claims"], 1)}
+
+
+def compose_verdict(answers: dict, noul_threshold: float, contra: int | None) -> dict:
+    """{"v":[[line,"p"|"f"],...],"c":line|null}: pass when P(yes) >= threshold."""
+    v = [[int(k[5:]), "p" if a["p"] >= noul_threshold else "f"]
+         for k, a in sorted(answers.items(), key=lambda kv: int(kv[0][5:]))]
+    return {"v": v, "c": contra}

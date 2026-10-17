@@ -109,6 +109,9 @@ class MultiOrchestrator:
         # bev ideas (reports/bev_ideas.md): every switch off = the earlier
         # behaviour exactly (no job, no section written, no telemetry key).
         self.bev = BevAgent(diag.backend, mcfg, log_prompts=bool(acfg.get("log_prompts")))
+        if self.bev.active("verifier") and not self.ver.sw["ver_schema"]:
+            raise ValueError("multi.bev.verifier needs multi.compact.ver_schema on (its verdict "
+                             "is the compact verifier's answer format)")
         if bevmod.any_bev_call(self.bev.sw):
             if not any(getattr(l, "kind", "llm") == "decider" for l in scheduler.lanes):
                 raise ValueError("multi.bev needs a lane of kind 'decider' "
@@ -235,19 +238,27 @@ class MultiOrchestrator:
 
         top_conf = top_confidence(claims)
         if self.ver.should_run(level, top_conf, self.rung):
-            with bb.step("scheduler"):
-                job = self.ver.make_job(bb, self.scheduler, tick_no, claims,
-                                        submit_s)
-                self.scheduler.submit(job)
-                bb.write("jobs", [job.to_dict()], "scheduler")
-                got = self.scheduler.run_lockstep(now_s)
-            results += got
-            # a verifier call is a model call: llm_invoked keeps its Phase 2
-            # meaning ("a model was called this tick")
-            llm_used = llm_used or bool(got)
+            asked = claims
+            if self.bev.used("verifier"):
+                got, bev_res = self._bev_verify(bb, asmt, claims, tick_no, now_s)
+                results += bev_res
+                llm_used = llm_used or bool(bev_res)
+            else:
+                with bb.step("scheduler"):
+                    job = self.ver.make_job(bb, self.scheduler, tick_no, claims,
+                                            submit_s)
+                    self.scheduler.submit(job)
+                    bb.write("jobs", [job.to_dict()], "scheduler")
+                    got = self.scheduler.run_lockstep(now_s)
+                results += got
+                # a verifier call is a model call: llm_invoked keeps its Phase 2
+                # meaning ("a model was called this tick")
+                llm_used = llm_used or bool(got)
             for r in got:
                 with bb.step("gate"):
                     claims = self.gate.apply_verdict(bb, asmt, claims, r, tick_no)
+            if self.bev.mode("verifier") == "shadow":
+                results += self._bev_verify(bb, asmt, asked, tick_no, now_s, shadow_of=got)[1]
 
         drop = frozenset()
         if self.bev.active("actions") or self.bev.active("unknown"):
@@ -532,6 +543,68 @@ class MultiOrchestrator:
                 bb.write("bev_flags", flags, "gate")
             self._bev_flags = flags
         return frozenset(drop), done
+
+    def _bev_verify(self, bb, asmt, claims, tick_no: int, now_s: float, shadow_of=None):
+        """Idea 5 (reports/bev_ideas.md): one yes/no per claim the compact
+        verifier would show (Q_SUPPORTS); if any fails, a second request picks
+        the strongest contradiction (Q_CONTRA). on: the verdict, in the compact
+        verifier's answer format, stands in for Gemma's and goes through the
+        gate's expansion and Verifier.apply unchanged. shadow (`shadow_of` =
+        Gemma's results, already applied): logged with the per-claim agreement.
+        Returns (stand-in results, bev results)."""
+        from .compact import build_verification, first_sentence
+        from .jobs import Result
+        from ..schemas import AgentEnvelope
+        facts = bb.read("facts").facts_of(tick_no)
+        _, lm, _ = build_verification(self.ver.sw, self.ver.templates, facts=facts,
+                                      claims=claims, evidence_tick=tick_no)
+        if not lm["claims"]:
+            return [], []
+        state, contra_opts = bevmod.ver_state(lm, facts)
+        t = self.bev.noul_threshold
+        job = self.bev.make_job(bb, self.scheduler, "verifier", tick_no, state,
+                                bevmod.ver_questions(self.bev, lm), now_s)
+        bres = self.bev.run_lockstep(bb, self.scheduler, [job], now_s)
+        with bb.step("gate"):
+            answers = self.gate.fold_bev(bb, asmt, bres[0], tick_no, self.bev)
+        rec = self.gate.compact_log[-1]
+        if not answers:
+            return [], bres
+        contra = None
+        failing = sorted((int(k[5:]) for k, a in answers.items() if a["p"] < t))
+        if failing and len(contra_opts) >= 2:
+            claim = first_sentence(lm["claims"][failing[0] - 1] or "")
+            job2 = self.bev.make_job(bb, self.scheduler, "verifier", tick_no, state,
+                                     {"contra": bevmod.choice(self.bev.q("q_contra", claim=claim),
+                                                              contra_opts)}, now_s)
+            more = self.bev.run_lockstep(bb, self.scheduler, [job2], now_s)
+            bres += more
+            with bb.step("gate"):
+                a2 = self.gate.fold_bev(bb, asmt, more[0], tick_no, self.bev)
+            if a2:
+                contra = int(a2["contra"]["ranking"][0])
+        verdict = bevmod.compose_verdict(answers, t, contra)
+        rec["verdict"] = verdict
+        if shadow_of is not None:
+            gem = {}
+            for r in shadow_of:
+                for c in (r.envelope.payload or {}).get("checks", []) if r.envelope.status == "ok" else []:
+                    gem[c["claim"]] = c["verdict"][0]            # "p" | "f"
+            pairs = [(v, gem.get(lm["claims"][line - 1])) for line, v in verdict["v"]]
+            pairs = [(a, b) for a, b in pairs if b is not None]
+            rec["agree"] = round(sum(a == b for a, b in pairs) / len(pairs), 3) if pairs else None
+            self.bev.stats["verifier"]["shadow"] += 1
+            return [], bres
+        self.bev.stats["verifier"]["used"] += 1
+        self.ver.ver.calls += 1        # verdicts, so verifier_disagreement_rate keeps its denominator
+        stand = self.scheduler.new_job("verifier", evidence_tick=tick_no, priority=3,
+                                       max_answer_tokens=0, submit_s=now_s)
+        stand.line_map = lm
+        env = AgentEnvelope(agent="verifier", tick=tick_no, status="ok", payload=verdict,
+                            backend="bev", model=bres[0].envelope.model,
+                            tokens={"prefill": 0, "decode": 0})
+        return [Result(job=stand, envelope=env, evidence_tick=tick_no, lane=None,
+                       queue_wait_ms=0.0, start_s=None, finish_s=None, tick_epoch_s=now_s)], bres
 
     def _take_skips(self) -> None:
         """clear_skip records of this tick into the gate's log and the bev stats."""

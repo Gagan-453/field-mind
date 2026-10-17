@@ -546,3 +546,51 @@ def test_unknown_flag_stays_down_when_none_is_unlikely():
     r = run(cfg_with(unknown="on"), ACT_EP)       # plain mock: NONE is the last option, lowest
     flags = [a["multi"]["bev_flags"] for a in r["assessments"] if "bev_flags" in a["multi"]]
     assert flags and all(not f["unknown_fault"] and f["p_none"] < 0.5 for f in flags)
+
+
+# ------------------------------------------------- commit 8: verifier
+VER_EP = "dev_A03_bfp_suction"     # verifier runs and ticks have several facts (mock)
+
+
+@pytest.fixture(scope="module")
+def ver_runs():
+    if not (DEV / VER_EP).exists():
+        pytest.skip("dev episodes not generated")
+    return {"off": run(cfg_with(), VER_EP),
+            "shadow": run(cfg_with(verifier="shadow"), VER_EP),
+            "nay": run(cfg_with(verifier="on", backend="mock_naybev"), VER_EP)}
+
+
+def test_bev_verifier_shadow_changes_nothing_and_logs_agreement(ver_runs):
+    sh, off = ver_runs["shadow"], ver_runs["off"]
+    assert published(sh) == published(off)
+    assert [a["unexplained"] for a in sh["assessments"]] == [a["unexplained"] for a in off["assessments"]]
+    recs = records(sh, "bev", "verifier")
+    claim_recs = [r for r in recs if any(k.startswith("claim") for k in (r.get("answers") or {}))]
+    assert claim_recs and all("agree" in r for r in claim_recs)
+
+
+def test_bev_verifier_on_replaces_gemma_and_its_fails_reach_the_claims(ver_runs):
+    nay = ver_runs["nay"]
+    gemma_calls = [e for a in nay["assessments"] for e in a["envelopes"]
+                   if e["agent"] == "verifier" and e["calls"]]
+    assert gemma_calls == []                                     # Gemma never called
+    n = nc = 0
+    for a in nay["assessments"]:
+        verdicts = [c for c in a["multi"]["compact"] if c.get("idea") == "verifier" and c.get("verdict")]
+        if not verdicts:
+            continue
+        n += 1
+        assert all(v == "f" for _, v in verdicts[0]["verdict"]["v"])   # bev said no to every claim
+        contra = [c for c in a["multi"]["compact"] if c.get("idea") == "verifier"
+                  and "contra" in (c.get("answers") or {})]
+        if contra:                                                    # the contradiction is bev's pick
+            nc += 1
+            assert verdicts[0]["verdict"]["c"] == int(contra[0]["answers"]["contra"]["ranking"][0])
+        else:
+            assert verdicts[0]["verdict"]["c"] is None
+        shown = a["hypotheses"][:3]
+        assert any(h.get("verifier") == "failed check" for h in shown)
+        if contra:
+            assert any(u.startswith("verifier contradiction") for u in a["unexplained"])
+    assert n > 0 and nc > 0
