@@ -110,6 +110,23 @@ class LiveTickWriter:
         self.f.close()
 
 
+def apply_bev(cfg: dict, spec: str | None) -> dict:
+    """--bev "explain=on,actions=shadow,first_threshold=0.6" -> multi.bev
+    (reports/bev_ideas.md). Switch names and modes are checked by
+    fieldmind.multi.agents.bev.switches when the agent is built."""
+    if not spec:
+        return cfg
+    b = cfg["multi"].setdefault("bev", {})
+    for part in filter(None, (x.strip() for x in spec.split(","))):
+        key, sep, val = part.partition("=")
+        if not sep:
+            raise SystemExit(f"--bev: expected name=value, got {part!r}")
+        b[key.strip()] = float(val) if key.strip().endswith("_threshold") else val.strip()
+    from fieldmind.multi.agents.bev import switches
+    switches(cfg["multi"])
+    return cfg
+
+
 def main():
     ap = argparse.ArgumentParser(description="FieldMind boiler agent")
     ap.add_argument("--config", default="configs/base.yaml")
@@ -173,6 +190,9 @@ def main():
     ap.add_argument("--live-print", action="store_true",
                     help="with --live-ticks: also print one line per tick, QUIET "
                          "ticks included (--verbose prints only the others)")
+    ap.add_argument("--bev", default=None,
+                    help='bev ideas switches, e.g. "explain=on,actions=shadow,first=on,'
+                         'first_threshold=0.6" (reports/bev_ideas.md)')
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--out", default="results")
     ap.add_argument("--episodes-dir", default=None,
@@ -210,6 +230,7 @@ def main():
         cfg["multi"]["split_on_change"] = True
     if args.case_order:
         cfg["multi"]["compact"]["case_order"] = args.case_order
+    apply_bev(cfg, args.bev)
     ep_dir = Path(args.episodes_dir or cfg["paths"]["episodes"])
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)

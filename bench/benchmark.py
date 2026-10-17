@@ -71,6 +71,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from bench import board                                            # noqa: E402
+from bench import board_sampler                                    # noqa: E402
 from bench.stage_monitor_multi import (Screen, SlotPoller, _c,     # noqa: E402
                                        episode_dir)
 
@@ -126,6 +127,8 @@ def settings(args) -> tuple[dict, dict]:
                       str(ROOT / overlay) if overlay else None)
     if args.merge_rule:
         cfg["multi"]["merge_rule"] = args.merge_rule
+    from run_demo import apply_bev
+    apply_bev(cfg, args.bev)
     if args.arch == "multi":
         models = {lane: cfg["multi"]["lanes"][lane].get("model_file") for lane in ("npu", "cpu")}
         if not all(models.values()):
@@ -147,6 +150,8 @@ def settings(args) -> tuple[dict, dict]:
               "merge_rule": cfg["multi"].get("merge_rule") if args.arch == "multi" else None,
               "backend": args.backend, "models": models,
               "prompts_saved": not args.no_prompts}
+    if args.bev:                       # bev ideas: part of the test's fixed settings
+        params["bev"] = args.bev
     return cfg, params
 
 
@@ -290,6 +295,12 @@ class Runner(threading.Thread):
                                f"every layer offloaded): see {stem}.lanes.txt")
         if "cpu" in logs and "HTP0 model buffer" in logs["cpu"]:
             raise RuntimeError(f"the CPU lane loaded onto the NPU: see {stem}.lanes.txt")
+        # bev-decide is started once by hand (HANDOFF), not per episode: refuse
+        # to run a config that needs it while it is down
+        for name, lc in (self.cfg.get("multi", {}).get("lanes") or {}).items():
+            if lc.get("kind") == "decider" and not board.lane_health(lc["url"]):
+                raise RuntimeError(f"bev-decide ({name} lane, {lc['url']}) is not up: "
+                                   f".venv/bin/python -m bench.board start bev <gguf>")
 
     # ---------------------------------------------------------------- run
     def command(self, ep: str, ticks: Path, out: Path) -> list[str]:
@@ -303,6 +314,8 @@ class Runner(threading.Thread):
             cmd += ["--tick-s", str(a.tick_s)]
         if a.merge_rule:
             cmd += ["--merge-rule", a.merge_rule]
+        if a.bev:
+            cmd += ["--bev", a.bev]
         if p["prompts_saved"]:
             cmd.append("--log-prompts")
         if self.board and shutil.which("systemd-inhibit"):
@@ -359,6 +372,12 @@ class Runner(threading.Thread):
         test.add_run(entry)
         with self.lock:
             self.current = {"ep": ep, "stem": stem, "ticks": ticks, "finished": False}
+        sampler = sampler_err = None
+        if self.board:
+            try:                                      # CPU / memory / clocks / temps / supply power
+                sampler = board_sampler.start(stem)
+            except Exception as e:                    # never stops the run; recorded
+                sampler_err = f"{type(e).__name__}: {e}"
         self.say(f"running {ep} (run {n})")
         t0 = time.time()
         with log.open("w") as f:
@@ -378,6 +397,14 @@ class Runner(threading.Thread):
         rc = self.child.wait()
         entry["wall_s"] = round(time.time() - t0, 1)
         c1 = None
+        resources = {"error": sampler_err} if sampler_err else None
+        if sampler is not None:
+            try:
+                resources = board_sampler.stop(sampler, d / f"{stem}.samples.txt")
+            except Exception as e:
+                resources = {"error": f"{type(e).__name__}: {e}"}
+        if resources is not None:
+            write_json(d / f"{stem}.resources.json", resources)
         if self.board:
             c1 = self.temp()
             self.note_temp(ep, "after", c1)
@@ -404,7 +431,8 @@ class Runner(threading.Thread):
                 "chip_c_before": c0, "chip_c_after": c1, "cool_wait_s": waited,
                 "where": ("agent code on the laptop, model calls on the board" if self.board
                           else "MOCK backend on the laptop: plumbing only, NOT an agent result"),
-                "energy_mwh": None}
+                "energy_mwh": None,              # chip energy: not measured (supply power is in resources)
+                "resources": resources}
         write_json(d / f"{stem}.summary.json", {"meta": meta, "evaluation": ev, "calls": stats})
         with gzip.open(d / f"{stem}.run.json.gz", "wt") as f:
             json.dump(run, f)
@@ -545,6 +573,8 @@ def main() -> int:
     ap.add_argument("--tick-s", type=float, default=30.0, help="realtime: seconds per tick")
     ap.add_argument("--merge-rule", choices=["model", "belief_only", "tiebreak", "nudge", "hybrid"],
                     default=None, help="multi: overrides multi.merge_rule")
+    ap.add_argument("--bev", default=None,
+                    help='bev ideas switches, e.g. "explain=on,actions=shadow" (reports/bev_ideas.md)')
     ap.add_argument("--again", action="store_true",
                     help="run episodes this test already has once more (saved as _r2, _r3, ...)")
     ap.add_argument("--backend", choices=["llamaserver", "mock"], default="llamaserver",

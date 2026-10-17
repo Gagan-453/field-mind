@@ -810,3 +810,28 @@ def test_rt_fallback_never_stands_in_once_llamas_answer_is_in():
     recs = [x for x in records(r, "bev", "rt_fallback") if "llama_pending" in x]
     assert recs and any(not x["llama_pending"] for x in recs)
     assert not any(x["used"] for x in recs if not x["llama_pending"])
+
+
+# ------------------------------------------- commit 11: CLI and overlay
+def test_bev_flag_sets_switches_and_thresholds_and_refuses_typos():
+    from run_demo import apply_bev
+    cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    apply_bev(cfg, "explain=on, actions=shadow,first_threshold=0.6")
+    b = cfg["multi"]["bev"]
+    assert b["explain"] == "on" and b["actions"] == "shadow" and b["first_threshold"] == 0.6
+    with pytest.raises(ValueError):
+        apply_bev(cfg, "explian=on")
+    with pytest.raises(SystemExit):
+        apply_bev(cfg, "explain")
+
+
+def test_bev_ideas_yaml_is_v3_plus_the_bev_lane_and_placement_only():
+    v3 = yaml.safe_load((ROOT / "configs/v3.yaml").read_text())
+    bi = yaml.safe_load((ROOT / "configs/bev_ideas.yaml").read_text())
+    assert bi["multi"]["lanes"]["bev"]["kind"] == "decider"
+    assert {k: v for k, v in bi["multi"]["fixed_placement"].items() if k not in ("bev", "decider")} \
+        == v3["multi"]["fixed_placement"]
+    strip = lambda c: {**c, "multi": {k: v for k, v in c["multi"].items()                 # noqa: E731
+                                      if k not in ("lanes", "fixed_placement")}}
+    assert strip(bi) == strip(v3)
+    assert {k: v for k, v in bi["multi"]["lanes"].items() if k != "bev"} == v3["multi"]["lanes"]
