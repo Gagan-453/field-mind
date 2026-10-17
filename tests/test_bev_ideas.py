@@ -723,3 +723,90 @@ def test_bev_text_reader_down_rejects_once_per_note(tr_runs):
     assert nfs and all(nf["status"] == "rejected" for nf in nfs)
     ids = [nf["note_id"] for nf in nfs]
     assert len(ids) == len(set(ids))                          # never read again
+
+
+# ------------------------------------------------ commit 10: rt_fallback
+class SlowLlama:
+    """Wraps the lane facade: Llama (diagnostician) slower than a tick, bev
+    and everything else as fast as the mock."""
+
+    def __init__(self, inner, delay=0.5):
+        self.inner, self.delay = inner, delay
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        import time
+        if role == "diagnostician":
+            time.sleep(self.delay)
+        return self.inner.generate(prompt, role=role, max_tokens=max_tokens, mock_hint=mock_hint)
+
+    def close(self):
+        self.inner.close()
+
+
+def rt_cfg(mode, threshold=0.4):
+    from run_demo import _deep_merge
+    cfg = yaml.safe_load((ROOT / "configs/base.yaml").read_text())
+    _deep_merge(cfg, yaml.safe_load((ROOT / "configs/fast.yaml").read_text()))
+    cfg["llm"]["backend"] = "mock"
+    cfg["multi"]["lanes"]["bev"] = {"kind": "decider", "url": "http://localhost:8082",
+                                    "prefill_tok_s": 909, "decode_tok_s": 13.9}
+    cfg["multi"]["fixed_placement"]["bev"] = "bev"
+    cfg["multi"]["bev"].update(rt_fallback=mode, first_threshold=threshold)
+    return cfg
+
+
+@pytest.fixture(scope="module")
+def rt_runs():
+    from bench.harness import Episode, run_episode
+    ep = "dev_B01_tube_leak"
+    if not (DEV / ep).exists():
+        pytest.skip("dev episodes not generated")
+    go = lambda mode: run_episode(Episode(DEV / ep), rt_cfg(mode), arch="multi",   # noqa: E731
+                                  wrap_backend=lambda b: SlowLlama(b), mode="realtime", tick_s=0.2)
+    return {"on": go("on"), "shadow": go("shadow")}
+
+
+def test_rt_fallback_answers_a_side_before_llama_and_llama_still_arrives(rt_runs):
+    on = rt_runs["on"]
+    used = [r for r in records(on, "bev", "rt_fallback") if r.get("used")]
+    assert used
+    for a in on["assessments"]:
+        comp = a["multi"]["compact"]
+        for rec in [c for c in comp if c.get("idea") == "rt_fallback" and c.get("used")]:
+            assert rec["llama_pending"]
+            stand = [c for c in comp if c.get("agent") == "diagnostician" and c.get("side") == rec["side"]]
+            assert stand and all(cites == [] for _, cites in stand[0]["answer"]["r"])   # bev's: no citations
+            merge = [c for c in comp if c.get("agent") == "merge"]
+            assert merge and rec["side"] in merge[0]["order"]
+    llama = [e for a in on["assessments"] for e in a["envelopes"]
+             if e["agent"] == "diagnostician" and e["calls"]]
+    assert llama                                                  # Llama's answers still come in
+
+
+def test_rt_fallback_shadow_never_stands_in(rt_runs):
+    recs = records(rt_runs["shadow"], "bev", "rt_fallback")
+    assert recs and not any(r.get("used") for r in recs)
+    assert not any(e["agent"] == "diagnostician" and e["backend"] == "bev"
+                   for a in rt_runs["shadow"]["assessments"] for e in a["envelopes"])
+
+
+class SlowBev(SlowLlama):
+    """bev slower than Llama: its ranking always comes after Llama's answer."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        import time
+        if role == "decider":
+            time.sleep(self.delay)
+        return self.inner.generate(prompt, role=role, max_tokens=max_tokens, mock_hint=mock_hint)
+
+
+def test_rt_fallback_never_stands_in_once_llamas_answer_is_in():
+    from bench.harness import Episode, run_episode
+    ep = "dev_B01_tube_leak"
+    if not (DEV / ep).exists():
+        pytest.skip("dev episodes not generated")
+    r = run_episode(Episode(DEV / ep), rt_cfg("on"), arch="multi",
+                    wrap_backend=lambda b: SlowBev(b, delay=0.1), mode="realtime", tick_s=0.2)
+    recs = [x for x in records(r, "bev", "rt_fallback") if "llama_pending" in x]
+    assert recs and any(not x["llama_pending"] for x in recs)
+    assert not any(x["used"] for x in recs if not x["llama_pending"])

@@ -60,6 +60,8 @@ class RealtimeRunner:
     # ------------------------------------------------------------------
     def submit(self, job, tick_wall_s: float | None = None) -> None:
         lane = self.s.fixed_placement.get(job.agent)
+        if lane is None and job.agent.startswith("bev_"):
+            lane = self.s.fixed_placement.get("bev")     # bev ideas: explicit table entry
         if lane is None:
             raise KeyError(f"agent {job.agent!r} has no lane in multi.fixed_placement")
         job.lane = lane

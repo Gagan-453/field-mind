@@ -299,6 +299,7 @@ class MultiOrchestrator:
         self._held: list = []           # side answers / verdicts that arrived on a QUIET tick
         self._inflight: dict = {}       # side -> fingerprint of its queued or running job
         self._text_inflight: set = set()
+        self._rt_bev: dict = {}         # rt_fallback: bev job id -> the side's Llama job
 
     def tick_realtime(self, wm, window, tick_no: int, timestamp: str,
                       now_s: float, tick_wall_s: float | None = None):
@@ -351,6 +352,8 @@ class MultiOrchestrator:
 
         # ---- fold: side answers (cache, stale rule), then verdicts
         sides_in = [r for r in model if r.job.agent.startswith("diag_")]
+        if self.bev.active("rt_fallback"):
+            sides_in = self._rt_fallback_in(bb, asmt, model, arrived, tick_no) + sides_in
         verdicts = [r for r in model if r.job.agent == "verifier"]
         with bb.step("gate"):
             claims = self.gate.fold_sides(bb, asmt, claims, sides_in, tick_no, reuse=True)
@@ -368,6 +371,14 @@ class MultiOrchestrator:
                 for j in jobs:
                     rt.submit(j, tick_wall_s)
                     self._inflight[j.side] = j.line_map["fingerprint"]
+                    if self.bev.active("rt_fallback"):
+                        qs = bevmod.first_questions(self.bev, j.line_map)
+                        if qs:
+                            bj = self.bev.make_job(bb, self.scheduler, "rt_fallback", tick_no,
+                                                   bevmod.lines_state(j.line_map), qs, now_s,
+                                                   meta={"side": j.line_map["side"]}, side=j.side)
+                            rt.submit(bj, tick_wall_s)
+                            self._rt_bev[bj.job_id] = j
                 if jobs:
                     bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
             self._take_skips()
@@ -392,6 +403,40 @@ class MultiOrchestrator:
         self._record(tick_no, p0, arrived, p0_asmt, hard_ms, text=text)
         self.last_telemetry["submitted"] = submitted
         return asmt
+
+    def _rt_fallback_in(self, bb, asmt, model, arrived, tick_no: int) -> list:
+        """Idea 7 (reports/bev_ideas.md), real time: bev's ranking for a side
+        whose Llama answer (same job, same evidence) has not arrived yet. on and
+        top probability >= first_threshold: a stand-in answer for that side,
+        folded like Llama's (stale rule, cache); Llama's answer replaces it in
+        the side cache when it arrives. shadow: logged only."""
+        from .jobs import Result
+        arrived_ids = {r.job.job_id for r in arrived}
+        out = []
+        for r in [x for x in model if x.job.agent == "bev_rt_fallback"]:
+            j = self._rt_bev.pop(r.job.job_id, None)
+            with bb.step("gate"):
+                answers = self.gate.fold_bev(bb, asmt, r, tick_no, self.bev)
+            rec = self.gate.compact_log[-1]
+            if not answers or j is None:
+                continue
+            ranking, p = answers["root"]["ranking"], answers["root"]["p"]
+            pending = j.job_id not in arrived_ids and any(
+                x is j for x in self.rt.in_flight(j.agent, j.side))
+            ok = pending and p[ranking[0]] >= (self.bev.first_threshold or 0.0)
+            rec.update(p_top=p[ranking[0]], llama_pending=pending, used=False)
+            if self.bev.used("rt_fallback") and ok:
+                env = bevmod.first_envelope(j.evidence_tick, bevmod.compose_first(j.line_map, ranking),
+                                            r.envelope)
+                out.append(Result(job=j, envelope=env, evidence_tick=j.evidence_tick, lane=None,
+                                  queue_wait_ms=0.0, start_s=None, finish_s=None,
+                                  tick_epoch_s=r.tick_epoch_s))
+                rec["used"] = True
+                self.bev.stats["rt_fallback"]["used"] += 1
+            else:
+                self.bev.stats["rt_fallback"]["shadow" if not self.bev.used("rt_fallback")
+                                              else "not_used"] += 1
+        return out
 
     def _explain(self, bb, asmt, got, tick_no: int, now_s: float) -> list:
         """Idea 1 (reports/bev_ideas.md): for every successful side answer, ask
