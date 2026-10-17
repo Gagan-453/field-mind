@@ -669,3 +669,57 @@ def test_notes_that_instruct_reach_no_prompt(note_runs):
     pr = _prompts_by_side(note_runs["instr"])
     assert pr["water"] or pr["heat"]
     assert not any("[note," in p for p in pr["water"] + pr["heat"])
+
+
+# ------------------------------------------- commit 9b: bev text reader
+TR_EP = "dev_A01_fcv_seize"
+
+
+@pytest.fixture(scope="module")
+def tr_runs():
+    if not (DEV / TR_EP).exists():
+        pytest.skip("dev episodes not generated")
+    c = lambda mode, b="mock": cfg_with(overlay="bev.yaml", text_reader=mode, backend=b)   # noqa: E731
+    return {"off": run(c("off"), TR_EP), "shadow": run(c("shadow"), TR_EP),
+            "on": run(c("on"), TR_EP), "down": run(c("on", "mock_downbev"), TR_EP)}
+
+
+def _notefacts(run_):
+    return [t["notefact"] for a in run_["assessments"] for t in a["multi"]["text"]]
+
+
+def test_bev_text_reader_shadow_changes_nothing(tr_runs):
+    off, sh = tr_runs["off"], tr_runs["shadow"]
+    assert published(sh) == published(off) and _notefacts(sh) == _notefacts(off)
+    recs = [r for r in records(sh, "bev", "text_reader") if "reading" in r]
+    assert recs and all("agree_kind" in r for r in recs)
+
+
+def test_bev_text_reader_on_writes_bevs_reading_and_calls_no_gemma(tr_runs):
+    on = tr_runs["on"]
+    assert on["multi"]["text_calls"] == 0
+    readings = {r["about"]: r["reading"] for r in records(on, "bev", "text_reader") if "reading" in r}
+    nfs = _notefacts(on)
+    assert nfs and len(nfs) == len(_notefacts(tr_runs["off"]))
+    for nf in nfs:
+        assert nf["status"] == "ok"
+        got = readings[str(nf["note_id"])]
+        assert nf["kind"] == got["k"] and [list(p) for p in nf["pairs"]] == got["s"]
+        assert len(nf["pairs"]) <= 1
+    # against bev's own answers in the gate's log, not our composed reading:
+    kinds = {r["about"]: r["answers"]["kind"]["ranking"][0]
+             for r in records(on, "bev", "text_reader") if "kind" in (r.get("answers") or {})}
+    states = {r["about"]: r["answers"]["state"]["ranking"][0]
+              for r in records(on, "bev", "text_reader") if "state" in (r.get("answers") or {})}
+    assert states
+    for nf in nfs:
+        assert nf["kind"] == kinds[str(nf["note_id"])]
+        if nf["pairs"]:
+            assert nf["pairs"][0][1] == states[str(nf["note_id"])]
+
+
+def test_bev_text_reader_down_rejects_once_per_note(tr_runs):
+    nfs = _notefacts(tr_runs["down"])
+    assert nfs and all(nf["status"] == "rejected" for nf in nfs)
+    ids = [nf["note_id"] for nf in nfs]
+    assert len(ids) == len(set(ids))                          # never read again

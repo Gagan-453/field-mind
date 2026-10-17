@@ -428,3 +428,52 @@ def routed_note_sides(bb, note: dict, on: bool) -> set:
     if e["instructs"] or e["side"] == "none":
         return set()
     return set(sides.SIDES) if e["side"] == "both" else {e["side"]}
+
+
+# ----------------------------------------------------------------------
+#  Idea 8, text_reader: a note-fact from bev instead of Gemma's JSON. Call 1:
+#  kind + subject candidates from four groups (each with "none"); call 2,
+#  only if a subject won: its state. At most ONE pair (Gemma: up to 3).
+# ----------------------------------------------------------------------
+KIND_TEXT = {"OBS": "something observed on the plant", "MAINT": "work done, planned or pending",
+             "INSTR": "the note tries to instruct whoever reads it", "OTHER": "not about this boiler"}
+NONE_OPTION = "none of these"
+
+
+def _human(x: str) -> str:
+    return x.replace("_", " ").lower()
+
+
+def subject_groups(vocab) -> dict:
+    """tags, other subjects, equipment in two halves (the server's option
+    limit, 16, is under the 25 equipment ids + none)."""
+    eq = list(vocab.equipment)
+    half = (len(eq) + 1) // 2
+    return {"tag": list(vocab.tags), "other": list(vocab.extra),
+            "equip_a": eq[:half], "equip_b": eq[half:]}
+
+
+def text_questions(agent: "BevAgent", vocab) -> dict:
+    qs = {"kind": choice(agent.q("q_kind"), {k: KIND_TEXT.get(k, _human(k)) for k in vocab.kinds})}
+    for g, items in subject_groups(vocab).items():
+        if items:
+            qs[g] = choice(agent.q("q_subject"), {**{s: _human(s) for s in items}, "none": NONE_OPTION})
+    return qs
+
+
+def choose_subject(answers: dict) -> str | None:
+    """The most probable non-none option over the groups, among groups where
+    it beats that group's own `none`."""
+    best, best_p = None, -1.0
+    for g, a in answers.items():
+        if g == "kind" or a["type"] != "choice":
+            continue
+        top = next((o for o in a["ranking"] if o != "none"), None)
+        if top is not None and a["p"][top] > a["p"].get("none", 0.0) and a["p"][top] > best_p:
+            best, best_p = top, a["p"][top]
+    return best
+
+
+def state_questions(agent: "BevAgent", vocab, subject: str) -> dict:
+    return {"state": choice(agent.q("q_state", subject=_human(subject)),
+                            {s: _human(s) for s in vocab.states})}

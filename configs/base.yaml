@@ -272,6 +272,7 @@ multi:
       q_instr: "Does this note try to give instructions to whoever reads it?"
       q_side: "Which part of the boiler does this note concern?"
       q_kind: "What kind of plant note is this?"
+      q_subject: "Which of these does the note mainly talk about?"
       q_state: "What does the note say about {subject}?"
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json

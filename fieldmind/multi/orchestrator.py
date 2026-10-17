@@ -158,7 +158,7 @@ class MultiOrchestrator:
             p0 = (time.perf_counter() - t_tick) * 1000
             # A note can arrive on a quiet tick. It is read then, AFTER the
             # assessment is out: the tick never waits for a model.
-            text = self._read_notes(bb, tick_no, now_s, facts)
+            text = self._read_notes(bb, tick_no, now_s, facts, asmt)
             self._record(tick_no, p0, [], None, text=text)
             return asmt
 
@@ -175,7 +175,7 @@ class MultiOrchestrator:
         # ---------------- model jobs (lockstep) ---------------------------
         # Notes first: in lockstep every note that has arrived is read before
         # the diagnosis prompt is built (this does NOT hold in real time).
-        text = self._read_notes(bb, tick_no, now_s, facts)
+        text = self._read_notes(bb, tick_no, now_s, facts, asmt)
         results = []
         if self.bev.active("notes"):
             results += self._screen_notes(bb, asmt, tick_no, now_s)
@@ -672,14 +672,18 @@ class MultiOrchestrator:
         return out
 
     # ===================================================================
-    def _read_notes(self, bb, tick: int, now_s: float, facts) -> list[dict]:
+    def _read_notes(self, bb, tick: int, now_s: float, facts, asmt=None) -> list[dict]:
         """One text-reader job per note that has arrived and is unread. The
-        gate checks each answer; the text reader writes the checked note-fact."""
+        gate checks each answer; the text reader writes the checked note-fact.
+        bev ideas, text_reader on: bev reads them instead (_bev_read_notes);
+        shadow: Gemma reads them and bev's reading is logged beside."""
         if self.text is None:
             return []
         notes = self.text.arrivals(bb, now_s)
         if not notes:
             return []
+        if self.bev.used("text_reader"):
+            return self._bev_read_notes(bb, asmt, notes, tick, now_s)
         active = {t for f in facts for t in f.tags if f.severity != "INFO"}
         with bb.step("scheduler"):
             jobs = [self.text.make_job(bb, self.scheduler, tick, n, active, now_s)
@@ -695,6 +699,71 @@ class MultiOrchestrator:
                 entry = self.text.accept(bb, r, checked)
             out.append({"notefact": entry, "envelope": r.envelope.to_dict(),
                         "result": r.telemetry()})
+        if self.bev.mode("text_reader") == "shadow":
+            gemma = {r.job.line_map["note"].get("id"): r.envelope.payload for r in got
+                     if r.envelope.status == "ok"}
+            self._bev_read_notes(bb, asmt, notes, tick, now_s, shadow_of=gemma)
+        return out
+
+    def _bev_read_notes(self, bb, asmt, notes, tick: int, now_s: float, shadow_of=None):
+        """Idea 8 (reports/bev_ideas.md): per note, call 1 = kind + subject
+        groups, call 2 (if a subject won) = its state. on: the reading stands
+        in for Gemma's and goes through the gate's vocabulary check and the
+        text reader's own accept (one pair at most). shadow (`shadow_of` =
+        Gemma's payload per note id): logged with kind / subject agreement."""
+        from .jobs import Result
+        from ..schemas import AgentEnvelope
+        vocab, out = self.text.vocab, []
+        for n in notes:
+            nid = str(n.get("id"))
+            j1 = self.bev.make_job(bb, self.scheduler, "text_reader", tick, n.get("text", ""),
+                                   bevmod.text_questions(self.bev, vocab), now_s,
+                                   meta={"about": nid}, side=nid)
+            res = self.bev.run_lockstep(bb, self.scheduler, [j1], now_s)
+            with bb.step("gate"):
+                a1 = self.gate.fold_bev(bb, asmt, res[0], tick, self.bev)
+            rec = self.gate.compact_log[-1]
+            payload = None
+            if a1:
+                subject = bevmod.choose_subject(a1)
+                pairs = []
+                if subject is not None:
+                    j2 = self.bev.make_job(bb, self.scheduler, "text_reader", tick, n.get("text", ""),
+                                           bevmod.state_questions(self.bev, vocab, subject), now_s,
+                                           meta={"about": nid}, side=nid)
+                    more = self.bev.run_lockstep(bb, self.scheduler, [j2], now_s)
+                    res += more
+                    with bb.step("gate"):
+                        a2 = self.gate.fold_bev(bb, asmt, more[0], tick, self.bev)
+                    if a2:
+                        pairs = [[subject, a2["state"]["ranking"][0]]]
+                payload = {"k": a1["kind"]["ranking"][0], "s": pairs}
+                rec["reading"] = payload
+            if shadow_of is not None:
+                g = shadow_of.get(n.get("id"))
+                if g and payload:
+                    rec["agree_kind"] = g.get("k") == payload["k"]
+                    gem_subjects = {p[0] for p in g.get("s") or []}
+                    rec["agree_subject"] = (payload["s"][0][0] in gem_subjects if payload["s"]
+                                            else not gem_subjects)
+                self.bev.stats["text_reader"]["shadow"] += 1
+                continue
+            self.bev.stats["text_reader"]["used"] += 1
+            stand = self.scheduler.new_job("text_reader", evidence_tick=tick, priority=3,
+                                           max_answer_tokens=0, submit_s=now_s, side=nid)
+            stand.line_map = {"note": n}
+            env = AgentEnvelope(agent="text_reader", tick=tick,
+                                status="ok" if payload else "error",
+                                payload=payload or {"error": "bev reading failed"},
+                                backend="bev", model=res[0].envelope.model,
+                                tokens={"prefill": 0, "decode": 0})
+            r = Result(job=stand, envelope=env, evidence_tick=tick, lane=None, queue_wait_ms=0.0,
+                       start_s=None, finish_s=None, tick_epoch_s=now_s)
+            checked = self.gate.check_notefact(r, vocab)
+            with bb.step("text_reader"):
+                entry = self.text.accept(bb, r, checked)
+            out.append({"notefact": entry, "envelope": env.to_dict(), "result": r.telemetry(),
+                        "bev": [x.telemetry() for x in res]})
         return out
 
     def _record(self, tick, p0_ms, results, p0_asmt, hard_ms=None,
