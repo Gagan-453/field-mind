@@ -249,11 +249,18 @@ class MultiOrchestrator:
                 with bb.step("gate"):
                     claims = self.gate.apply_verdict(bb, asmt, claims, r, tick_no)
 
+        drop = frozenset()
+        if self.bev.active("actions") or self.bev.active("unknown"):
+            drop, bev_res = self._actions_unknown(bb, asmt, claims, facts, retrieved,
+                                                  state, tick_no, now_s)
+            results += bev_res
+            llm_used = llm_used or bool(bev_res)
+
         # ---------------- gate + memory -----------------------------------
         with bb.step("gate"):
             hard_ms = self.gate.finalize(bb, asmt, claims, facts, retrieved,
                                          state, tick_no, check_ms, llm_used,
-                                         t_tick)
+                                         t_tick, drop_actions=drop)
         self._record(tick_no, p0, results, p0_asmt, hard_ms, text=text)
         return asmt
 
@@ -472,6 +479,60 @@ class MultiOrchestrator:
                 rec["llama_top"], rec["agree_top"] = llama_top, llama_top == bev_top
         self._first_pending = {}
 
+    def _actions_unknown(self, bb, asmt, claims, facts, retrieved, state,
+                         tick_no: int, now_s: float):
+        """Ideas 3 and 4 (reports/bev_ideas.md), on the claims about to be
+        published. actions: yes/no per approved, unprotected action (L6's own
+        approve, previewed; it is pure); on: those under noul_threshold are
+        dropped in finalize. unknown: Q_ROOT over the top 3 causes + NONE; on:
+        the display flag `unknown_fault` (P(NONE) >= noul_threshold) in
+        `bev_flags`. Neither touches belief, the ranking or plant state.
+        Returns (action ids to drop, bev results)."""
+        from .compact import first_sentence
+        hyps = claims["hypotheses"]
+        state_txt = bevmod.state_text(facts)
+        jobs = []
+        if self.bev.active("actions"):
+            acts, _, _ = self.gate.gate.approve(hyps, facts, retrieved, state)
+            top = first_sentence(hyps[0].get("cause") or "") if hyps else "unknown"
+            qs = bevmod.action_questions(self.bev, acts, self.gate.gate.cat, top)
+            if qs:
+                jobs.append(self.bev.make_job(bb, self.scheduler, "actions", tick_no, state_txt,
+                                              qs, now_s, meta={"about": sorted(qs)}))
+        if self.bev.active("unknown"):
+            qs = bevmod.unknown_questions(self.bev, hyps)
+            if qs:
+                jobs.append(self.bev.make_job(bb, self.scheduler, "unknown", tick_no, state_txt,
+                                              qs, now_s))
+        done = self.bev.run_lockstep(bb, self.scheduler, jobs, now_s)
+        drop, flags = set(), {}
+        for res in done:
+            idea = res.job.line_map["idea"]
+            with bb.step("gate"):
+                answers = self.gate.fold_bev(bb, asmt, res, tick_no, self.bev)
+            rec = self.gate.compact_log[-1]
+            if not answers:
+                continue
+            if idea == "actions":
+                say_no = sorted(q[4:] for q, v in answers.items()
+                                if v["p"] < self.bev.noul_threshold)
+                rec["would_drop"] = say_no
+                if self.bev.used("actions"):
+                    drop |= set(say_no)
+            else:
+                p_none = answers["root"]["p"][bevmod.NONE_KEY]
+                rec["p_none"] = p_none
+                rec["unknown_fault"] = p_none >= self.bev.noul_threshold
+                if self.bev.used("unknown"):
+                    flags = {"tick": tick_no, "unknown_fault": rec["unknown_fault"],
+                             "p_none": p_none}
+            self.bev.stats[idea]["used" if self.bev.used(idea) else "shadow"] += 1
+        if flags:
+            with bb.step("gate"):
+                bb.write("bev_flags", flags, "gate")
+            self._bev_flags = flags
+        return frozenset(drop), done
+
     def _take_skips(self) -> None:
         """clear_skip records of this tick into the gate's log and the bev stats."""
         for rec in self.diag.skip_log:
@@ -559,6 +620,7 @@ class MultiOrchestrator:
             # thread, nested steps subtracted; audit snapshots apart; the whole
             # tick. Laptop times until the agent code runs on the board.
             "stage_ms": stage, "audit_ms": audit,
+            **({"bev_flags": self.__dict__.pop("_bev_flags")} if "_bev_flags" in self.__dict__ else {}),
             "tick_ms": None if tick_ms is None else round(tick_ms, 4),
         }
         self.gate.compact_log.clear()

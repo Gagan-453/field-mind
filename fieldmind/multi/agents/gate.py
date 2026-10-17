@@ -484,11 +484,18 @@ class GateMemoryAgent:
     # ------------------------------------------------------------------
     def finalize(self, bb, asmt: Assessment, claims: dict, facts, retrieved,
                  state: str, tick: int, check_ms: float, llm_used: bool,
-                 t_tick: float) -> float:
-        """L6 approve, shown confidence, assemble, L7 write. Returns hard_ms."""
+                 t_tick: float, drop_actions=frozenset()) -> float:
+        """L6 approve, shown confidence, assemble, L7 write. Returns hard_ms.
+        `drop_actions` (bev ideas, actions on): approved actions bev said are
+        not needed; a protected one (agents.bev.protected) is never dropped,
+        checked again here."""
         t0 = time.perf_counter()
         actions, escalate, unexplained = self.gate.approve(
             claims["hypotheses"], facts, retrieved, state)
+        if drop_actions:
+            from .bev import protected
+            actions = [a for a in actions if a.id not in drop_actions
+                       or protected(a, self.gate.cat.lookup(a.id))]
         hard_ms = check_ms + (time.perf_counter() - t0) * 1000
 
         shown = stamp_shown_confidence(

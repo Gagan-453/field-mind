@@ -324,3 +324,36 @@ def first_envelope(tick: int, payload: dict, bev_env) -> AgentEnvelope:
     return AgentEnvelope(agent="diagnostician", tick=tick, status="ok", payload=payload,
                          backend="bev", model=bev_env.model,
                          tokens={"prefill": 0, "decode": 0})
+
+
+# ----------------------------------------------------------------------
+#  Ideas 3 and 4: the action check and the unknown-fault flag.
+# ----------------------------------------------------------------------
+# Never dropped, whatever bev says (code rule, reports/bev_ideas.md):
+PROTECTED_CATEGORIES = ("ESCALATION", "MITIGATION")
+NONE_KEY = "NONE"
+NONE_TEXT = "None of these causes explains the plant facts"
+
+
+def protected(action, entry: dict | None) -> bool:
+    """urgency NOW, or category ESCALATION / MITIGATION (entry = the
+    catalogue's record; an action missing from it is protected)."""
+    if entry is None or getattr(action, "urgency", None) == "NOW":
+        return True
+    return entry.get("category") in PROTECTED_CATEGORIES
+
+
+def action_questions(agent: "BevAgent", actions, catalogue, top_cause: str) -> dict:
+    """Q_ACTION (yes/no) for every approved action that is not protected."""
+    return {f"act_{a.id}": noul(agent.q("q_action", cause=top_cause, action=a.text))
+            for a in actions if not protected(a, catalogue.lookup(a.id))}
+
+
+def unknown_questions(agent: "BevAgent", hypotheses: list) -> dict:
+    """Q_ROOT over the published top 3 causes plus NONE."""
+    from ..compact import first_sentence
+    opts = {h["case_ref"]: first_sentence(h.get("cause") or "")
+            for h in hypotheses[:3] if h.get("case_ref")}
+    if not opts:
+        return {}
+    return {"root": choice(agent.q("q_root"), {**opts, NONE_KEY: NONE_TEXT})}

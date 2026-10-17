@@ -449,3 +449,100 @@ def test_first_on_replaces_the_call_and_leads_with_bevs_pick(first_runs):
                 led += 1
                 assert a["hypotheses"][0]["case_ref"] == bev_top
     assert led > 0
+
+
+# ------------------------------------------- commit 7: actions, unknown
+class NayBev(MockBackend):
+    """bev says no to every yes/no (0.1) and puts NONE first in every choice
+    that offers it: the harshest case for the action and unknown rules."""
+
+    def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+        if role != "decider" or "bev" not in (mock_hint or {}):
+            return super().generate(prompt, role, max_tokens, mock_hint)
+        ans = {}
+        for qid, q in mock_hint["bev"].items():
+            if q["type"] == "noul":
+                ans[qid] = {"type": "noul", "noul": 0.1}
+            else:
+                k = q["options"]
+                top = "NONE" if "NONE" in k else k[0]
+                ans[qid] = {"type": "choice", "choice": top,
+                            "probabilities": {o: (0.7 if o == top else 0.3 / max(1, len(k) - 1)) for o in k}}
+        return LLMReply(text=json.dumps({"answers": ans}), backend="mock", model="mock-0",
+                        prefill_tokens=None, decode_tokens=0)
+
+
+register_backend("mock_naybev", NayBev)
+ACT_EP = "dev_A01_fcv_seize"
+
+
+def _catalogue():
+    from fieldmind.agent.l6_gate import ActionCatalogue
+    return ActionCatalogue(ROOT / "data/kb/action_catalogue.json")
+
+
+@pytest.fixture(scope="module")
+def act_runs():
+    if not (DEV / ACT_EP).exists():
+        pytest.skip("dev episodes not generated")
+    return {"off": run(cfg_with(), ACT_EP),
+            "shadow": run(cfg_with(actions="shadow", unknown="shadow", backend="mock_naybev"), ACT_EP),
+            "on": run(cfg_with(actions="on", unknown="on", backend="mock_naybev"), ACT_EP)}
+
+
+def test_actions_and_unknown_shadow_change_nothing_published(act_runs):
+    sh = act_runs["shadow"]
+    assert published(sh) == published(act_runs["off"])
+    assert records(sh, "bev", "actions") and records(sh, "bev", "unknown")
+    assert not any("bev_flags" in a["multi"] for a in sh["assessments"])
+
+
+def test_protected_actions_are_never_asked_about_nor_dropped(act_runs):
+    from fieldmind.multi.agents.bev import protected
+    from fieldmind.agent.l6_gate import Action
+    cat = _catalogue()
+    for rec in records(act_runs["on"], "bev", "actions"):
+        for q in rec["about"]:
+            e = cat.lookup(q[4:])
+            assert e and not protected(Action(id=e["id"], text=e["text"], urgency=e["urgency"],
+                                              source="catalogue"), e), q
+    dropped_any = False
+    for a_off, a_on in zip(act_runs["off"]["assessments"], act_runs["on"]["assessments"]):
+        off_ids = [x["id"] for x in a_off["actions"]]
+        on_ids = [x["id"] for x in a_on["actions"]]
+        assert set(on_ids) <= set(off_ids) and a_on["escalate"] == a_off["escalate"]
+        for gone in set(off_ids) - set(on_ids):
+            dropped_any = True
+            e = cat.lookup(gone)
+            assert e["urgency"] != "NOW" and e["category"] not in ("ESCALATION", "MITIGATION")
+        for x in a_off["actions"]:
+            if x["urgency"] == "NOW":
+                assert x["id"] in on_ids
+    assert dropped_any
+
+
+def test_finalize_keeps_a_protected_action_even_when_told_to_drop_it():
+    from fieldmind.multi.agents.bev import protected
+    cat = _catalogue()
+    now = [a for a in cat.all if a["urgency"] == "NOW"][0]
+    soon = [a for a in cat.all if a["urgency"] != "NOW"
+            and a["category"] not in ("ESCALATION", "MITIGATION")][0]
+    from fieldmind.agent.l6_gate import Action
+    mk = lambda e: Action(id=e["id"], text=e["text"], urgency=e["urgency"], source="catalogue")  # noqa: E731
+    assert protected(mk(now), now) and not protected(mk(soon), soon)
+    assert protected(mk(soon), None)                      # unknown to the catalogue: kept
+
+
+def test_unknown_flags_without_touching_the_ranking(act_runs):
+    on, off = act_runs["on"], act_runs["off"]
+    assert [p[0] for p in published(on)] == [p[0] for p in published(off)]
+    flags = [a["multi"]["bev_flags"] for a in on["assessments"] if "bev_flags" in a["multi"]]
+    assert flags and all(f["unknown_fault"] and f["p_none"] >= 0.5 for f in flags)
+
+
+def test_unknown_flag_stays_down_when_none_is_unlikely():
+    if not (DEV / ACT_EP).exists():
+        pytest.skip("dev episodes not generated")
+    r = run(cfg_with(unknown="on"), ACT_EP)       # plain mock: NONE is the last option, lowest
+    flags = [a["multi"]["bev_flags"] for a in r["assessments"] if "bev_flags" in a["multi"]]
+    assert flags and all(not f["unknown_fault"] and f["p_none"] < 0.5 for f in flags)
