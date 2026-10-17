@@ -27,7 +27,7 @@ from ...agent.orchestrator import evidence_max_facts, wm_summary
 from ...schemas import TAGS
 from .. import compact, grammar, merge_rules, sides
 from ._call import call_model
-from .bev import switches as bev_switches
+from .bev import routed_note_sides, switches as bev_switches
 
 NAME = "diagnostician"
 # Phase 3: a side's job is placed by `diag_<side>` (multi.fixed_placement);
@@ -75,6 +75,10 @@ class DiagnosticianAgent:
             raise ValueError("multi.bev.clear_skip needs multi.split and multi.split_on_change "
                              "(it skips a side whose evidence changed)")
         self.skip_log: list[dict] = []
+        self.bev_notes = self.bev_sw["notes"] == "on"
+        if self.bev_sw["notes"] != "off" and not (self.raw_notes and self.split):
+            raise ValueError("multi.bev.notes needs raw notes (compact.note_source: raw) and "
+                             "multi.split (it routes each note to a side)")
         if self.sw["schema"]:
             # group_letters off: the same body without the leading "g" in the
             # answer format and example
@@ -126,7 +130,7 @@ class DiagnosticianAgent:
         return sides.sides_to_run(bb.read("facts").facts_of(tick), bb.read("findings"))
 
     @staticmethod
-    def fingerprint(bb, side: str, raw_notes: bool = False) -> tuple:
+    def fingerprint(bb, side: str, raw_notes: bool = False, bev_notes: bool = False) -> tuple:
         """The evidence a side's diagnosis depends on, as on the board now.
         `raw_notes` (note_source raw): the side's selected raw notes count as
         evidence, so a newly arrived note makes the side be asked again (with
@@ -137,7 +141,7 @@ class DiagnosticianAgent:
                  + [e.get("case_id") for e in retrieved.get("experience", [])])
         if raw_notes:
             shown += ["note:" + str(n.get("id")) for n in retrieved.get("notes", [])
-                      if side in sides.note_sides(n)]
+                      if side in routed_note_sides(bb, n, bev_notes)]
         return sides.side_fingerprint(bb.read("signature").get("signature", {}),
                                       bb.read("findings"),
                                       list(bb.read("notefacts").values()), side,
@@ -155,7 +159,7 @@ class DiagnosticianAgent:
         cached = bb.read("side_answers")
         jobs = []
         for s in self.sides_to_run(bb, tick):
-            fp = self.fingerprint(bb, s, self.raw_notes)
+            fp = self.fingerprint(bb, s, self.raw_notes, self.bev_notes)
             if self.on_change and s in cached and cached[s]["fingerprint"] == fp:
                 continue
             if self.bev_sw["clear_skip"] != "off" and self._clear_skip(bb, cached, s, tick):
@@ -209,9 +213,10 @@ class DiagnosticianAgent:
             facts = sides.facts_for_side(all_facts, side)
             retrieved["cases"] = sides.cases_for_side(retrieved.get("cases", []), side)
             if self.sw["notes"] and self.sw["note_source"] == "raw":
-                # raw notes: by the note's own tags (a note with none goes to both)
+                # raw notes: by the note's own tags (a note with none goes to both);
+                # bev notes on: by bev's reading (reports/bev_ideas.md, idea 6)
                 retrieved["notes"] = [n for n in retrieved.get("notes", [])
-                                      if side in sides.note_sides(n)]
+                                      if side in routed_note_sides(bb, n, self.bev_notes)]
             elif self.sw["notes"]:
                 # note-facts: by the note-fact's own subjects (commit 0 design)
                 notefacts = {k: v for k, v in notefacts.items()

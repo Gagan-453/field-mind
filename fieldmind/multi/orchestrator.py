@@ -74,6 +74,7 @@ class MultiOrchestrator:
         self.ver = VerifierAgent(ver, acfg, mcfg)
         self.gate = GateMemoryAgent(gate, ver, acfg)
         self.gate.raw_notes = self.diag.raw_notes
+        self.gate.bev_notes = self.diag.bev_notes
         self.compact = mcfg.get("compact") or {}
         from .merge_rules import RULES, flat_case_ids as merge_rules_flat
         self.gate.merge_rule = mcfg.get("merge_rule", "model")
@@ -176,6 +177,8 @@ class MultiOrchestrator:
         # the diagnosis prompt is built (this does NOT hold in real time).
         text = self._read_notes(bb, tick_no, now_s, facts)
         results = []
+        if self.bev.active("notes"):
+            results += self._screen_notes(bb, asmt, tick_no, now_s)
         llm_used = False
         submit_s = now_s
         if self.rung < 5 and level in MODEL_LEVELS:
@@ -605,6 +608,30 @@ class MultiOrchestrator:
                             tokens={"prefill": 0, "decode": 0})
         return [Result(job=stand, envelope=env, evidence_tick=tick_no, lane=None,
                        queue_wait_ms=0.0, start_s=None, finish_s=None, tick_epoch_s=now_s)], bres
+
+    def _screen_notes(self, bb, asmt, tick_no: int, now_s: float) -> list:
+        """Idea 6 (reports/bev_ideas.md): every raw note the retriever selected
+        that bev has not read yet, one request each (state = the note's text):
+        does it instruct the reader, which side does it concern. The gate
+        writes the reading to `bev_notes` (a failed one too, so a note is never
+        asked twice); only `on` routes by it (agents.bev.routed_note_sides)."""
+        seen = bb.read("bev_notes")
+        notes = [n for n in bb.read("retrieval").get("notes", []) if n.get("id") not in seen]
+        jobs = [self.bev.make_job(bb, self.scheduler, "notes", tick_no, n.get("text", ""),
+                                  bevmod.note_questions(self.bev), now_s,
+                                  meta={"about": n.get("id")}, side=str(n.get("id")))
+                for n in notes]
+        done = self.bev.run_lockstep(bb, self.scheduler, jobs, now_s)
+        for res in done:
+            with bb.step("gate"):
+                answers = self.gate.fold_bev(bb, asmt, res, tick_no, self.bev)
+                entry = bevmod.note_entry(answers, self.bev.noul_threshold)
+                board = dict(bb.read("bev_notes"))
+                board[res.job.line_map["about"]] = entry
+                bb.write("bev_notes", board, "gate")
+            self.gate.compact_log[-1]["entry"] = entry
+            self.bev.stats["notes"]["used" if self.bev.used("notes") else "shadow"] += 1
+        return done
 
     def _take_skips(self) -> None:
         """clear_skip records of this tick into the gate's log and the bev stats."""

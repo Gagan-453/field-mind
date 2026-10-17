@@ -46,6 +46,7 @@ class GateMemoryAgent:
         self.tick_budget_ms = cfg.get("tick_period_s", 30) * 1000
         self.stale_dropped: list[dict] = []
         self.raw_notes = False      # note_source raw: set by the orchestrator
+        self.bev_notes = False      # bev ideas, notes on: set by the orchestrator
         self.flat_ids: frozenset = frozenset()    # hybrid: set by the orchestrator
         # Compact-answer expansion records of the current tick (telemetry;
         # the orchestrator takes and clears them when it records the tick).
@@ -288,7 +289,7 @@ class GateMemoryAgent:
         """The side's evidence now equals the evidence its job was built on."""
         fp = (result.job.line_map or {}).get("fingerprint")
         return fp is not None and fp == DiagnosticianAgent.fingerprint(
-            bb, result.job.line_map["side"], self.raw_notes)
+            bb, result.job.line_map["side"], self.raw_notes, self.bev_notes)
 
     def _reuse(self, bb, accepted, results, now_tick):
         """Keep `side_answers` and add the cached answers of sides that made no
@@ -314,7 +315,7 @@ class GateMemoryAgent:
         for side in run:
             if side in called or side not in cache:
                 continue
-            fp = DiagnosticianAgent.fingerprint(bb, side, self.raw_notes)
+            fp = DiagnosticianAgent.fingerprint(bb, side, self.raw_notes, self.bev_notes)
             if cache[side]["fingerprint"] != fp:
                 del cache[side]                             # evidence moved on
                 continue

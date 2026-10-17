@@ -594,3 +594,78 @@ def test_bev_verifier_on_replaces_gemma_and_its_fails_reach_the_claims(ver_runs)
         if contra:
             assert any(u.startswith("verifier contradiction") for u in a["unexplained"])
     assert n > 0 and nc > 0
+
+
+# ---------------------------------------------- commit 9: notes routing
+def _note_bev(side, p_instr):
+    class NoteBev(MockBackend):
+        def generate(self, prompt, role="generic", max_tokens=512, mock_hint=None):
+            if role != "decider" or "bev" not in (mock_hint or {}):
+                return super().generate(prompt, role, max_tokens, mock_hint)
+            ans = {}
+            for qid, q in mock_hint["bev"].items():
+                if q["type"] == "noul":
+                    ans[qid] = {"type": "noul", "noul": p_instr}
+                else:
+                    k = q["options"]
+                    top = side if side in k else k[0]
+                    ans[qid] = {"type": "choice", "choice": top,
+                                "probabilities": {o: (0.7 if o == top else 0.1) for o in k}}
+            return LLMReply(text=json.dumps({"answers": ans}), backend="mock", model="mock-0",
+                            prefill_tokens=None, decode_tokens=0)
+    return NoteBev
+
+
+register_backend("mock_notes_heat", _note_bev("heat", 0.1))
+register_backend("mock_notes_instr", _note_bev("water", 0.9))
+NOTE_EP = "dev_A01_fcv_seize"
+
+
+def _prompts_by_side(run_):
+    out = {"water": [], "heat": []}
+    for a in run_["assessments"]:
+        for e in a["envelopes"]:
+            if e["agent"] == "diagnostician" and e.get("prompt"):
+                side = "water" if "WATER side only" in e["prompt"] else "heat"
+                out[side].append(e["prompt"])
+    return out
+
+
+@pytest.fixture(scope="module")
+def note_runs():
+    if not (DEV / NOTE_EP).exists():
+        pytest.skip("dev episodes not generated")
+    return {"off": run(cfg_with(), NOTE_EP),
+            "shadow": run(cfg_with(notes="shadow", backend="mock_notes_heat"), NOTE_EP),
+            "heat": run(cfg_with(notes="on", backend="mock_notes_heat"), NOTE_EP),
+            "instr": run(cfg_with(notes="on", backend="mock_notes_instr"), NOTE_EP)}
+
+
+def test_notes_shadow_reads_each_note_once_and_changes_nothing(note_runs):
+    sh = note_runs["shadow"]
+    assert published(sh) == published(note_runs["off"])
+    ids = [r["about"] for r in records(sh, "bev", "notes")]
+    assert ids and len(ids) == len(set(ids))
+    assert _prompts_by_side(sh) == _prompts_by_side(note_runs["off"])
+
+
+register_backend("mock_notes_water", _note_bev("water", 0.1))
+
+
+def test_notes_on_route_each_note_to_bevs_side():
+    """D01 runs the heat side only, and the tag rule sends its notes there.
+    bev saying heat keeps every one; bev saying water takes every one out."""
+    ep = "dev_D01_high_cv_coal"
+    if not (DEV / ep).exists():
+        pytest.skip("dev episodes not generated")
+    count = lambda run_: sum("[note," in p for p in _prompts_by_side(run_)["heat"])   # noqa: E731
+    off = count(run(cfg_with(), ep))
+    assert off > 0
+    assert count(run(cfg_with(notes="on", backend="mock_notes_heat"), ep)) == off
+    assert count(run(cfg_with(notes="on", backend="mock_notes_water"), ep)) == 0
+
+
+def test_notes_that_instruct_reach_no_prompt(note_runs):
+    pr = _prompts_by_side(note_runs["instr"])
+    assert pr["water"] or pr["heat"]
+    assert not any("[note," in p for p in pr["water"] + pr["heat"])

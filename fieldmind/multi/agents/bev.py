@@ -389,3 +389,42 @@ def compose_verdict(answers: dict, noul_threshold: float, contra: int | None) ->
     v = [[int(k[5:]), "p" if a["p"] >= noul_threshold else "f"]
          for k, a in sorted(answers.items(), key=lambda kv: int(kv[0][5:]))]
     return {"v": v, "c": contra}
+
+
+# ----------------------------------------------------------------------
+#  Idea 6, notes: each newly retrieved raw note is read once by bev
+#  (instructs the reader? which side?). on: it routes the note.
+# ----------------------------------------------------------------------
+SIDE_OPTIONS = {
+    "water": "the water side: drum level, feed water flow, steam flow",
+    "heat": "the heat side: bed temperature, drum pressure, main steam temperature",
+    "both": "both the water side and the heat side",
+    "none": "neither: not about this boiler's process",
+}
+
+
+def note_questions(agent: "BevAgent") -> dict:
+    return {"instr": noul(agent.q("q_instr")), "side": choice(agent.q("q_side"), SIDE_OPTIONS)}
+
+
+def note_entry(answers: dict | None, noul_threshold: float) -> dict:
+    """The gate's record of one note reading (`bev_notes`)."""
+    if not answers:
+        return {"status": "failed"}
+    side = answers["side"]["ranking"][0]
+    return {"status": "ok", "instructs": answers["instr"]["p"] >= noul_threshold,
+            "p_instructs": answers["instr"]["p"], "side": side,
+            "p_side": answers["side"]["p"]}
+
+
+def routed_note_sides(bb, note: dict, on: bool) -> set:
+    """The sides a raw note goes to. bev notes on and read: none if it
+    instructs or concerns neither side, else bev's side (both = both sides);
+    otherwise (off, shadow, unread, failed) the tag rule, unchanged."""
+    from .. import sides
+    e = bb.read("bev_notes").get(note.get("id")) if on else None
+    if not e or e.get("status") != "ok":
+        return sides.note_sides(note)
+    if e["instructs"] or e["side"] == "none":
+        return set()
+    return set(sides.SIDES) if e["side"] == "both" else {e["side"]}
