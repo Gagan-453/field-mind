@@ -246,3 +246,46 @@ def test_lane_wall_busy_is_the_sum_of_its_calls(timed_run):
         assert abs(lanes_[lane]["wall_busy_s"] - s) < 1e-3, lane
     summ = timed_run["multi"]["stage_ms"]
     assert summ["sensor"]["n"] == len(timed_run["assessments"])
+
+
+# ----------------------------------------------- commit 4: clear_skip
+@pytest.fixture(scope="module")
+def skip_runs():
+    if not (DEV / EP).exists():
+        pytest.skip("dev episodes not generated")
+    out = {}
+    for ep in ("dev_B01_tube_leak", "dev_D01_high_cv_coal"):
+        for mode in ("off", "shadow", "on"):
+            out[(ep, mode)] = run(cfg_with(clear_skip=mode), ep)
+    return out
+
+
+def _rule(run_):
+    return {c["now_tick"]: c for c in records(run_, "rule")}
+
+
+def test_clear_skip_skips_only_on_clear_ticks_and_makes_no_call_for_that_side(skip_runs):
+    n = 0
+    for ep in ("dev_B01_tube_leak", "dev_D01_high_cv_coal"):
+        r = skip_runs[(ep, "on")]
+        rule = _rule(r)
+        for a in r["assessments"]:
+            for s in [c for c in a["multi"]["compact"] if c.get("idea") == "clear_skip"]:
+                n += 1
+                assert rule[a["tick"]]["regime"] == "clear"
+                assert not rule[a["tick"]]["model_led"]
+                sides = [c.get("side") for c in a["multi"]["compact"] if c.get("agent") == "diagnostician"]
+                assert s["side"] not in sides                       # no call for it
+                merges = [c for c in a["multi"]["compact"] if c.get("agent") == "merge"]
+                assert all(s["side"] not in m["order"] for m in merges)   # and no stale re-use
+    assert n > 0
+
+
+def test_clear_skip_saves_calls_and_shadow_changes_nothing(skip_runs):
+    for ep in ("dev_B01_tube_leak", "dev_D01_high_cv_coal"):
+        off, sh, on = (skip_runs[(ep, m)] for m in ("off", "shadow", "on"))
+        assert published(sh) == published(off)
+        assert sh["diag_calls"] == off["diag_calls"]
+        assert len(records(sh, "bev", "clear_skip")) > 0                 # would-skips logged
+        assert on["diag_calls"] < off["diag_calls"]
+        assert on["multi"]["bev"]["per_idea"]["clear_skip"]["used"] == len(records(on, "bev", "clear_skip"))

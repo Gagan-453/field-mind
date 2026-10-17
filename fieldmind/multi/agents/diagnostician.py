@@ -25,8 +25,9 @@ from types import SimpleNamespace
 from ...agent.l1_symbolize import evidence_packet
 from ...agent.orchestrator import evidence_max_facts, wm_summary
 from ...schemas import TAGS
-from .. import compact, grammar, sides
+from .. import compact, grammar, merge_rules, sides
 from ._call import call_model
+from .bev import switches as bev_switches
 
 NAME = "diagnostician"
 # Phase 3: a side's job is placed by `diag_<side>` (multi.fixed_placement);
@@ -59,6 +60,13 @@ class DiagnosticianAgent:
         self.raw_notes = self.sw["notes"] and self.sw["note_source"] == "raw"
         self.on_change = bool(mcfg.get("split_on_change", False))
         self.grammar = bool(mcfg.get("grammar", False))
+        # bev ideas (reports/bev_ideas.md): clear_skip (code only) and the
+        # telemetry of the skips it made or (shadow) would have made
+        self.bev_sw = bev_switches(mcfg)
+        if self.bev_sw["clear_skip"] != "off" and not (self.split and self.on_change):
+            raise ValueError("multi.bev.clear_skip needs multi.split and multi.split_on_change "
+                             "(it skips a side whose evidence changed)")
+        self.skip_log: list[dict] = []
         if self.grammar and not self.sw["schema"]:
             raise ValueError("multi.grammar needs multi.compact.schema on: the grammar "
                              "is the compact (B') answer format")
@@ -137,6 +145,9 @@ class DiagnosticianAgent:
             fp = self.fingerprint(bb, s, self.raw_notes)
             if self.on_change and s in cached and cached[s]["fingerprint"] == fp:
                 continue
+            if self.bev_sw["clear_skip"] != "off" and self._clear_skip(bb, cached, s, tick):
+                if self.bev_sw["clear_skip"] == "on":
+                    continue                    # no call; the gate re-uses nothing (evidence changed)
             job = self._compact_job(bb, scheduler, tick, level, rung, submit_s, side=s)
             job.line_map["fingerprint"] = fp
             # telemetry: the cache this job was made against ("same" is only
@@ -146,6 +157,28 @@ class DiagnosticianAgent:
                                              else "changed")
             jobs.append(job)
         return jobs
+
+    def _clear_skip(self, bb, cached: dict, side: str, tick: int) -> bool:
+        """clear_skip (code only, reports/bev_ideas.md): belief has a clear
+        leader (merge_rules.regime, belief alone) and this side's last checked
+        answer already put that leader first. Under hybrid the model does not
+        lead on a clear tick, so the call can only add a capped nudge; the
+        offline replay of the v3 board answers found no published change
+        (77 calls, 2,596 decode tokens). Logged either way."""
+        if side not in cached:
+            return False
+        hyps = (cached[side].get("payload") or {}).get("hypotheses") or []
+        last_top = hyps[0].get("case_ref") if hyps else None
+        live = [h for h in bb.read("belief") if not h.retired]
+        order = merge_rules._belief_order(live)
+        leader = order[0].case_ref if order else None
+        hit = (last_top is not None and last_top == leader
+               and merge_rules.regime(live) == "clear")
+        if hit:
+            self.skip_log.append({"agent": "bev", "idea": "clear_skip",
+                                  "mode": self.bev_sw["clear_skip"], "evidence_tick": tick,
+                                  "side": side, "leader": leader, "skipped": True})
+        return hit
 
     # ------------------------------------------------------------------
     def _compact_job(self, bb, scheduler, tick, level, rung, submit_s, side=None):

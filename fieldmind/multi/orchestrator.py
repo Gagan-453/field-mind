@@ -186,6 +186,7 @@ class MultiOrchestrator:
             # Phase 3 with split_on_change: a tick whose sides are all unchanged
             # makes no diagnosis call; llm_invoked is then set by the verifier
             llm_used = bool(jobs)
+            self._take_skips()
             results += got
             if self.diag.split:
                 # Phase 3: both sides' answers, checked one by one, merged once
@@ -338,6 +339,7 @@ class MultiOrchestrator:
                     self._inflight[j.side] = j.line_map["fingerprint"]
                 if jobs:
                     bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
+            self._take_skips()
             submitted += [{"job": j.job_id, "agent": j.agent, "side": j.side,
                            "fp": hash(j.line_map["fingerprint"]) & 0xFFFFFFFF,
                            "wall_s": round(j.wall_submit, 4)} for j in jobs]
@@ -359,6 +361,13 @@ class MultiOrchestrator:
         self._record(tick_no, p0, arrived, p0_asmt, hard_ms, text=text)
         self.last_telemetry["submitted"] = submitted
         return asmt
+
+    def _take_skips(self) -> None:
+        """clear_skip records of this tick into the gate's log and the bev stats."""
+        for rec in self.diag.skip_log:
+            self.gate.compact_log.append(rec)
+            self.bev.stats["clear_skip"]["used" if rec["mode"] == "on" else "shadow"] += 1
+        self.diag.skip_log.clear()
 
     def _submit_notes(self, bb, tick, now_s, facts, tick_wall_s) -> list:
         """Real time: one text-reader job per arrived, unread note not already
