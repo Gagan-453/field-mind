@@ -70,16 +70,22 @@ class LLMReply:
     decode_ms: float | None = None  # server-side decode time (llama-server predicted_ms)
     error: str = ""
     retries: int = 0               # transient-failure retries spent on this call
+    # bev-decide only: the server's own split of a request (tokenize_ms,
+    # decode_ms = transformer, head_ms). None for every other backend.
+    server_timings: dict | None = None
 
 
 def call_record(reply: LLMReply) -> dict:
     """One backend call as the envelope's `calls` entry: per-call token counts
     and server-side times, so lane rates and the answer-length distribution are
     computed per call (a repaired diagnosis makes two calls). Telemetry only."""
-    return {"status": reply.status, "prefill": reply.prefill_tokens,
-            "decode": reply.decode_tokens, "prefill_ms": reply.ttft_ms,
-            "decode_ms": getattr(reply, "decode_ms", None),
-            "latency_ms": reply.latency_ms}
+    rec = {"status": reply.status, "prefill": reply.prefill_tokens,
+           "decode": reply.decode_tokens, "prefill_ms": reply.ttft_ms,
+           "decode_ms": getattr(reply, "decode_ms", None),
+           "latency_ms": reply.latency_ms}
+    if getattr(reply, "server_timings", None) is not None:
+        rec["server"] = dict(reply.server_timings)
+    return rec
 
 
 class LLMBackend:
@@ -140,7 +146,7 @@ class MockBackend(LLMBackend):
         elif role == "text_reader":
             payload = self._mock_text_read(hint)
         elif role == "decider":
-            payload = self._mock_decider(hint)
+            payload = self._mock_bev(hint) if "bev" in hint else self._mock_decider(hint)
         else:
             payload = {"note": "mock backend, no role-specific behaviour"}
 
@@ -229,6 +235,27 @@ class MockBackend(LLMBackend):
                 "answers": {hint.get("question", "root_cause"):
                             {"type": "choice", "choice": keys[0], "probabilities": probs}},
                 "usage": {"prompt_tokens": None}}
+
+    @staticmethod
+    def _mock_bev(hint: dict) -> dict:
+        """bev-decide's reply to a bev-ideas request (reports/bev_ideas.md):
+        every question answered. choice: the first option highest, falling
+        linearly (as _mock_decider); yes/no: a fixed value from the CRC of the
+        question id and its instructions, so a run is repeatable. It does not
+        read the state: plumbing only, never a bev-decider result."""
+        import zlib
+        answers = {}
+        for qid, q in hint["bev"].items():
+            if q["type"] == "noul":
+                p = (zlib.crc32((qid + q.get("instructions", "")).encode()) % 1000) / 1000
+                answers[qid] = {"type": "noul", "noul": round(p, 3)}
+            else:
+                keys = list(q.get("options", []))
+                n = len(keys)
+                probs = {k: (n - i) / (n * (n + 1) / 2) for i, k in enumerate(keys)}
+                answers[qid] = {"type": "choice", "choice": keys[0] if keys else None,
+                                "probabilities": probs}
+        return {"model": "mock-0", "answers": answers, "usage": {"prompt_tokens": None}}
 
     @staticmethod
     def _mock_verification(hint: dict) -> dict:
@@ -888,6 +915,8 @@ class BevDeciderBackend(LLMBackend):
             prefill_tokens=int(pt) if isinstance(pt, (int, float)) else None,
             decode_tokens=0, decode_ms=0.0,
             ttft_ms=float(dm) if isinstance(dm, (int, float)) else None,
+            server_timings={k: float(v) for k, v in tm.items()
+                            if isinstance(v, (int, float))} or None,
         )
 
 

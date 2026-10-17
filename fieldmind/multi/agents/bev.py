@@ -1,0 +1,218 @@
+"""
+bev agent (model agent, Jobs on the bev lane, P3): every use of bev-decider
+other than the decider (reports/bev_ideas.md; HUMAN INSTRUCTION 2026-10-17).
+
+One switch per idea, `multi.bev.<idea>`: off | shadow | on.
+  off     the earlier code path exactly (no job is made)
+  shadow  bev is asked; the gate checks and logs its answer; NOTHING it says
+          is used -- for measuring bev and choosing thresholds on the dev set
+  on      the checked answer is used by the idea's own rule
+
+A request is bev-decide's /v1/systemone body: {"state", "questions"}. Every
+question is a fixed sentence from `multi.bev.questions` (q_root is the
+decider's signed sentence; the rest are PROPOSED, report "Questions"). The
+state is facts (the decider's lines) or one note's text, never raw readings
+(invariant 1). bev generates nothing, so every bev call has decode 0.
+
+This agent builds jobs and parses replies. It writes nothing to the board:
+the gate checks each answer (`check_answers`) and only the gate writes.
+"""
+
+from __future__ import annotations
+
+import json
+from collections import Counter, defaultdict
+
+from ...agent.l4_diagnose import est_tokens
+from ...runtime.llm_backend import call_record
+from ...schemas import AgentEnvelope
+from .decider import DeciderAgent
+
+NAME = "bev"            # the blackboard step every bev job runs in
+ROLE = "decider"        # the backend role: bev-decide (the mock answers it as bev)
+PRIORITY = 3
+MODES = ("off", "shadow", "on")
+IDEAS = ("explain", "first", "actions", "unknown", "verifier", "notes",
+         "text_reader", "rt_fallback", "clear_skip")
+CODE_ONLY = ("clear_skip",)                       # no bev call
+REALTIME_OK = ("rt_fallback", "clear_skip")       # decision 1: the rest are lockstep only
+NEED_FIRST_THRESHOLD = ("first", "rt_fallback")
+
+
+def switches(mcfg: dict) -> dict[str, str]:
+    """`multi.bev` -> {idea: mode}. YAML reads a bare `off` / `on` as a bool."""
+    b = (mcfg or {}).get("bev") or {}
+    unknown = set(b) - set(IDEAS) - {"noul_threshold", "first_threshold", "questions"}
+    if unknown:
+        raise ValueError(f"multi.bev: unknown key(s) {sorted(unknown)}")
+    out = {}
+    for k in IDEAS:
+        v = b.get(k, "off")
+        v = {False: "off", None: "off", True: "on"}.get(v, v) if not isinstance(v, str) else v
+        if v not in MODES:
+            raise ValueError(f"multi.bev.{k} must be one of {MODES}, got {v!r}")
+        out[k] = v
+    return out
+
+
+def any_bev_call(sw: dict) -> bool:
+    return any(m != "off" for k, m in sw.items() if k not in CODE_ONLY)
+
+
+def state_text(facts) -> str:
+    """The facts as the decider shows them (severity order, at most 9 lines)."""
+    return DeciderAgent.state_text(facts)
+
+
+def fact_lines(facts) -> list:
+    """The facts behind state_text, in the same order (the options of a
+    choice over facts are these, keyed F-id)."""
+    from .. import compact
+    ranked = sorted(facts, key=lambda f: (compact.SEV_ORDER.get(f.severity, 9), f.id))
+    return ranked[:compact.MAX_FACT_LINES]
+
+
+def choice(instructions: str, criteria: dict) -> dict:
+    return {"type": "choice", "instructions": instructions, "criteria": dict(criteria)}
+
+
+def noul(instructions: str) -> dict:
+    return {"type": "noul", "instructions": instructions}
+
+
+class BevAgent:
+    def __init__(self, backend, mcfg: dict, log_prompts: bool = False):
+        self.backend = backend
+        self.sw = switches(mcfg)
+        b = (mcfg or {}).get("bev") or {}
+        self.noul_threshold = float(b.get("noul_threshold", 0.5))
+        if not 0.0 <= self.noul_threshold <= 1.0:
+            raise ValueError("multi.bev.noul_threshold must be in [0, 1]")
+        ft = b.get("first_threshold")
+        self.first_threshold = None if ft is None else float(ft)
+        for k in NEED_FIRST_THRESHOLD:
+            if self.sw[k] == "on" and self.first_threshold is None:
+                raise ValueError(f"multi.bev.{k}: on needs multi.bev.first_threshold, set from "
+                                 f"dev-set shadow runs (bench/bev_calibrate.py); it has no default")
+        self.questions = dict(b.get("questions") or {})
+        self.log_prompts = log_prompts
+        # run-level, per idea: calls, failed, rejected, used (on), shadow (logged only)
+        self.stats: dict[str, Counter] = defaultdict(Counter)
+
+    # ------------------------------------------------------------------
+    def mode(self, idea: str) -> str:
+        return self.sw[idea]
+
+    def active(self, idea: str) -> bool:
+        return self.sw[idea] != "off"
+
+    def used(self, idea: str) -> bool:
+        return self.sw[idea] == "on"
+
+    def q(self, key: str, **kw) -> str:
+        if key not in self.questions:
+            raise KeyError(f"multi.bev.questions.{key} is not set")
+        return self.questions[key].format(**kw)
+
+    # ------------------------------------------------------------------
+    def make_job(self, bb, scheduler, idea: str, tick: int, state: str,
+                 questions: dict, submit_s: float, meta: dict | None = None,
+                 side: str = "all"):
+        """One bev-decide request as a job on the bev lane (`bev_<idea>`)."""
+        if idea not in IDEAS or idea in CODE_ONLY:
+            raise ValueError(f"no bev call for idea {idea!r}")
+        prompt = json.dumps({"state": state, "questions": questions}, ensure_ascii=False)
+        spec = {qid: {"type": q["type"], "options": list((q.get("criteria") or {}).keys())}
+                for qid, q in questions.items()}
+        hint = {"bev": {qid: {**spec[qid], "instructions": q["instructions"]}
+                        for qid, q in questions.items()}}
+
+        def work():
+            with bb.step(NAME):
+                self.stats[idea]["calls"] += 1
+                env = self._call(prompt, hint, idea, tick)
+                self.stats[idea]["failed"] += env.status != "ok"
+                return env
+
+        job = scheduler.new_job(f"bev_{idea}", evidence_tick=tick, priority=PRIORITY,
+                                max_answer_tokens=0, submit_s=submit_s, work=work, side=side)
+        job.line_map = {"kind": "bev", "idea": idea, "mode": self.sw[idea],
+                        "questions": spec, "evidence_tick": tick,
+                        "prompt_tokens_est": est_tokens(prompt), **(meta or {})}
+        return job
+
+    def _call(self, prompt: str, hint: dict, idea: str, tick: int) -> AgentEnvelope:
+        reply = self.backend.generate(prompt, role=ROLE, max_tokens=0, mock_hint=hint)
+        env = AgentEnvelope(agent=f"bev_{idea}", tick=tick, latency_ms=reply.latency_ms,
+                            backend=reply.backend, model=reply.model,
+                            tokens={"prefill": reply.prefill_tokens, "decode": reply.decode_tokens})
+        env.retries = getattr(reply, "retries", 0)
+        env.calls.append(call_record(reply))
+        env.prompt_tokens = reply.prefill_tokens or est_tokens(prompt)
+        if self.log_prompts:
+            env.prompt = prompt
+            env.raw_reply = reply.text
+        if reply.status != "ok":
+            env.status, env.error = reply.status, getattr(reply, "error", "")
+            env.payload = {"error": env.error or reply.status}
+            return env
+        try:
+            answers = json.loads(reply.text)["answers"]
+            if not isinstance(answers, dict):
+                raise TypeError("answers is not an object")
+            env.payload = answers
+        except (ValueError, KeyError, TypeError) as e:
+            env.status, env.error = "invalid_schema", f"no answers ({e!r})"
+            env.payload = {"error": env.error}
+        return env
+
+    def run_lockstep(self, bb, scheduler, jobs: list, now_s: float) -> list:
+        """Submit and drain (lockstep). bev jobs are the only ones queued here."""
+        if not jobs:
+            return []
+        with bb.step("scheduler"):
+            for j in jobs:
+                scheduler.submit(j)
+            bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
+            return scheduler.run_lockstep(now_s)
+
+    def telemetry(self) -> dict:
+        return {"switches": dict(self.sw), "noul_threshold": self.noul_threshold,
+                "first_threshold": self.first_threshold,
+                "per_idea": {k: dict(v) for k, v in sorted(self.stats.items())}}
+
+
+# ----------------------------------------------------------------------
+def check_answers(payload, spec: dict) -> tuple[bool, str, dict]:
+    """(ok, why, answers). Every asked question answered, and nothing else:
+    a choice names exactly the offered keys, each probability in [0, 1], its
+    `choice` among them (ranking by probability, ties in offered order); a
+    yes/no is a number in [0, 1]. One bad question rejects the whole reply."""
+    if not isinstance(payload, dict):
+        return False, "answers is not an object", {}
+    if set(payload) != set(spec):
+        return False, f"answered {sorted(payload)}, asked {sorted(spec)}", {}
+    out = {}
+    for qid, s in spec.items():
+        a = payload[qid]
+        if not isinstance(a, dict) or a.get("type") != s["type"]:
+            return False, f"{qid}: not a {s['type']} answer", {}
+        if s["type"] == "noul":
+            p = a.get("noul")
+            if isinstance(p, bool) or not isinstance(p, (int, float)) or not 0.0 <= p <= 1.0:
+                return False, f"{qid}: P(yes) is {p!r}", {}
+            out[qid] = {"type": "noul", "p": float(p)}
+            continue
+        offered = s["options"]
+        probs = a.get("probabilities")
+        if not isinstance(probs, dict) or set(probs) != set(offered):
+            return False, f"{qid}: probabilities name {sorted(probs) if isinstance(probs, dict) else probs}", {}
+        for k, v in probs.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not 0.0 <= v <= 1.0:
+                return False, f"{qid}: probability of {k} is {v!r}", {}
+        if a.get("choice") not in offered:
+            return False, f"{qid}: choice {a.get('choice')!r} was not offered", {}
+        ranking = sorted(offered, key=lambda k: (-probs[k], offered.index(k)))
+        out[qid] = {"type": "choice", "ranking": ranking,
+                    "p": {k: float(v) for k, v in probs.items()}}
+    return True, "", out

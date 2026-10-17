@@ -135,9 +135,10 @@ class Scheduler:
     # ------------------------------------------------------------------
     @staticmethod
     def lane_kind(agent: str) -> str:
-        """bev-decider: the decider agent needs a "decider" lane (bev-decide);
-        every other agent an "llm" lane (llama-server)."""
-        return "decider" if agent == "decider" else "llm"
+        """bev-decider: the decider agent and every bev idea job (`bev_<idea>`,
+        reports/bev_ideas.md; placement key `bev`) need a "decider" lane
+        (bev-decide); every other agent an "llm" lane (llama-server)."""
+        return "decider" if agent in ("decider", "bev") or agent.startswith("bev_") else "llm"
 
     def eligible_lanes(self, agent: str) -> list:
         lanes = [l for l in self.lanes if getattr(l, "kind", "llm") == self.lane_kind(agent)]
@@ -151,6 +152,9 @@ class Scheduler:
         the earlier lane in config order."""
         if self.placement == "fixed":
             name = self.fixed_placement.get(job.agent)
+            if name is None and job.agent.startswith("bev_"):
+                # every bev idea job is placed by the explicit table entry `bev`
+                name = self.fixed_placement.get("bev")
             if name is None:
                 raise KeyError(f"agent {job.agent!r} has no lane in "
                                f"multi.fixed_placement")

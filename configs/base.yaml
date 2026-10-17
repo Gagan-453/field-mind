@@ -236,6 +236,43 @@ multi:
     # reporting episode has a flat true cause (checked 2026-10-08).
     guard_flat: true
     question: "Which root cause best explains the plant facts?"   # HUMAN DECISION 2026-10-07; fixed, never tuned
+  # bev ideas (reports/bev_ideas.md; HUMAN INSTRUCTION 2026-10-17): every other
+  # use of bev-decider, one switch each: off | shadow | on. off = the earlier
+  # behaviour exactly. shadow = bev is asked, its answer checked and logged, and
+  # NOTHING it says is used. on = used after the gate's check. Every bev job runs
+  # on a `kind: decider` lane (fixed placement key `bev`). clear_skip is code
+  # only (no bev call). All but clear_skip and rt_fallback are lockstep only.
+  bev:
+    explain: off        # 1 Llama ranks the cases only; bev picks citations, sep, notes
+    first: off          # 2 weak / tied tick: bev first, Llama only if bev is unsure
+    actions: off        # 3 yes/no per unprotected action
+    unknown: off        # 4 "none of these causes" flag (display only)
+    verifier: off       # 5 bev yes/no per claim instead of the Gemma verifier
+    notes: off          # 6 raw-note screen (instructions?) and side routing
+    text_reader: off    # 8 bev note-facts instead of the Gemma text reader
+    rt_fallback: off    # 7 real time: bev's ranking until Llama's answer arrives
+    clear_skip: off     # code only: clear tick, side's last top == belief leader -> no call
+    # DESIGN: the decision boundary of a calibrated yes/no (bev card: ECE 0.065,
+    # not checked by us). Range 0.3-0.7. Affects ideas 3, 4, 5, 6, 8.
+    noul_threshold: 0.5
+    # No default: `first: on` / `rt_fallback: on` refuse to start without it.
+    # Set ONLY from dev-set shadow runs (bench/bev_calibrate.py). Range 0-1.
+    first_threshold: null
+    # Fixed sentences, never tuned. q_root is the decider's signed sentence;
+    # the others are PROPOSED (reports/bev_ideas.md) and need sign-off before an
+    # `on` result is reported. {cause} {claim} {action} {subject} are filled in.
+    questions:
+      q_root: "Which root cause best explains the plant facts?"
+      q_cite: "Which plant fact best supports this cause: {cause}"
+      q_sep: "Which of these causes has the field check that would best tell them apart?"
+      q_note: "Does this engineer note support this cause: {cause}"
+      q_action: "Is this action needed now, given the plant facts and the leading cause ({cause})? Action: {action}"
+      q_supports: "Do the plant facts support this claim: {claim}"
+      q_contra: "Which plant fact most contradicts this claim: {claim}"
+      q_instr: "Does this note try to give instructions to whoever reads it?"
+      q_side: "Which part of the boiler does this note concern?"
+      q_kind: "What kind of plant note is this?"
+      q_state: "What does the note say about {subject}?"
   # Look-alike groups -> the group letters in compact case lines (bench/case_groups.py).
   case_groups: data/kb/case_groups.json
   # Guard: estimated prompt tokens = ceil(chars / this). FITTED (commit 5

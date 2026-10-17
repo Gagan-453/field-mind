@@ -429,6 +429,34 @@ class GateMemoryAgent:
                                             "evidence_tick": lm["evidence_tick"]}, NAME)
         self.compact_log.append(record)
 
+    def fold_bev(self, bb, asmt: Assessment, result, now_tick: int, bev) -> dict | None:
+        """bev ideas (reports/bev_ideas.md): check one bev-decide reply against
+        the questions its job asked (agents.bev.check_answers), log it, and
+        return the checked answers -- None when the call failed, was stale or
+        was rejected. The caller uses them only when the idea is `on`; under
+        `shadow` they are logged here and nothing else happens."""
+        from .bev import check_answers
+        env, lm = result.envelope, result.job.line_map
+        asmt.envelopes.append(env.to_dict())
+        rec = {"agent": "bev", "idea": lm["idea"], "mode": lm["mode"],
+               "evidence_tick": lm["evidence_tick"], "status": env.status,
+               **{k: lm[k] for k in ("side", "about") if k in lm}}
+        out = None
+        if self._drop_if_stale(result, now_tick):
+            rec["why"] = "stale"
+        elif env.status != "ok":
+            rec["why"] = env.error
+        else:
+            ok, why, answers = check_answers(env.payload, lm["questions"])
+            if not ok:
+                bev.stats[lm["idea"]]["rejected"] += 1
+                rec["why"] = why
+            else:
+                rec["answers"] = answers
+                out = answers
+        self.compact_log.append(rec)
+        return out
+
     def check_notefact(self, result, vocab) -> tuple[bool, str]:
         """A text-reader answer may reach the board only if the call succeeded
         and every value is from the vocabulary. Returns (ok, why)."""

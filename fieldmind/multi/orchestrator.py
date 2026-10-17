@@ -33,6 +33,8 @@ from ..agent.orchestrator import top_confidence
 from ..schemas import TAGS
 from . import compact
 from ..runtime.llm_backend import make_backend
+from .agents import bev as bevmod
+from .agents.bev import BevAgent
 from .agents.decider import DeciderAgent
 from .agents.diagnostician import DiagnosticianAgent
 from .agents.gate import GateMemoryAgent
@@ -104,6 +106,16 @@ class MultiOrchestrator:
                                       mcfg["text_reader"])
             self.text = TextReaderAgent(diag.backend, retriever.notes, vocab, mcfg,
                                         log_prompts=bool(acfg.get("log_prompts")))
+        # bev ideas (reports/bev_ideas.md): every switch off = the earlier
+        # behaviour exactly (no job, no section written, no telemetry key).
+        self.bev = BevAgent(diag.backend, mcfg, log_prompts=bool(acfg.get("log_prompts")))
+        if bevmod.any_bev_call(self.bev.sw):
+            if not any(getattr(l, "kind", "llm") == "decider" for l in scheduler.lanes):
+                raise ValueError("multi.bev needs a lane of kind 'decider' "
+                                 "(multi.lanes.<lane>.kind: decider) for bev-decide")
+            if scheduler.placement == "fixed" and "bev" not in scheduler.fixed_placement:
+                raise ValueError("multi.bev with fixed placement needs "
+                                 "multi.fixed_placement.bev (the bev lane)")
         self.operator_query = ""
         self.rung = 0                       # ladder not built (Session 6)
         self.bb: Blackboard | None = None
@@ -243,6 +255,10 @@ class MultiOrchestrator:
             raise ValueError("real-time mode needs multi.split and multi.split_on_change "
                              "(answers are cached per side and re-used until they "
                              "arrive again)")
+        lock = [k for k, m in self.bev.sw.items() if m != "off" and k not in bevmod.REALTIME_OK]
+        if lock:
+            raise NotImplementedError(f"multi.bev {lock}: lockstep only (reports/bev_ideas.md, "
+                                      f"decision 1); in real time only {bevmod.REALTIME_OK}")
         self.rt = runner
         self._held: list = []           # side answers / verdicts that arrived on a QUIET tick
         self._inflight: dict = {}       # side -> fingerprint of its queued or running job
@@ -418,6 +434,8 @@ class MultiOrchestrator:
             "calls": self.decider.calls, "failed": self.decider.failed,
             "rejected": self.gate.decider_rejected, "top_k": self.decider.top_k,
             "candidates": self.decider.candidates, "guard_flat": self.gate.decider_guard_flat}}
+        if any(m != "off" for m in self.bev.sw.values()):
+            extra["bev"] = self.bev.telemetry()
         return {**extra, "placement": self.scheduler.placement,
                 "compact_switches": dict(self.diag.sw),
                 "split": self.diag.split,
