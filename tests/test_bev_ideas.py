@@ -395,3 +395,57 @@ def test_rank_only_grammar_accepts_rankings_and_nothing_else():
         assert grammar.accepts(g, ok), ok
     for bad in ('{"r":[2,2]}', '{"r":[5]}', '{"r":[1,2,3,4]}', '{"r":[[1,[1]]]}', '{"r":[1],"sep":1}'):
         assert not grammar.accepts(g, bad), bad
+
+
+# ---------------------------------------------------- commit 6: first
+FIRST_EP = "dev_D01_high_cv_coal"
+
+
+@pytest.fixture(scope="module")
+def first_runs():
+    if not (DEV / FIRST_EP).exists():
+        pytest.skip("dev episodes not generated")
+
+    def c(mode, t=None):
+        cfg = cfg_with(first=mode)
+        cfg["multi"]["bev"]["first_threshold"] = t
+        return cfg
+    # mock bev: first option highest; top probability 0.5 with 3 options, 1/1 with 2..
+    return {"off": run(c("off"), FIRST_EP), "shadow": run(c("shadow"), FIRST_EP),
+            "on": run(c("on", 0.4), FIRST_EP), "never": run(c("on", 1.01), FIRST_EP)}
+
+
+def test_first_asks_only_on_weak_or_tied_ticks_and_shadow_changes_nothing(first_runs):
+    off, sh = first_runs["off"], first_runs["shadow"]
+    assert published(sh) == published(off) and sh["diag_calls"] == off["diag_calls"]
+    recs = records(sh, "bev", "first")
+    assert recs
+    rule = _rule(sh)
+    assert all(r["regime"] in ("weak", "tie") for r in recs)
+    assert all(rule[r["evidence_tick"]]["regime"] == r["regime"] for r in recs)
+    assert all("agree_top" in r for r in recs if r.get("p_top") is not None)
+
+
+def test_first_below_threshold_never_replaces_llama(first_runs):
+    never = first_runs["never"]
+    assert published(never) == published(first_runs["off"])
+    assert never["diag_calls"] == first_runs["off"]["diag_calls"]
+    assert not any(r.get("replaced_llama") for r in records(never, "bev", "first"))
+
+
+def test_first_on_replaces_the_call_and_leads_with_bevs_pick(first_runs):
+    on, off = first_runs["on"], first_runs["off"]
+    assert on["diag_calls"] < off["diag_calls"]
+    flat = {"RCA-09", "RCA-10", "RCA-15"}
+    led = 0
+    for a in on["assessments"]:
+        comp = a["multi"]["compact"]
+        rule = [c for c in comp if c.get("agent") == "rule"]
+        for rec in [c for c in comp if c.get("idea") == "first" and c.get("replaced_llama")]:
+            stand_in = [e for e in a["envelopes"] if e["agent"] == "diagnostician" and e["backend"] == "bev"]
+            assert stand_in and all(not e["calls"] for e in stand_in)        # no Llama call
+            bev_top = rec["answers"]["root"]["ranking"][0]
+            if rule and rule[0]["model_led"] and bev_top not in flat and len(stand_in) == 1:
+                led += 1
+                assert a["hypotheses"][0]["case_ref"] == bev_top
+    assert led > 0

@@ -440,7 +440,7 @@ class GateMemoryAgent:
         asmt.envelopes.append(env.to_dict())
         rec = {"agent": "bev", "idea": lm["idea"], "mode": lm["mode"],
                "evidence_tick": lm["evidence_tick"], "status": env.status,
-               **{k: lm[k] for k in ("side", "about") if k in lm}}
+               **{k: lm[k] for k in ("side", "about", "regime", "ranked") if k in lm}}
         out = None
         if self._drop_if_stale(result, now_tick):
             rec["why"] = "stale"

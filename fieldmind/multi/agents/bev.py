@@ -294,3 +294,33 @@ def cite_agreement(payload: dict, answers: dict | None) -> float | None:
 def lines_state(lm: dict) -> str:
     """bev's state for explain: the side's fact lines exactly as shown."""
     return "\n".join(lm.get("fact_text") or []) or "(no facts above threshold)"
+
+
+# ----------------------------------------------------------------------
+#  Idea 2, first (and 7, rt_fallback): on a weak or tied tick bev chooses
+#  among the cases the side's prompt shows; with enough probability its
+#  ranking is the side's answer and Llama is not called.
+# ----------------------------------------------------------------------
+def first_questions(agent: "BevAgent", lm: dict) -> dict:
+    """Q_ROOT (the decider's signed sentence) over the side prompt's case
+    lines, keyed by case id. Fewer than two cases: nothing to ask."""
+    from ..compact import first_sentence
+    opts = {c["case_id"]: first_sentence(c.get("root_cause") or "")
+            for c in lm["cases"] if c.get("case_id")}
+    return {"root": choice(agent.q("q_root"), opts)} if len(opts) >= 2 else {}
+
+
+def compose_first(lm: dict, ranking: list[str]) -> dict:
+    """bev's ranking (top 3) as a B' answer over the prompt's case lines, no
+    citations (decision 2: with `explain` on, explain adds them)."""
+    line = {c["case_id"]: i for i, c in enumerate(lm["cases"], 1)}
+    return {"r": [[line[c], []] for c in ranking[:3] if c in line],
+            "sep": None, "n": [], "x": []}
+
+
+def first_envelope(tick: int, payload: dict, bev_env) -> AgentEnvelope:
+    """The side answer bev stands in for. It makes no Llama call: no calls,
+    no tokens (bev's own call is in its bev_first envelope)."""
+    return AgentEnvelope(agent="diagnostician", tick=tick, status="ok", payload=payload,
+                         backend="bev", model=bev_env.model,
+                         tokens={"prefill": 0, "decode": 0})

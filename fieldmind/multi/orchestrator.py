@@ -179,13 +179,21 @@ class MultiOrchestrator:
             with bb.step("scheduler"):
                 jobs = self.diag.make_jobs(bb, self.scheduler, tick_no, level,
                                            self.rung, submit_s)
+            pre = []
+            if self.bev.active("first"):
+                jobs, pre, bev_res = self._first(bb, asmt, jobs, tick_no, now_s)
+                results += bev_res
+            with bb.step("scheduler"):
                 for job in jobs:
                     self.scheduler.submit(job)
                 bb.write("jobs", [j.to_dict() for j in jobs], "scheduler")
                 got = self.scheduler.run_lockstep(now_s)
+            if self.bev.active("first"):
+                self._first_agreement(got)
+            got = pre + got
             # Phase 3 with split_on_change: a tick whose sides are all unchanged
             # makes no diagnosis call; llm_invoked is then set by the verifier
-            llm_used = bool(jobs)
+            llm_used = bool(jobs) or bool(pre)
             self._take_skips()
             results += got
             if self.bev.active("explain"):
@@ -403,6 +411,66 @@ class MultiOrchestrator:
                 rec["cite_agreement"] = bevmod.cite_agreement(r.envelope.payload, answers)
                 self.bev.stats["explain"]["shadow"] += 1
         return list(done.values())
+
+    def _first(self, bb, asmt, jobs, tick_no: int, now_s: float):
+        """Idea 2 (reports/bev_ideas.md): on a weak or tied tick (belief alone,
+        merge_rules.regime) ask bev to choose among each side prompt's cases.
+        on: when its top probability >= first_threshold, its ranking is that
+        side's answer (no citations; explain adds them) and the side's Llama
+        job is not submitted. shadow: logged; Llama runs as usual and its top
+        case is compared afterwards. Returns (jobs to submit, stand-in
+        results, bev results)."""
+        from . import merge_rules
+        from .jobs import Result
+        live = [h for h in bb.read("belief") if not h.retired]
+        reg = merge_rules.regime(live)
+        if reg not in ("weak", "tie"):
+            return jobs, [], []
+        asks = []
+        for j in jobs:
+            qs = bevmod.first_questions(self.bev, j.line_map)
+            if qs:
+                asks.append((j, self.bev.make_job(
+                    bb, self.scheduler, "first", tick_no, bevmod.lines_state(j.line_map), qs,
+                    now_s, meta={"side": j.line_map["side"], "regime": reg},
+                    side=j.line_map["side"] or "all")))
+        done = {x.job.job_id: x for x in
+                self.bev.run_lockstep(bb, self.scheduler, [b for _, b in asks], now_s)}
+        keep, pre = list(jobs), []
+        self._first_pending = {}
+        for j, b in asks:
+            with bb.step("gate"):
+                answers = self.gate.fold_bev(bb, asmt, done[b.job_id], tick_no, self.bev)
+            rec = self.gate.compact_log[-1]
+            if not answers:
+                continue
+            ranking, p = answers["root"]["ranking"], answers["root"]["p"]
+            rec["p_top"] = p[ranking[0]]
+            if self.bev.used("first") and p[ranking[0]] >= self.bev.first_threshold:
+                keep.remove(j)
+                env = bevmod.first_envelope(tick_no, bevmod.compose_first(j.line_map, ranking),
+                                            done[b.job_id].envelope)
+                pre.append(Result(job=j, envelope=env, evidence_tick=j.evidence_tick, lane=None,
+                                  queue_wait_ms=0.0, start_s=None, finish_s=None,
+                                  tick_epoch_s=now_s))
+                rec["replaced_llama"] = True
+                self.bev.stats["first"]["used"] += 1
+            else:
+                rec["replaced_llama"] = False
+                self.bev.stats["first"]["shadow" if not self.bev.used("first") else "below_threshold"] += 1
+                self._first_pending[j.job_id] = (rec, ranking[0])
+        return keep, pre, list(done.values())
+
+    def _first_agreement(self, got) -> None:
+        """first, Llama called anyway: does Llama's top case equal bev's?"""
+        pend = getattr(self, "_first_pending", {})
+        for r in got:
+            if r.job.job_id in pend and r.envelope.status == "ok":
+                rec, bev_top = pend[r.job.job_id]
+                lines = bevmod.ranked_lines(r.envelope.payload, len(r.job.line_map["cases"]))
+                llama_top = r.job.line_map["cases"][lines[0] - 1]["case_id"] if lines else None
+                rec["llama_top"], rec["agree_top"] = llama_top, llama_top == bev_top
+        self._first_pending = {}
 
     def _take_skips(self) -> None:
         """clear_skip records of this tick into the gate's log and the bev stats."""
