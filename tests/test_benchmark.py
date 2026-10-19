@@ -157,3 +157,78 @@ def test_single_agent_ticks_show_diagnosis_and_verifier_calls(tmp_path):
     n_env = sum(e["agent"] in ("diagnostician", "verifier") for a in recs for e in a["envelopes"])
     assert len(model["jobs"]) == n_env > 0
     assert {j["agent"] for j in model["jobs"]} <= {"diagnostician", "verifier"}
+
+
+# ---------------------------------------------------------------- --arch bev
+@pytest.fixture(scope="module")
+def bev(tmp_path_factory):
+    root = tmp_path_factory.mktemp("bev")
+    p = bench(root, "b", "dev_A01_fcv_seize", "--arch", "bev", "--backend", "mock", "--plain")
+    assert p.returncode == 0, p.stdout[-2000:] + p.stderr[-2000:]
+    return root / "b"
+
+
+@needs_dev
+def test_bev_arch_saves_bev_files_with_the_deciders_counts(bev):
+    t = json.loads((bev / "test.json").read_text())
+    p = t["params"]
+    assert p["arch"] == "bev" and p["overlay"] == "configs/bev3.yaml" and p["bev_device"] == "npu"
+    assert p["models"]["bev"] == "bev-decider-0.4B-backbone-Q8_0.gguf" and p["merge_rule"] == "hybrid"
+    assert [(r["stem"], r["status"]) for r in t["runs"]] == [("dev_A01_fcv_seize_bev", "done")]
+    s = json.loads((bev / "dev_A01_fcv_seize_bev.summary.json").read_text())
+    run = json.loads(gzip.decompress((bev / "dev_A01_fcv_seize_bev.run.json.gz").read_bytes()))
+    n_env = sum(e["agent"] == "decider" for a in run["assessments"] for e in a["envelopes"])
+    # counted two ways: the agent's own counters and the envelopes in the run file
+    assert s["calls"]["decider"]["calls"] == n_env == s["calls"]["by_agent"]["decider"]["calls"] > 0
+    assert s["calls"]["decider"]["failed"] == 0
+    assert s["meta"]["replay_reproduces_published"] is True
+    res = (bev / "RESULTS.md").read_text()
+    assert "decider calls / failed / rejected" in res and f"| {n_env} / 0 / 0 |" in res
+    assert "| yes |" in res
+
+
+@needs_dev
+def test_bev_monitor_shows_the_decider_and_its_picks(bev):
+    from bench.stage_monitor_multi import header
+    recs = _records(bev, "dev_A01_fcv_seize_bev")
+    truth = load_truth(episode_dir("dev_A01_fcv_seize"))
+    model = build(recs, truth)
+    assert model["arch"] == "bev" and "decide·bev" in header("bev") and "rule" in header("bev")
+    jobs = [j for j in model["jobs"] if j["agent"] == "decider"]
+    envs = [e for a in recs for e in a["envelopes"] if e["agent"] == "decider"]
+    assert len(jobs) == len(envs) > 0
+    assert sum(j["in_tok"] for j in jobs) == sum(e["tokens"]["prefill"] for e in envs)
+    accepted = {c["evidence_tick"] for a in recs for c in a["multi"]["compact"]
+                if c.get("agent") == "decider" and c.get("ranking")}
+    scored = {r["tick"] for r in model["rows"] if r["acc"]["scored"]}
+    # a dec mark on exactly the scored ticks with an accepted decider answer
+    assert {r["tick"] for r in model["rows"] if r["dec"]} == accepted & scored
+    assert any(r["rule"] for r in model["rows"])
+
+
+def test_bev_settings_are_refused_where_they_do_not_fit(tmp_path):
+    p = bench(tmp_path, "x", "ep_N01_normal", "--backend", "mock", "--overlay", "configs/bev3.yaml")
+    assert p.returncode != 0 and "use --arch bev" in p.stderr
+    p = bench(tmp_path, "x", "ep_N01_normal", "--backend", "mock", "--arch", "bev",
+              "--overlay", "configs/v3.yaml")
+    assert p.returncode != 0 and "decider on" in p.stderr
+    p = bench(tmp_path, "x", "ep_N01_normal", "--backend", "mock", "--arch", "bev",
+              "--mode", "realtime")
+    assert p.returncode != 0 and "multi-agent only" in p.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_failed_decider_call_rejects_the_run_a_gate_rejection_does_not():
+    from bench.benchmark import decider_problem
+    ok = {"by_agent": {}, "decider": {"calls": 12, "failed": 0, "rejected": 3}}
+    assert decider_problem(ok) is None
+    assert decider_problem({**ok, "decider": {"calls": 0, "failed": 0, "rejected": 0}}) is None
+    assert "failed" in decider_problem({**ok, "decider": {"calls": 12, "failed": 1, "rejected": 0}})
+    assert decider_problem({"by_agent": {}}) is not None
+
+
+@needs_dev
+def test_older_test_settings_are_unchanged_by_the_bev_arch(first):
+    d, _ = first
+    p = json.loads((d / "test.json").read_text())["params"]
+    assert "bev_device" not in p and set(p["models"]) == {"npu", "cpu"}
