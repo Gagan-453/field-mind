@@ -1,0 +1,148 @@
+{
+ "meta": {
+  "test": "six_episodes",
+  "episode": "ep_B01_tube_leak",
+  "run": 1,
+  "params": {
+   "arch": "multi",
+   "mode": "lockstep",
+   "tick_s": null,
+   "overlay": "configs/fast.yaml",
+   "overlay_sha256": "99d35703d526fc77",
+   "merge_rule": "model",
+   "backend": "llamaserver",
+   "models": {
+    "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+    "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf"
+   },
+   "prompts_saved": true
+  },
+  "started": "2026-10-12T14:48:52+0530",
+  "finished": "2026-10-12T14:54:08+0530",
+  "wall_s": 240.6,
+  "git": {
+   "commit": "71adaa0",
+   "branch": "bev-decider-3",
+   "uncommitted_changes": true
+  },
+  "chip_c_before": 37.8,
+  "chip_c_after": 54.6,
+  "cool_wait_s": 45,
+  "where": "agent code on the laptop, model calls on the board",
+  "energy_mwh": null
+ },
+ "evaluation": {
+  "episode_id": "ep_B01_tube_leak",
+  "family": "B",
+  "tier": "C",
+  "backend": "llamaserver",
+  "ablate_text": false,
+  "T1_state": {
+   "per_state_f1": {
+    "NORMAL": 0.988,
+    "DEVIATION": 0.0,
+    "DEGRADED": 0.0,
+    "ALARM": 0.0,
+    "TRIP_IMMINENT": 0.0
+   },
+   "macro_f1": 0.494,
+   "confusion": {
+    "NORMAL->NORMAL": 41,
+    "DEVIATION->NORMAL": 1,
+    "DEVIATION->ALARM": 128
+   }
+  },
+  "T2_root_cause": {
+   "applicable": true,
+   "heldout": false,
+   "target": "RCA-11",
+   "true_group": "RCA-11",
+   "n_scored": 128,
+   "top1": 0.867,
+   "top3": 0.953,
+   "top1_strict": 0.867,
+   "top3_strict": 0.953,
+   "group_top1": 0.867,
+   "sep_named": 0.867,
+   "belief_top1": 0.555,
+   "belief_top3": 0.703,
+   "belief_top1_tiefair": 0.326,
+   "belief_group": 0.555,
+   "belief_group_tiefair": 0.326,
+   "belief_top_tie_rate": 0.492,
+   "low_conf_rate": null,
+   "low_conf_rate_decision": null
+  },
+  "T3_faithfulness": {
+   "n_citations": 262,
+   "faithfulness": 1.0,
+   "rel": 0.917,
+   "n_rel_citations": 108
+  },
+  "T4_actions": {
+   "applicable": true,
+   "precision": 0.667,
+   "recall": 1.0,
+   "proposed": [
+    "ACT-002",
+    "ACT-009",
+    "ACT-019",
+    "ACT-031",
+    "ACT-040",
+    "ACT-041"
+   ],
+   "expected": [
+    "ACT-002",
+    "ACT-009",
+    "ACT-031",
+    "ACT-040"
+   ]
+  },
+  "T5_false_positives": {
+   "applicable": false
+  },
+  "T6_lead_time": {
+   "applicable": false
+  },
+  "T9_injection": {
+   "applicable": false
+  },
+  "S1_tick_latency_ms_p50": 28.65,
+  "S1_tick_latency_ms_p95": 4525.14,
+  "S4_llm_invocation_rate": 0.435,
+  "S7_deadline_miss_rate": 0.0,
+  "parse_failure_rate": 0.0,
+  "verifier_disagreement_rate": 1.0,
+  "S3_energy_mwh": null
+ },
+ "calls": {
+  "ticks": 170,
+  "by_agent": {
+   "diagnostician": {
+    "calls": 52,
+    "unusable": 0,
+    "tokens_in": 37835,
+    "tokens_out": 1480,
+    "median_call_s": 2.65
+   },
+   "verifier": {
+    "calls": 45,
+    "unusable": 0,
+    "tokens_in": 18165,
+    "tokens_out": 1128,
+    "median_call_s": 1.82
+   },
+   "text_reader": {
+    "calls": 5,
+    "unusable": 0,
+    "tokens_in": 2017,
+    "tokens_out": 93,
+    "median_call_s": 1.93
+   }
+  },
+  "calls": 102,
+  "unusable": 0,
+  "tokens_in": 58017,
+  "tokens_out": 2701
+ }
+}

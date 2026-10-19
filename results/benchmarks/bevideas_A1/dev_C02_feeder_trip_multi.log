@@ -1,0 +1,36 @@
+=== dev_C02_feeder_trip run 1 of test bevideas_A1, started 2026-10-19T15:47:35+0530
+backend = llamaserver
+
+  chip temp start {'t': '2026-10-19T15:50:05+0530', 'cpu_max_c': 47.1, 'npu_max_c': 44.8, 'n_zones': 75}  end {'t': '2026-10-19T15:52:53+0530', 'cpu_max_c': 73.3, 'npu_max_c': 70.6, 'n_zones': 75}
+dev_C02_feeder_trip            F1=0.74 top1= 0.39 top3=0.727 faith=0.94 llm=0.44 lead=- p95=5779ms
+
+==================================================================
+AGGREGATE
+==================================================================
+  n_episodes                         1
+  Q1_macro_f1                        0.743
+  Q2_top1                            0.39
+  Q2_top3                            0.727
+  Q2_n_episodes_scored               1
+  Q2_library                         {'n_episodes': 1, 'top1': 0.39, 'top3': 0.727, 'group_top1': 0.429, 'sep_named': 0.429, 'belief_top1': 0.61, 'belief_top1_tiefair': 0.305, 'belief_top3': 0.727, 'belief_group': 0.909, 'belief_group_tiefair': 0.805, 'belief_top_tie_rate': 0.818, 'low_conf_rate': None, 'low_conf_rate_decision': None}
+  Q2_heldout                         {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}
+  Q2_by_family                       {'A': {'library': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}, 'heldout': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}}, 'B': {'library': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}, 'heldout': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}}, 'C': {'library': {'n_episodes': 1, 'top1': 0.39, 'top3': 0.727, 'group_top1': 0.429, 'sep_named': 0.429, 'belief_top1': 0.61, 'belief_top1_tiefair': 0.305, 'belief_top3': 0.727, 'belief_group': 0.909, 'belief_group_tiefair': 0.805, 'belief_top_tie_rate': 0.818, 'low_conf_rate': None, 'low_conf_rate_decision': None}, 'heldout': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}}, 'D': {'library': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}, 'heldout': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}}, 'E': {'library': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}, 'heldout': {'n_episodes': 0, 'top1': None, 'top3': None, 'group_top1': None, 'sep_named': None, 'belief_top1': None, 'belief_top1_tiefair': None, 'belief_top3': None, 'belief_group': None, 'belief_group_tiefair': None, 'belief_top_tie_rate': None, 'low_conf_rate': None, 'low_conf_rate_decision': None}}}
+  Q2_heldout_cases_with_episodes     []
+  Q2_heldout_cases_without_episodes  ['RCA-02', 'RCA-06', 'RCA-08', 'RCA-12', 'RCA-17']
+  Q2_episodes_not_applicable         []
+  Q3_faithfulness                    0.935
+  Q3_rel                             0.518
+  Q4_action_precision                0.333
+  Q4_action_recall                   1.0
+  Q4_n_episodes_scored               1
+  Q5_fp_per_hour                     None
+  Q6_lead_time_min_mean              None
+  Q6_n_faults_caught_before_trip     0
+  S4_llm_invocation_rate             0.44
+  S7_deadline_miss_rate              0.0
+  constraints:
+    C1_hard_deadline_misses_zero     PASS
+    C3_top3_ge_0.85                  FAIL
+    C4_faithfulness_ge_0.95          FAIL
+
+written to /home/pranavgangwal/fieldmind/results/benchmarks/bevideas_A1/.tmp_dev_C02_feeder_trip_multi/summary_llamaserver_dev_C02_feeder_trip.json

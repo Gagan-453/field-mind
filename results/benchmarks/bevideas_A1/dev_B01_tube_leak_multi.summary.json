@@ -1,0 +1,196 @@
+{
+ "meta": {
+  "test": "bevideas_A1",
+  "episode": "dev_B01_tube_leak",
+  "run": 1,
+  "params": {
+   "arch": "multi",
+   "mode": "lockstep",
+   "tick_s": null,
+   "overlay": "configs/bev_ideas.yaml",
+   "overlay_sha256": "194387069d0771ef",
+   "merge_rule": "hybrid",
+   "backend": "llamaserver",
+   "models": {
+    "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+    "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf",
+    "bev": "bev-decider-0.4B-backbone-Q8_0.gguf"
+   },
+   "prompts_saved": true,
+   "bev_device": "npu"
+  },
+  "started": "2026-10-19T15:32:45+0530",
+  "finished": "2026-10-19T15:39:03+0530",
+  "wall_s": 186.1,
+  "git": {
+   "commit": "41e2bd0",
+   "branch": "bev-ideas",
+   "uncommitted_changes": false
+  },
+  "chip_c_before": 42.0,
+  "chip_c_after": 60.6,
+  "cool_wait_s": 135,
+  "where": "agent code on the laptop, model calls on the board",
+  "energy_mwh": null,
+  "resources": {
+   "samples": 41,
+   "duration_s": 183.8,
+   "clk_tck": 100,
+   "processes": {
+    "bev": {
+     "process": "bev-decide",
+     "cpu_s": 0.06,
+     "cores_busy_mean": 0.0,
+     "peak_rss_mb": 967.8
+    },
+    "cpu": {
+     "process": "llama-server",
+     "cpu_s": 66.79,
+     "cores_busy_mean": 0.363,
+     "peak_rss_mb": 1561.5
+    },
+    "npu": {
+     "process": "llama-server",
+     "cpu_s": 231.55,
+     "cores_busy_mean": 1.26,
+     "peak_rss_mb": 533.7
+    }
+   },
+   "cpu_busy_pct": 31.4,
+   "freq": {
+    "policy0": {
+     "mean_mhz": 1537.9,
+     "max_mhz": 2265.6
+    },
+    "policy2": {
+     "mean_mhz": 1680.7,
+     "max_mhz": 3148.8
+    },
+    "policy5": {
+     "mean_mhz": 1350.1,
+     "max_mhz": 2956.8
+    },
+    "policy7": {
+     "mean_mhz": 846.7,
+     "max_mhz": 3187.2
+    }
+   },
+   "temps": {
+    "cpu_max_c": 95.4,
+    "npu_max_c": 96.5,
+    "n_zones": 3075
+   },
+   "supply_power": null,
+   "sampler_cpu_s": 136.4,
+   "npu_counter": null
+  }
+ },
+ "evaluation": {
+  "episode_id": "dev_B01_tube_leak",
+  "family": "B",
+  "tier": "C",
+  "backend": "llamaserver",
+  "ablate_text": false,
+  "T1_state": {
+   "per_state_f1": {
+    "NORMAL": 0.95,
+    "DEVIATION": 0.0,
+    "DEGRADED": 0.0,
+    "ALARM": 0.0,
+    "TRIP_IMMINENT": 0.0
+   },
+   "macro_f1": 0.475,
+   "confusion": {
+    "NORMAL->NORMAL": 38,
+    "DEVIATION->NORMAL": 4,
+    "DEVIATION->ALARM": 128
+   }
+  },
+  "T2_root_cause": {
+   "applicable": true,
+   "heldout": false,
+   "target": "RCA-11",
+   "true_group": "RCA-11",
+   "n_scored": 128,
+   "top1": 0.953,
+   "top3": 0.984,
+   "top1_strict": 0.953,
+   "top3_strict": 0.984,
+   "group_top1": 0.953,
+   "sep_named": 0.953,
+   "belief_top1": 0.469,
+   "belief_top3": 0.508,
+   "belief_top1_tiefair": 0.352,
+   "belief_group": 0.469,
+   "belief_group_tiefair": 0.352,
+   "belief_top_tie_rate": 0.641,
+   "low_conf_rate": null,
+   "low_conf_rate_decision": null
+  },
+  "T3_faithfulness": {
+   "n_citations": 373,
+   "faithfulness": 1.0,
+   "rel": 0.914,
+   "n_rel_citations": 116
+  },
+  "T4_actions": {
+   "applicable": true,
+   "precision": 0.571,
+   "recall": 1.0,
+   "proposed": [
+    "ACT-002",
+    "ACT-009",
+    "ACT-019",
+    "ACT-024",
+    "ACT-025",
+    "ACT-031",
+    "ACT-040"
+   ],
+   "expected": [
+    "ACT-002",
+    "ACT-009",
+    "ACT-031",
+    "ACT-040"
+   ]
+  },
+  "T5_false_positives": {
+   "applicable": false
+  },
+  "T6_lead_time": {
+   "applicable": false
+  },
+  "T9_injection": {
+   "applicable": false
+  },
+  "S1_tick_latency_ms_p50": 48.58,
+  "S1_tick_latency_ms_p95": 3080.66,
+  "S4_llm_invocation_rate": 0.353,
+  "S7_deadline_miss_rate": 0.0,
+  "parse_failure_rate": 0.0,
+  "verifier_disagreement_rate": 1.0,
+  "S3_energy_mwh": null
+ },
+ "calls": {
+  "ticks": 170,
+  "by_agent": {
+   "diagnostician": {
+    "calls": 58,
+    "unusable": 0,
+    "tokens_in": 43490,
+    "tokens_out": 1639,
+    "median_call_s": 2.72
+   },
+   "verifier": {
+    "calls": 7,
+    "unusable": 0,
+    "tokens_in": 2827,
+    "tokens_out": 177,
+    "median_call_s": 1.86
+   }
+  },
+  "calls": 65,
+  "unusable": 0,
+  "tokens_in": 46317,
+  "tokens_out": 1816
+ }
+}

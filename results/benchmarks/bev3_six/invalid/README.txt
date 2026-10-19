@@ -1,0 +1,1 @@
+Moved here on 2026-10-19: ep_A01_fcv_seize_bev ran without the CPU lane (runner bug: --arch bev started only the NPU lane), so all 18 verifier calls failed. Not a valid bev3 run. The ranking is unaffected (the verifier never reorders), but confidences and the configuration are not bev3's.

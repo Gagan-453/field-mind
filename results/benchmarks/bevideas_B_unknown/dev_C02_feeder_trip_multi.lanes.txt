@@ -1,0 +1,21 @@
+== npu (Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf)
+0.00.055.047 I cmn  common_param: system_info: n_threads = 8 (n_threads_batch = 8) / 8 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | REPACK = 1 | 
+0.00.322.322 I load_tensors: offloading output layer to GPU
+0.00.322.351 I load_tensors: offloading 27 repeating layers to GPU
+0.00.322.353 I load_tensors: offloaded 29/29 layers to GPU
+0.00.322.361 I load_tensors:         HTP0 model buffer size =  1911.90 MiB
+0.01.856.382 I cmn          init: llama threadpool init, n_threads = 8
+0.02.009.527 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'
+== cpu (gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf)
+0.00.027.107 I cmn  common_param: system_info: n_threads = 6 (n_threads_batch = 6) / 8 | CPU : NEON = 1 | ARM_FMA = 1 | FP16_VA = 1 | MATMUL_INT8 = 1 | DOTPROD = 1 | REPACK = 1 | 
+0.00.303.726 I load_tensors: offloading 0 repeating layers to GPU
+0.00.303.729 I load_tensors: offloaded 0/27 layers to GPU
+0.00.590.938 I cmn          init: llama threadpool init, n_threads = 6
+0.00.656.777 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'
+== bev (bev-decider-0.4B-backbone-Q8_0.gguf, npu)
+load_tensors: offloaded 21/21 layers to GPU
+load_tensors:         HTP0 model buffer size =   476.58 MiB
+llama_kv_cache:       HTP0 KV buffer size =   320.00 MiB
+sched_reserve:       HTP0 compute buffer size =   298.75 MiB
+bev-decide: model /data/local/tmp/llm/bev-decider-0.4B-backbone-Q8_0.gguf, device HTP0, ngl 99, n_ctx 4096, n_seq_max 18, hidden 1024
+bev-decide: listening on 0.0.0.0:8082

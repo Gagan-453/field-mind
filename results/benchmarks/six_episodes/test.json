@@ -1,0 +1,128 @@
+{
+ "name": "six_episodes",
+ "created": "2026-10-12T14:44:05+0530",
+ "params": {
+  "arch": "multi",
+  "mode": "lockstep",
+  "tick_s": null,
+  "overlay": "configs/fast.yaml",
+  "overlay_sha256": "99d35703d526fc77",
+  "merge_rule": "model",
+  "backend": "llamaserver",
+  "models": {
+   "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+   "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf"
+  },
+  "prompts_saved": true
+ },
+ "runs": [
+  {
+   "episode": "ep_N01_normal",
+   "run": 1,
+   "stem": "ep_N01_normal_multi",
+   "status": "done",
+   "started": "2026-10-12T14:44:10+0530",
+   "git": {
+    "commit": "71adaa0",
+    "branch": "bev-decider-3",
+    "uncommitted_changes": true
+   },
+   "chip_c_before": 32.5,
+   "cool_wait_s": 0,
+   "wall_s": 17.0,
+   "chip_c_after": 42.2,
+   "exit_code": 0,
+   "finished": "2026-10-12T14:44:46+0530"
+  },
+  {
+   "episode": "ep_A01_fcv_seize",
+   "run": 1,
+   "stem": "ep_A01_fcv_seize_multi",
+   "status": "done",
+   "started": "2026-10-12T14:44:46+0530",
+   "git": {
+    "commit": "71adaa0",
+    "branch": "bev-decider-3",
+    "uncommitted_changes": true
+   },
+   "chip_c_before": 35.9,
+   "cool_wait_s": 15,
+   "wall_s": 209.1,
+   "chip_c_after": 52.7,
+   "exit_code": 0,
+   "finished": "2026-10-12T14:48:52+0530"
+  },
+  {
+   "episode": "ep_B01_tube_leak",
+   "run": 1,
+   "stem": "ep_B01_tube_leak_multi",
+   "status": "done",
+   "started": "2026-10-12T14:48:52+0530",
+   "git": {
+    "commit": "71adaa0",
+    "branch": "bev-decider-3",
+    "uncommitted_changes": true
+   },
+   "chip_c_before": 37.8,
+   "cool_wait_s": 45,
+   "wall_s": 240.6,
+   "chip_c_after": 54.6,
+   "exit_code": 0,
+   "finished": "2026-10-12T14:54:08+0530"
+  },
+  {
+   "episode": "ep_C01_wet_coal",
+   "run": 1,
+   "stem": "ep_C01_wet_coal_multi",
+   "status": "done",
+   "started": "2026-10-12T14:54:08+0530",
+   "git": {
+    "commit": "71adaa0",
+    "branch": "bev-decider-3",
+    "uncommitted_changes": true
+   },
+   "chip_c_before": 37.8,
+   "cool_wait_s": 60,
+   "wall_s": 98.0,
+   "chip_c_after": 51.3,
+   "exit_code": 0,
+   "finished": "2026-10-12T14:57:20+0530"
+  },
+  {
+   "episode": "ep_D01_high_cv_coal",
+   "run": 1,
+   "stem": "ep_D01_high_cv_coal_multi",
+   "status": "done",
+   "started": "2026-10-12T14:57:20+0530",
+   "git": {
+    "commit": "71adaa0",
+    "branch": "bev-decider-3",
+    "uncommitted_changes": true
+   },
+   "chip_c_before": 37.2,
+   "cool_wait_s": 45,
+   "wall_s": 342.1,
+   "chip_c_after": 55.4,
+   "exit_code": 0,
+   "finished": "2026-10-12T15:04:17+0530"
+  },
+  {
+   "episode": "ep_E01_fouling_drift",
+   "run": 1,
+   "stem": "ep_E01_fouling_drift_multi",
+   "status": "done",
+   "started": "2026-10-12T15:04:17+0530",
+   "git": {
+    "commit": "71adaa0",
+    "branch": "bev-decider-3",
+    "uncommitted_changes": true
+   },
+   "chip_c_before": 37.6,
+   "cool_wait_s": 60,
+   "wall_s": 27.0,
+   "chip_c_after": 48.0,
+   "exit_code": 0,
+   "finished": "2026-10-12T15:06:19+0530"
+  }
+ ]
+}

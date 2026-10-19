@@ -1,0 +1,3 @@
+{"episode": "batch", "when": "start", "t": "2026-10-08T16:45:19+0530", "max_c": 30.5, "cool_wait_s": null}
+{"episode": "ep_A01_fcv_seize", "when": "before", "t": "2026-10-08T16:45:31+0530", "max_c": 29.7, "cool_wait_s": 0}
+{"episode": "ep_A01_fcv_seize", "when": "after", "t": "2026-10-08T16:46:46+0530", "max_c": 61.2, "cool_wait_s": null}
