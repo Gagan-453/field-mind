@@ -39,6 +39,12 @@ its model answers are in: cells then show each call's real time (envelope
 latency_ms; the scheduler's job times are a simulated clock in that mode).
 Single agent: the diagnostician and verifier run one after the other on the
 NPU lane; the "code" column is the tick's time minus its model calls.
+bev (multi-agent + the bev-decider System One model, lockstep): a third unit,
+BEV (bev-decide on port 8082; it reports health only, not busy), a
+`decide·bev` cell per tick (call time, input tokens, accepted by the gate or
+not), the merge rule's regime (`rule`) and whether the decider's own pick was
+right (`dec`), so a row reads in pipeline order: code, diagnosis, decider,
+merge rule, verifier, published rank-1.
 Laptop times of the tick code are not board times.
 =============================================================================
 """
@@ -62,22 +68,47 @@ sys.path.insert(0, str(ROOT))
 
 BENCH_DIR = ROOT / "results/benchmarks"        # bench/benchmark.py: one folder per test
 COLS = {"multi": ("diag_water", "diag_heat", "verifier", "text_reader"),
-        "single": ("diagnostician", "verifier")}
+        "single": ("diagnostician", "verifier"),
+        # bev: the tick's stages in pipeline order -- diagnosis, the System One
+        # decider, (merge rule: the `rule` column), verifier, note reader
+        "bev": ("diag_water", "diag_heat", "decider", "verifier", "text_reader"),
+        # bevideas: the bev-ideas branch's switches (explain, first, verifier, notes, ...):
+        # every bev-decide call of the tick in one column
+        "bevideas": ("diag_water", "diag_heat", "bev", "verifier", "text_reader")}
 LABEL = {"diag_water": "water diagnosis", "diag_heat": "heat diagnosis",
          "verifier": "verifier", "text_reader": "note reader",
-         "diagnostician": "diagnosis"}
+         "diagnostician": "diagnosis", "decider": "decider (System One)",
+         "bev": "bev ideas (System One)"}
 HEAD = {"diag_water": "water·NPU", "diag_heat": "heat·NPU", "verifier": "verify·CPU",
-        "text_reader": "notes·CPU", "diagnostician": "diagnose·NPU"}
+        "text_reader": "notes·CPU", "diagnostician": "diagnose·NPU", "decider": "decide·bev", "bev": "bev·ideas"}
 HEAD_SINGLE = {"verifier": "verify·NPU"}
 CELL_W = 14
 HARD_LIMIT_MS = 200          # CITED: CLAUDE.md, the hard path's limit per tick
 TICK_S_AGENT = 30.0          # CITED: configs/base.yaml agent.tick_period_s (evaluator uses 30)
 ANSI = {"reset": "\033[0m", "bold": "\033[1m", "dim": "\033[2m", "yellow": "\033[33m",
-        "green": "\033[32m", "magenta": "\033[35m", "red": "\033[31m", "cyan": "\033[36m"}
+        "green": "\033[32m", "magenta": "\033[35m", "cyan": "\033[36m",
+        "teal": "\033[38;5;37m"}   # no red, ever: problems are marked, not alarmed
+UNUSED_MARK = "•"            # a call on this tick whose answer was not used (✗ or ~ in its cell)
 
 
 def _c(text: str, *styles: str) -> str:
     return "".join(ANSI[s] for s in styles) + text + ANSI["reset"] if styles else text
+
+
+def _paint(text: str, base: tuple, spans: list, colour: bool) -> str:
+    """`text` in the `base` style, with [start, end) spans in their own style
+    (clipped to the text, which may have been cut to the screen width)."""
+    if not colour:
+        return text
+    seg = lambda t, st: _c(t, *st) if st and t else t
+    out, pos = [], 0
+    for a, b, st in sorted(spans):
+        a, b = max(a, pos), min(b, len(text))
+        if a >= b:
+            continue
+        out += [seg(text[pos:a], base), seg(text[a:b], st)]
+        pos = b
+    return "".join(out) + seg(text[pos:], base)
 
 
 def _clock(s: float) -> str:
@@ -144,6 +175,23 @@ def tick_accuracy(d: dict, truth: dict | None) -> dict:
     return out
 
 
+def decider_pick(d: dict) -> str | None:
+    """The decider's choice on this tick (the gate's record), or None."""
+    for c in (d.get("multi") or {}).get("compact", []):
+        if c.get("agent") == "decider" and c.get("ranking"):
+            return c.get("choice") or c["ranking"][0]
+    return None
+
+
+def rule_info(d: dict) -> str:
+    """The merge rule's regime on this tick (hybrid): clear, tie or weak, with
+    '+' when the diagnosticians' picks led the ranking. '' without a record."""
+    for c in (d.get("multi") or {}).get("compact", []):
+        if c.get("agent") == "rule" and c.get("regime"):
+            return c["regime"] + ("+" if c.get("model_led") else "")
+    return ""
+
+
 def running_scores(records: list[dict], truth: dict | None) -> dict | None:
     """The evaluator's own T2 / T5 on the ticks so far."""
     if truth is None or not records:
@@ -160,7 +208,15 @@ def running_scores(records: list[dict], truth: dict | None) -> dict | None:
 #  The tick file -> rows and jobs
 # ===========================================================================
 def arch_of(records: list[dict]) -> str:
-    return "multi" if records and "multi" in records[0] else "single"
+    """single, multi, or bev (a multi-agent run in which the decider answered)."""
+    if not records or "multi" not in records[0]:
+        return "single"
+    if any(e.get("agent") == "decider" for d in records for e in d.get("envelopes") or []):
+        return "bev"
+    if any(e.get("agent") == "bev" for d in records
+           for e in (d.get("envelopes") or []) + ((d.get("multi") or {}).get("bev_shadow") or [])):
+        return "bevideas"
+    return "multi"
 
 
 def is_lockstep(records: list[dict]) -> bool:
@@ -191,7 +247,11 @@ def build(records: list[dict], truth: dict | None = None) -> dict:
         row = {"tick": d["tick"], "plant": str(d.get("timestamp", ""))[11:19],
                "state": d.get("state", ""), "triage": d.get("triage", ""),
                "p0_ms": p0, "cause": hyp[0]["cause"] if hyp else "",
-               "reused": set(), **{"acc": tick_accuracy(d, truth)}}
+               "reused": set(), "rule": rule_info(d), "dec": "",
+               **{"acc": tick_accuracy(d, truth)}}
+        pick = decider_pick(d)
+        if pick is not None and row["acc"]["scored"]:
+            row["dec"] = _mark(pick, truth)
         rows.append(row)
         if arch == "single":
             jobs.update(_single_jobs(d))
@@ -229,6 +289,8 @@ def build(records: list[dict], truth: dict | None = None) -> dict:
                 verdict[("diag_" + str(c.get("side")), c["evidence_tick"])] = v
             elif c.get("agent") == "verifier":
                 verdict[("verifier", c["evidence_tick"])] = "ok" if "answer" in c else "bad"
+            elif c.get("agent") == "decider":
+                verdict[("decider", c["evidence_tick"])] = "ok" if c.get("ranking") else "bad"
     for j in jobs.values():
         if j["verdict"] is None:
             j["verdict"] = verdict.get((j["agent"], j["tick"]))
@@ -249,8 +311,8 @@ def _collect_tokens(d: dict, m: dict, tokens: dict) -> None:
     for env, c in zip([e for e in envs if e.get("agent") == "diagnostician"], recs):
         tokens[("diag_" + str(c.get("side")), c.get("evidence_tick"))] = _tok(env)
     for env in envs:
-        if env.get("agent") == "verifier":
-            tokens[("verifier", env.get("tick"))] = _tok(env)
+        if env.get("agent") in ("verifier", "decider"):
+            tokens[(env["agent"], env.get("tick"))] = _tok(env)
     for t in m.get("text", []):
         jid = (t.get("result") or {}).get("job_id")
         if jid:
@@ -286,6 +348,18 @@ def _lockstep_jobs(d: dict, m: dict) -> dict:
             else:
                 add("diag_" + str(c.get("side")), c.get("side"), env,
                     "bad" if not used else "empty" if c.get("empty_ranking") else "ok")
+    queues = {"on": [e for e in envs if e.get("agent") == "bev"],
+              "shadow": [e for e in (m.get("bev_shadow") or []) if e.get("agent") == "bev"]}
+    for c in m.get("compact", []):
+        if c.get("agent") != "bev" or "status" not in c:   # clear_skip records make no call
+            continue
+        q = queues["shadow" if c.get("mode") == "shadow" else "on"]
+        if q:
+            add("bev", c.get("idea"), q.pop(0), "ok" if c.get("answers") is not None else "bad")
+    recs = [c for c in m.get("compact", []) if c.get("agent") == "decider"]
+    for env, c in zip([e for e in envs if e.get("agent") == "decider"], recs):
+        # used = the gate accepted it (every offered case has a probability)
+        add("decider", None, env, "ok" if c.get("ranking") and env.get("status") == "ok" else "bad")
     for t in m.get("text", []):
         add("text_reader", None, t.get("envelope") or {},
             "ok" if (t.get("notefact") or {}).get("status") == "ok" else "bad")
@@ -349,6 +423,10 @@ def cell(row: dict, agent: str, jobs: list[dict], now_s: float,
     if running:
         sent = min((j["sent_s"] for j in running if j.get("sent_s") is not None), default=now_s)
         return f"▶{max(0.0, now_s - sent):.0f}s"
+    if agent == "bev":
+        tot = sum(j["finish_s"] - j["start_s"] for j in mine)
+        bad = sum(j["verdict"] in ("bad", "stale") for j in mine)
+        return f"{tot:.1f}s ×{len(mine)}" + ("✓" if not bad else f"✗{bad}")
     run = max(j["finish_s"] - j["start_s"] for j in mine)
     toks = [j.get("in_tok") for j in mine]
     tok = f" {sum(t for t in toks if t)}t" if any(toks) else ""
@@ -364,11 +442,33 @@ def _acc_cells(row: dict) -> tuple[str, str, str]:
 # ===========================================================================
 #  The screen
 # ===========================================================================
+def _row_text(arch: str, tick: str, mark: str, plant: str, state: str, triage: str, code: str,
+              cells: list[str], rule: str, pub: str, bel: str, dec: str, conf: str,
+              cause: str) -> tuple[str, list]:
+    """One tick-table line and the [start, end) spans of the bev columns
+    (the decider's cell and the `dec` mark), for highlighting."""
+    agents = COLS[arch]
+    line = f"{tick:>5}{mark} {plant:<8}  {state:<13} {triage:<11} {code:>6}  "
+    spans = []
+    for i, (a, x) in enumerate(zip(agents, cells)):
+        if i:
+            line += " "
+        if a in ("decider", "bev"):
+            spans.append((len(line), len(line) + CELL_W))
+        line += f"{x:>{CELL_W}}"
+    bev = arch == "bev"
+    line += (f"  {rule:<6}" if bev else "") + f"  {pub:>3} {bel:>3}"
+    if bev:
+        line += " "
+        spans.append((len(line), len(line) + 3))
+        line += f"{dec:>3}"
+    return line + f" {conf:>4}  {cause}", spans
+
+
 def header(arch: str) -> str:
     heads = [HEAD_SINGLE.get(a, HEAD[a]) if arch == "single" else HEAD[a] for a in COLS[arch]]
-    return (f"{'tick':>5}  {'plant':<8}  {'state':<13} {'triage':<11} {'code':>6}  "
-            + " ".join(f"{h:>{CELL_W}}" for h in heads)
-            + f"  {'pub':>3} {'bel':>3} {'conf':>4}  top cause")
+    return _row_text(arch, "tick", " ", "plant", "state", "triage", "code", heads, "rule",
+                     "pub", "bel", "dec", "conf", "top cause")[0]
 
 
 def _score_line(model: dict, scores: dict | None, truth: dict | None) -> str | None:
@@ -387,9 +487,12 @@ def _score_line(model: dict, scores: dict | None, truth: dict | None) -> str | N
              and r["acc"]["conf"] is not None]
     held = " (held-out case: exact top-1 not applicable)" if t2["heldout"] else \
         f" · exact top-1 {t2['top1']:.2f}"
+    decs = [r["dec"] for r in model["rows"] if r.get("dec")]
     return (f"true cause {t2['target']} · scored ticks {t2['n_scored']} · published group top-1 "
             f"{t2['group_top1']:.2f} · belief alone {t2['belief_group']:.2f}{held}"
-            + (f" · mean shown confidence {statistics.mean(confs):.2f}" if confs else ""))
+            + (f" · mean shown confidence {statistics.mean(confs):.2f}" if confs else "")
+            + (f" · decider's pick right {sum(x in ('✓', '≈') for x in decs)}/{len(decs)}"
+               if decs else ""))
 
 
 def render(model: dict, meta: dict, slots: dict, now_s: float,
@@ -403,7 +506,9 @@ def render(model: dict, meta: dict, slots: dict, now_s: float,
     rows, jobs, placement = model["rows"], model["jobs"], meta["placement"]
     done = [j for j in jobs if j.get("finish_s") is not None]
     out = [c(line[:cols - 1], "cyan") for line in (top or [])]
-    who = "multi-agent" if arch == "multi" else "single agent"
+    who = {"multi": "multi-agent", "single": "single agent",
+           "bev": "multi-agent + bev-decider (System One)",
+           "bevideas": "multi-agent + bev ideas (System One)"}[arch]
     out.append(c(f"FieldMind stage monitor, {who}   {meta['episode']}   "
                  f"{'FINISHED' if meta.get('finished') else 'elapsed ' + _clock(now_s)}", "bold"))
     last = rows[-1]["tick"] if rows else "-"
@@ -445,16 +550,27 @@ def render(model: dict, meta: dict, slots: dict, now_s: float,
                else f"next tick in {wait:.0f} s"))
     if meta.get("finished"):
         code = "episode finished"
-    out.append(f" {('CODE  ' + meta['host'])[:46]:<46} "
-               + c(code, *(("red",) if worst and worst > HARD_LIMIT_MS else ())))
+    over = bool(worst and worst > HARD_LIMIT_MS)
+    if over and not meta.get("finished"):
+        code += " · OVER the limit on some tick"
+    out.append(f" {('CODE  ' + meta['host'])[:46]:<46} " + c(code, *(("bold",) if over else ())))
     for lane in meta.get("lanes", ("npu", "cpu")):
         text, working = lane_now(lane, jobs, placement, slots.get(lane), now_s,
                                  nxt if lock else None)
         unit = f"{lane.upper():<5} board · {meta['models'].get(lane, '?')}"
-        if slots.get(lane) is None and meta.get("poll") and not meta.get("finished"):
+        if lane == "bev":
+            # bev-decide reports health only, not whether it is busy
+            up = (meta.get("health") or {}).get("bev")
+            text = ("up (health ok) · one forward pass per decision, no decode" if up else
+                    "NOT ANSWERING /health" if up is False else "health not asked")
+            working = False
+        elif slots.get(lane) is None and meta.get("poll") and not meta.get("finished"):
             text += "   [lane did not answer]"
-        out.append(f" {unit[:46]:<46} "
-                   + c(text, *(("magenta", "bold") if working else ("dim",))))
+        if lane == "bev":
+            out.append(c(f" {unit[:46]:<46} ", "teal", "bold") + c(text, "teal"))
+        else:
+            out.append(f" {unit[:46]:<46} "
+                       + c(text, *(("magenta", "bold") if working else ("dim",))))
         mine = [j for j in done if lane_of(j, placement) == lane]
         if mine:
             j = max(mine, key=lambda j: (j["tick"], j["finish_s"]))
@@ -468,29 +584,45 @@ def render(model: dict, meta: dict, slots: dict, now_s: float,
     out.append("")
 
     # ---- tick list ---------------------------------------------------------
-    out.append(c(header(arch)[:cols - 1], "bold"))
+    head, hspans = _row_text(arch, "tick", " ", "plant", "state", "triage", "code",
+                             [HEAD_SINGLE.get(a, HEAD[a]) if arch == "single" else HEAD[a]
+                              for a in agents], "rule", "pub", "bel", "dec", "conf", "top cause")
+    out.append(_paint(head[:cols - 1], ("bold",), [(a, b, ("teal", "bold")) for a, b in hspans],
+                      colour))
     body = []
     for r in rows:
         cells = [cell(r, a, jobs, now_s, slots.get(placement.get(a))) for a in agents]
         pub, bel, conf = _acc_cells(r)
         code_ms = "" if r["p0_ms"] is None else f"{r['p0_ms']:.0f}ms"
-        line = (f"{r['tick']:>5}  {r['plant']:<8}  {r['state']:<13} {r['triage']:<11} "
-                f"{code_ms:>6}  " + " ".join(f"{x:>{CELL_W}}" for x in cells)
-                + f"  {pub:>3} {bel:>3} {conf:>4}  {r['cause']}")
+        unused = any("✗" in x or "~" in x for x in cells)
+        line, spans = _row_text(arch, r["tick"], UNUSED_MARK if unused else " ", r["plant"],
+                                r["state"], r["triage"], code_ms, cells, r.get("rule", ""),
+                                pub, bel, r.get("dec", ""), conf, r["cause"])
         style = (("yellow", "bold") if any(x.startswith("▶") or x == "answered" for x in cells)
-                 else ("red",) if any("✗" in x or "~" in x for x in cells)
                  else ("dim",) if r["triage"] == "QUIET" else ())
-        body.append((line[:cols - 1], style))
+        teal = ("teal",) + (("dim",) if "dim" in style else ())
+        spans = [(a, b, teal) for a, b in spans] + ([(5, 6, ("dim",))] if unused else [])
+        body.append((line[:cols - 1], style, spans))
     room = max(3, lines - len(out) - 3)
     if len(body) > room:
-        body = [(f"  … {len(body) - room + 1} earlier ticks (all in the tick file)", ("dim",))] \
+        body = [(f"  … {len(body) - room + 1} earlier ticks (all in the tick file)", ("dim",), [])] \
             + body[-(room - 1):]
-    out += [c(line, *style) for line, style in body]
+    out += [_paint(line, style, spans, colour) for line, style, spans in body]
     out.append(c(("cells: ▶ running · answered = waits for the next tick · 2.5s 712t = call time "
                   "and input tokens · ✓ used · ∅ ranked no shown case · ✗ wrong format or failed · "
-                  "~ stale · reuse · · not asked · — quiet   pub/bel: rank-1 published / belief "
+                  f"~ stale · reuse · · not asked · — quiet   {UNUSED_MARK} after the tick: a call's "
+                  "answer was not used   pub/bel: rank-1 published / belief "
                   "alone ✓ true case ≈ its group ✗ wrong pre before onset   conf: shown "
                   "confidence of rank-1")[:cols - 1], "dim"))
+    if arch == "bevideas":
+        out.append(c(("bev·ideas: every bev-decide call of the tick (explain, first, verifier, notes, "
+                      "actions, unknown; shadow calls included): total time ×calls, ✓ all accepted, "
+                      "✗n failed or refused")[:cols - 1], "teal"))
+    if arch == "bev":
+        out.append(c(("decide·bev: the System One decider's call (one forward pass, 0 answer tokens) "
+                      "✓ accepted ✗ failed or refused by the gate   rule: the merge rule's regime "
+                      "(hybrid) clear / tie / weak, + = the diagnosticians' picks led   dec: the "
+                      "decider's own pick ✓ ≈ ✗")[:cols - 1], "teal"))
     return out
 
 
@@ -519,13 +651,22 @@ class Tail:
 class SlotPoller(threading.Thread):
     """Asks each lane's llama-server whether its slot is processing."""
 
-    def __init__(self, urls: dict, period_s: float):
+    def __init__(self, urls: dict, period_s: float, health_only=()):
         super().__init__(daemon=True, name="slot-poller")
         self.urls, self.period_s, self.busy = urls, period_s, {k: None for k in urls}
+        self.health_only = set(health_only)     # lanes asked GET /health only (bev-decide)
+        self.up = {k: None for k in self.health_only}
 
     def run(self) -> None:
         while True:
             for lane, url in self.urls.items():
+                if lane in self.health_only:
+                    try:
+                        with urllib.request.urlopen(url.rstrip("/") + "/health", timeout=1.0) as r:
+                            self.up[lane] = json.load(r).get("status") == "ok"
+                    except Exception:
+                        self.up[lane] = False
+                    continue
                 try:
                     with urllib.request.urlopen(url.rstrip("/") + "/slots", timeout=1.0) as r:
                         self.busy[lane] = any(s.get("is_processing") for s in json.load(r))
@@ -550,7 +691,8 @@ class Screen:
         self.episode = ""
         self.truth = None
         lanes = cfg["multi"]["lanes"]
-        self.models = {k: str(v.get("model_file", "?")).split("-Q4_0")[0] for k, v in lanes.items()}
+        self.models = {k: str(v.get("model_file", "?")).split("-Q4_0")[0].replace(".gguf", "")
+                       for k, v in lanes.items()}
         if arch == "single":
             mf = cfg["llm"].get("llamaserver", {}).get("model_file") or lanes["npu"].get("model_file")
             self.models = {"npu": str(mf).split("-Q4_0")[0]}
@@ -568,6 +710,8 @@ class Screen:
         recs = tail.records
         n = len(recs)
         arch = arch_of(recs) if recs else self.arch
+        if self.arch in ("bev", "bevideas") and arch == "multi":
+            arch = self.arch             # bev has not answered yet this episode
         lock = self.lockstep if self.lockstep is not None else (arch == "single" or is_lockstep(recs))
         since = 0.0 if finished or not n or not tail.path.exists() else \
             time.time() - tail.path.stat().st_mtime
@@ -577,14 +721,16 @@ class Screen:
         else:
             # the run's own clock: tick i of the file is due at i * tick_s
             now_s = max(0, n - 1) * self.tick_s + since
-        placement = (self.cfg["multi"]["fixed_placement"] if arch == "multi"
+        placement = (self.cfg["multi"]["fixed_placement"] if arch != "single"
                      else {"diagnostician": "npu", "verifier": "npu"})
         meta = {"episode": self.episode, "tick_s": self.tick_s, "finished": finished,
                 "lockstep": lock, "since_last_s": since,
                 "host": f"laptop {socket.gethostname()} ({platform.machine()})",
                 "placement": placement, "poll": self.poller is not None,
-                "lanes": ("npu", "cpu") if arch == "multi" else ("npu",),
-                "models": self.models}
+                "lanes": {"multi": ("npu", "cpu"), "bev": ("npu", "cpu", "bev"),
+                          "bevideas": ("npu", "cpu", "bev"), "single": ("npu",)}[arch],
+                "models": self.models,
+                "health": dict(getattr(self.poller, "up", {}) or {}) if self.poller else {}}
         if self.truth:
             dur = self.truth["gt"]["duration_min"] * 60
             meta["last_tick"] = int(dur // self.cfg["agent"]["tick_period_s"]) - 1
@@ -606,7 +752,7 @@ def newest(run_dir: Path | None) -> Path | None:
 def episode_of(path: Path) -> str:
     """<ep>_<arch>[_rN].ticks.jsonl -> <ep>."""
     stem = path.name[:-len(".ticks.jsonl")]
-    for arch in ("_multi", "_single"):
+    for arch in ("_multi", "_single", "_bev"):
         if arch in stem:
             return stem[:stem.rindex(arch)]
     return stem
@@ -617,7 +763,8 @@ def main() -> int:
     ap.add_argument("--dir", default=None, help="a test folder (default: newest under results/benchmarks)")
     ap.add_argument("--episode", default=None, help="default: the newest tick file")
     ap.add_argument("--config", default=str(ROOT / "configs/base.yaml"))
-    ap.add_argument("--overlay", default=str(ROOT / "configs/fast.yaml"))
+    ap.add_argument("--overlay", default=None,
+                    help="default: configs/bev3.yaml for a *_bev tick file, else configs/fast.yaml")
     ap.add_argument("--tick-s", type=float, default=30.0, help="the run's --tick-s")
     ap.add_argument("--refresh", type=float, default=0.5, help="screen refresh, seconds")
     ap.add_argument("--no-poll", action="store_true",
@@ -626,13 +773,7 @@ def main() -> int:
     args = ap.parse_args()
 
     from run_demo import load_config
-    cfg = load_config(args.config, None, args.overlay)
     run_dir = Path(args.dir) if args.dir else None
-    poller = None
-    if not args.no_poll:
-        poller = SlotPoller({k: v["url"] for k, v in cfg["multi"]["lanes"].items()}, 1.0)
-        poller.start()
-        time.sleep(0.3 if args.once else 0.0)
 
     def pick() -> Path | None:
         if args.episode:
@@ -646,7 +787,17 @@ def main() -> int:
         print(f"no live tick file in {run_dir or BENCH_DIR} yet: start a run first "
               f"(scripts/benchmark.sh)", file=sys.stderr)
         return 2
-    screen = Screen(cfg, "multi", args.tick_s, poller)
+    arch = "bev" if "_bev" in path.name else "multi"
+    overlay = args.overlay or str(ROOT / ("configs/bev3.yaml" if arch == "bev" else "configs/fast.yaml"))
+    cfg = load_config(args.config, None, overlay)
+    poller = None
+    if not args.no_poll:
+        lanes = cfg["multi"]["lanes"]
+        poller = SlotPoller({k: v["url"] for k, v in lanes.items()}, 1.0,
+                            health_only=[k for k, v in lanes.items() if v.get("kind") == "decider"])
+        poller.start()
+        time.sleep(0.3 if args.once else 0.0)
+    screen = Screen(cfg, arch, args.tick_s, poller)
     screen.follow(path, episode_of(path))
     if args.once or not sys.stdout.isatty():
         print("\n".join(screen.frame(shutil.get_terminal_size((160, 45)), sys.stdout.isatty())))

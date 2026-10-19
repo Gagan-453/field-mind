@@ -157,3 +157,190 @@ def test_single_agent_ticks_show_diagnosis_and_verifier_calls(tmp_path):
     n_env = sum(e["agent"] in ("diagnostician", "verifier") for a in recs for e in a["envelopes"])
     assert len(model["jobs"]) == n_env > 0
     assert {j["agent"] for j in model["jobs"]} <= {"diagnostician", "verifier"}
+
+
+# ---------------------------------------------------------------- --arch bev
+@pytest.fixture(scope="module")
+def bev(tmp_path_factory):
+    root = tmp_path_factory.mktemp("bev")
+    p = bench(root, "b", "dev_A01_fcv_seize", "--arch", "bev", "--backend", "mock", "--plain")
+    assert p.returncode == 0, p.stdout[-2000:] + p.stderr[-2000:]
+    return root / "b"
+
+
+@needs_dev
+def test_bev_arch_saves_bev_files_with_the_deciders_counts(bev):
+    t = json.loads((bev / "test.json").read_text())
+    p = t["params"]
+    assert p["arch"] == "bev" and p["overlay"] == "configs/bev3.yaml" and p["bev_device"] == "npu"
+    assert p["models"]["bev"] == "bev-decider-0.4B-backbone-Q8_0.gguf" and p["merge_rule"] == "hybrid"
+    assert [(r["stem"], r["status"]) for r in t["runs"]] == [("dev_A01_fcv_seize_bev", "done")]
+    s = json.loads((bev / "dev_A01_fcv_seize_bev.summary.json").read_text())
+    run = json.loads(gzip.decompress((bev / "dev_A01_fcv_seize_bev.run.json.gz").read_bytes()))
+    n_env = sum(e["agent"] == "decider" for a in run["assessments"] for e in a["envelopes"])
+    # counted two ways: the agent's own counters and the envelopes in the run file
+    assert s["calls"]["decider"]["calls"] == n_env == s["calls"]["by_agent"]["decider"]["calls"] > 0
+    assert s["calls"]["decider"]["failed"] == 0
+    assert s["meta"]["replay_reproduces_published"] is True
+    res = (bev / "RESULTS.md").read_text()
+    assert "decider calls / failed / rejected" in res and f"| {n_env} / 0 / 0 |" in res
+    assert "| yes |" in res
+
+
+@needs_dev
+def test_bev_monitor_shows_the_decider_and_its_picks(bev):
+    from bench.stage_monitor_multi import header
+    recs = _records(bev, "dev_A01_fcv_seize_bev")
+    truth = load_truth(episode_dir("dev_A01_fcv_seize"))
+    model = build(recs, truth)
+    assert model["arch"] == "bev" and "decide·bev" in header("bev") and "rule" in header("bev")
+    jobs = [j for j in model["jobs"] if j["agent"] == "decider"]
+    envs = [e for a in recs for e in a["envelopes"] if e["agent"] == "decider"]
+    assert len(jobs) == len(envs) > 0
+    assert sum(j["in_tok"] for j in jobs) == sum(e["tokens"]["prefill"] for e in envs)
+    accepted = {c["evidence_tick"] for a in recs for c in a["multi"]["compact"]
+                if c.get("agent") == "decider" and c.get("ranking")}
+    scored = {r["tick"] for r in model["rows"] if r["acc"]["scored"]}
+    # a dec mark on exactly the scored ticks with an accepted decider answer
+    assert {r["tick"] for r in model["rows"] if r["dec"]} == accepted & scored
+    assert any(r["rule"] for r in model["rows"])
+
+
+def test_bev_settings_are_refused_where_they_do_not_fit(tmp_path):
+    p = bench(tmp_path, "x", "ep_N01_normal", "--backend", "mock", "--overlay", "configs/bev3.yaml")
+    assert p.returncode != 0 and "use --arch bev" in p.stderr
+    p = bench(tmp_path, "x", "ep_N01_normal", "--backend", "mock", "--arch", "bev",
+              "--overlay", "configs/v3.yaml")
+    assert p.returncode != 0 and "decider on" in p.stderr
+    p = bench(tmp_path, "x", "ep_N01_normal", "--backend", "mock", "--arch", "bev",
+              "--mode", "realtime")
+    assert p.returncode != 0 and "multi-agent only" in p.stderr
+    assert not list(tmp_path.iterdir())
+
+
+def test_a_failed_decider_call_rejects_the_run_a_gate_rejection_does_not():
+    from bench.benchmark import decider_problem
+    ok = {"by_agent": {}, "decider": {"calls": 12, "failed": 0, "rejected": 3}}
+    assert decider_problem(ok) is None
+    assert decider_problem({**ok, "decider": {"calls": 0, "failed": 0, "rejected": 0}}) is None
+    assert "failed" in decider_problem({**ok, "decider": {"calls": 12, "failed": 1, "rejected": 0}})
+    assert decider_problem({"by_agent": {}}) is not None
+
+
+@needs_dev
+def test_older_test_settings_are_unchanged_by_the_bev_arch(first):
+    d, _ = first
+    p = json.loads((d / "test.json").read_text())["params"]
+    assert "bev_device" not in p and set(p["models"]) == {"npu", "cpu"}
+
+
+# ---------------------------------------------------------------- unplug-safe resume, run log, bev ideas
+def _bench_cmd(root, *args):
+    code = ("import sys, bench.benchmark as b; from pathlib import Path; "
+            f"b.ROOT_RESULTS = Path({str(root)!r}); sys.argv = ['benchmark.py', *{list(args)!r}]; "
+            "raise SystemExit(b.main())")
+    return [sys.executable, "-c", code]
+
+
+@needs_dev
+def test_a_stopped_again_round_resumes_with_only_the_unfinished_episodes(tmp_path):
+    import signal
+    import time
+    eps = ["ep_N01_normal", "dev_C01_wet_coal", "ep_N02_normal"]
+    assert subprocess.run(_bench_cmd(tmp_path, "r", *eps, "--backend", "mock", "--plain"),
+                          cwd=ROOT, capture_output=True).returncode == 0
+    p = subprocess.Popen(_bench_cmd(tmp_path, "r", *eps, "--backend", "mock", "--plain", "--again"),
+                         cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    first = tmp_path / "r/ep_N01_normal_multi_r2.summary.json"
+    t0 = time.time()
+    while not first.exists() and time.time() - t0 < 300:
+        time.sleep(0.2)
+    p.send_signal(signal.SIGINT)                      # what Ctrl-C (or a pulled plug + stop) does
+    p.wait(300)
+    d = tmp_path / "r"
+    assert sorted(x.name for x in d.glob("*_r2.summary.json")) == ["ep_N01_normal_multi_r2.summary.json"]
+    out = subprocess.run(_bench_cmd(tmp_path, "r", *eps, "--backend", "mock", "--plain", "--again"),
+                         cwd=ROOT, capture_output=True, text=True).stdout
+    assert "already repeated in round 1" in out
+    assert sorted(x.name for x in d.glob("*_r2.summary.json")) == sorted(f"{e}_multi_r2.summary.json" for e in eps)
+    assert not list(d.glob("*_r3.*"))                 # nothing repeated twice
+    log = [json.loads(x) for x in (tmp_path / "RUN_LOG.jsonl").read_text().splitlines()]
+    ev = [x["event"] for x in log]
+    assert ev.count("batch_start") == 3 and "batch_end" in ev and "round" in ev
+    assert {x["episode"] for x in log if x["event"] == "episode_done"} == set(eps)
+    assert any(x["event"] == "batch_end" and "Ctrl-C" in x["status"] for x in log)
+    assert (tmp_path / "RUN_LOG.md").read_text().count("| r | batch_start |") == 3
+
+
+@needs_dev
+def test_bev_ideas_columns_match_the_runs_own_counters(tmp_path):
+    p = subprocess.run(_bench_cmd(tmp_path, "i", "dev_A01_fcv_seize", "--overlay", "configs/bev_ideas.yaml",
+                                  "--bev", "explain=shadow,unknown=shadow", "--backend", "mock", "--plain"),
+                       cwd=ROOT, capture_output=True, text=True)
+    assert p.returncode == 0, p.stderr[-1500:]
+    d = tmp_path / "i"
+    run = json.loads(gzip.decompress((d / "dev_A01_fcv_seize_multi.run.json.gz").read_bytes()))
+    per = run["multi"]["bev"]["per_idea"]
+    calls = sum(v.get("calls", 0) for v in per.values())
+    res = (d / "RESULTS.md").read_text()
+    assert "bev idea calls / failed / rejected" in res and f"| {calls} / 0 / 0 |" in res and calls > 0
+    for idea, v in per.items():
+        assert f"| dev_A01_fcv_seize | 1 | {idea} | {v.get('calls', 0)} |" in res
+    t = json.loads((d / "test.json").read_text())["params"]
+    assert t["bev"] == "explain=shadow,unknown=shadow" and t["models"]["bev"].startswith("bev-decider")
+
+
+def test_a_failed_bev_idea_call_makes_the_run_invalid():
+    from bench.benchmark import decider_problem
+    ok = {"by_agent": {}, "bev_ideas": {"explain": {"calls": 9, "failed": 0, "rejected": 2}}}
+    assert decider_problem(ok, decider=False) is None
+    bad = {"by_agent": {}, "bev_ideas": {"explain": {"calls": 9, "failed": 1}, "notes": {"calls": 2}}}
+    assert "explain 1" in decider_problem(bad, decider=False)
+
+
+def _runner(tmp_path, arch, overlay, monkeypatch):
+    import argparse
+    from bench import benchmark as b
+    from run_demo import load_config
+    cfg = load_config(str(ROOT / "configs/base.yaml"), "mock", str(ROOT / overlay))
+    t = b.Test(tmp_path, "x", {"models": {"npu": "n.gguf", "cpu": "c.gguf", "bev": "b.gguf"}})
+    args = argparse.Namespace(arch=arch, backend="llamaserver", plain=True, again=False, bev_device="npu",
+                              max_reconnects=3, cool_margin=5.0, cool_max=0)
+    return b, b.Runner(t, cfg, args, ["ep_N01_normal"])
+
+
+def test_bev_runs_start_both_llama_lanes(tmp_path, monkeypatch):
+    b, r = _runner(tmp_path, "bev", "configs/bev3.yaml", monkeypatch)
+    started = []
+    log = "load_tensors: offloaded 29/29 layers\nHTP0 model buffer size = 1911.90 MiB\n"
+    monkeypatch.setattr(b.board, "stop_lanes", lambda *a, **k: "")
+    monkeypatch.setattr(b.board, "start_lane", lambda lane, m, *a, **k: started.append(lane) or
+                        {"url": "http://x", "board_log": "l"})
+    monkeypatch.setattr(b.board, "wait_health", lambda *a, **k: 1.0)
+    monkeypatch.setattr(b.board, "lane_log", lambda lane, *a, **k: log if lane == "npu" else "cpu lane\n")
+    monkeypatch.setattr(b.board, "lane_health", lambda *a, **k: True)
+    r.start_lanes("s")
+    assert started == ["npu", "cpu"]                 # the verifier's CPU lane too
+
+
+def test_an_unplugged_board_is_waited_for_and_the_episode_started_again(tmp_path, monkeypatch):
+    b, r = _runner(tmp_path, "multi", "configs/v3.yaml", monkeypatch)
+    r.board = False                                  # no real board steps in run()
+    results = iter(["retry", True])
+    calls = []
+    monkeypatch.setattr(r, "episode", lambda ep: calls.append(ep) or next(results))
+    present = iter([False, False, True])
+    monkeypatch.setattr(r, "board_present", lambda: next(present))
+    monkeypatch.setattr(b.time, "sleep", lambda s: None)
+    monkeypatch.setattr(r.stop, "wait", lambda s: False)
+    r.run()
+    assert calls == ["ep_N01_normal", "ep_N01_normal"] and r.error is None
+    ev = [json.loads(x)["event"] for x in (tmp_path / "RUN_LOG.jsonl").read_text().splitlines()]
+    assert ev == ["board_lost", "board_back", "batch_end"]
+
+
+def test_connection_failures_are_recognised_as_a_lost_board():
+    from bench.benchmark import DISCONNECT
+    assert DISCONNECT.search("http.client.RemoteDisconnected: Remote end closed connection without response")
+    assert DISCONNECT.search("adb: no devices/emulators found")
+    assert not DISCONNECT.search("ValueError: unknown merge rule")

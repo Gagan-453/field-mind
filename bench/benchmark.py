@@ -9,6 +9,7 @@
 
     scripts/benchmark.sh grammar_v1 ep_N01_normal ep_A01_fcv_seize
     scripts/benchmark.sh single_ref ep_A01_fcv_seize --arch single
+    scripts/benchmark.sh bev3_six ep_A01_fcv_seize ep_B01_tube_leak --arch bev
     scripts/benchmark.sh rt_demo ep_B01_tube_leak --mode realtime --tick-s 30
     scripts/benchmark.sh tiebreak dev_A01_fcv_seize --overlay configs/accuracy.yaml --merge-rule tiebreak
 
@@ -40,6 +41,17 @@ startup log (nonzero HTP0 buffer, every layer offloaded) and CPU lane without
 HTP0; chip temperature logged before and after; the next episode waits until
 the chip is back within --cool-margin of the reading at the start of the batch
 (at most --cool-max s).
+
+--arch bev: the multi-agent system plus the bev-decider System One model
+(default overlay configs/bev3.yaml = v3 + the decider) on a third board server,
+bev-decide (bench.board, port 8082). The runner checks its files' sha256 and
+starts it once per batch if it is not already answering, confirms its
+placement from its startup log (HTP0, every layer offloaded; or the board CPU
+with --bev-device cpu), keeps it up across episodes (only llama-server is
+restarted per episode) and stops it at the end if it started it. Files are
+<ep>_bev.*. An episode in which any decider call failed is not kept: its run
+file is saved as <stem>.rejected-<time>.run.json.gz and the batch stops (a
+failed call silently leaves ticks without the decider). Lockstep only.
 
 Ctrl-C stops the run and the lanes; the stopped episode's ticks and log are
 kept as <stem>.interrupted-<time>.*, and the same command resumes.
@@ -78,6 +90,7 @@ from bench.stage_monitor_multi import (Screen, SlotPoller, _c,     # noqa: E402
 PY = str(ROOT / ".venv/bin/python")
 ROOT_RESULTS: Path | None = None   # tests only: where test folders go instead of results/
 SINGLE_MODEL = "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf"   # the single agent's board model (Phase 0b)
+DEFAULT_OVERLAY = {"multi": "configs/fast.yaml", "bev": "configs/bev3.yaml"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 OTHER_BOARD_RUNS = re.compile(
     r"python -m bench\.campaign all|board_session\.sh|benchmark_multi_lockstep_all\.sh"
@@ -121,24 +134,37 @@ def settings(args) -> tuple[dict, dict]:
     """(config the run uses, the test's fixed settings)."""
     from run_demo import load_config
     overlay = args.overlay
-    if overlay is None and args.arch == "multi":
-        overlay = "configs/fast.yaml"
+    if overlay is None and args.arch in DEFAULT_OVERLAY:
+        overlay = DEFAULT_OVERLAY[args.arch]
     cfg = load_config(str(ROOT / "configs/base.yaml"), args.backend,
                       str(ROOT / overlay) if overlay else None)
     if args.merge_rule:
         cfg["multi"]["merge_rule"] = args.merge_rule
     from run_demo import apply_bev
     apply_bev(cfg, args.bev)
-    if args.arch == "multi":
+    decider_on = bool((cfg["multi"].get("decider") or {}).get("enabled"))
+    if args.arch == "bev" and not decider_on:
+        raise SystemExit(f"--arch bev needs an overlay with the decider on (multi.decider.enabled), "
+                         f"e.g. configs/bev3.yaml; {overlay} has it off")
+    if args.arch != "bev" and decider_on:
+        raise SystemExit(f"{overlay} turns the bev-decider on: use --arch bev (it starts and "
+                         f"checks bev-decide and shows the decider)")
+    if args.arch in ("multi", "bev"):
         models = {lane: cfg["multi"]["lanes"][lane].get("model_file") for lane in ("npu", "cpu")}
         if not all(models.values()):
             raise SystemExit("the overlay must name a model file for both lanes "
                              "(multi.lanes.<lane>.model_file), e.g. configs/fast.yaml")
+        if any(v.get("kind") == "decider" for v in cfg["multi"]["lanes"].values()):
+            lane = bev_lane(cfg)                # bev3 (--arch bev) and the bev-ideas overlays
+            models[lane] = cfg["multi"]["lanes"][lane].get("model_file")
+            if models[lane] not in board.BEV_MODELS:
+                raise SystemExit(f"the decider lane's model_file {models[lane]!r} is not a "
+                                 f"bev-decide model {board.BEV_MODELS}")
     else:
         models = {"npu": cfg["llm"].get("llamaserver", {}).get("model_file") or SINGLE_MODEL}
     if args.mode == "realtime":
         if args.arch != "multi":
-            raise SystemExit("--mode realtime is multi-agent only")
+            raise SystemExit("--mode realtime is multi-agent only (not single, not bev)")
         if cfg["multi"].get("merge_rule", "model") != "model":
             raise SystemExit("--mode realtime needs merge_rule model (the other rules are "
                              "lockstep only)")
@@ -147,12 +173,23 @@ def settings(args) -> tuple[dict, dict]:
               "overlay": overlay,
               "overlay_sha256": (hashlib.sha256((ROOT / overlay).read_bytes()).hexdigest()[:16]
                                  if overlay else None),
-              "merge_rule": cfg["multi"].get("merge_rule") if args.arch == "multi" else None,
+              "merge_rule": cfg["multi"].get("merge_rule") if args.arch != "single" else None,
               "backend": args.backend, "models": models,
               "prompts_saved": not args.no_prompts}
     if args.bev:                       # bev ideas: part of the test's fixed settings
         params["bev"] = args.bev
+    if args.arch != "single" and any(v.get("kind") == "decider"
+                                     for v in cfg["multi"]["lanes"].values()):
+        params["bev_device"] = args.bev_device  # only bev tests carry it: older tests keep their settings
     return cfg, params
+
+
+def bev_lane(cfg: dict) -> str:
+    """The decider's lane (kind: decider) in the config."""
+    lanes = [k for k, v in cfg["multi"]["lanes"].items() if v.get("kind") == "decider"]
+    if len(lanes) != 1:
+        raise SystemExit(f"the overlay must define exactly one lane of kind decider, found {lanes}")
+    return lanes[0]
 
 
 class Test:
@@ -188,6 +225,20 @@ class Test:
                 out.append(int(m.group(1) or 1))
         return sorted(out)
 
+    def open_round(self, episodes: list[str]) -> dict:
+        """--again: the unfinished round for this episode list, or a new one. A
+        round is complete when every listed episode has one run in it, so the
+        same --again command after a stop continues the round instead of
+        repeating what it already did."""
+        rounds = self.doc.setdefault("rounds", [])
+        for r in reversed(rounds):
+            if r["episodes"] == list(episodes) and len(r["done"]) < len(r["episodes"]):
+                return r
+        r = {"n": len(rounds) + 1, "episodes": list(episodes), "done": {}, "started": now_iso()}
+        rounds.append(r)
+        self.save()
+        return r
+
     def add_run(self, entry: dict) -> dict:
         self.doc["runs"].append(entry)
         self.save()
@@ -220,7 +271,14 @@ def run_stats(run: dict) -> dict:
         lat = s.pop("latency_s")
         s["median_call_s"] = round(statistics.median(lat), 2) if lat else None
     tot = {k: sum(s[k] for s in by.values()) for k in ("calls", "unusable", "tokens_in", "tokens_out")}
-    return {"ticks": len(run["assessments"]), "by_agent": by, **tot}
+    out = {"ticks": len(run["assessments"]), "by_agent": by, **tot}
+    dec = (run.get("multi") or {}).get("decider")
+    if dec is not None:
+        out["decider"] = {k: dec.get(k) for k in ("calls", "failed", "rejected")}
+    ideas = ((run.get("multi") or {}).get("bev") or {}).get("per_idea")
+    if ideas is not None:
+        out["bev_ideas"] = ideas
+    return out
 
 
 class Runner(threading.Thread):
@@ -239,6 +297,13 @@ class Runner(threading.Thread):
         self.error: str | None = None
         self.child: subprocess.Popen | None = None
         self.base_c = None
+        self.bev = args.arch == "bev"                 # the decider (bev3): decider keep-check, replay check
+        self.needs_bev = any(v.get("kind") == "decider"
+                             for v in (cfg.get("multi", {}).get("lanes") or {}).values()) \
+            and args.arch != "single"                # any bev lane: bev-decide is started and checked
+        self.round = None                           # --again: the round this command belongs to
+        self.bev_started = False            # True: this runner started bev-decide (stops it at the end)
+        self.bev_lines = ""                 # bev-decide's startup lines (placement proof)
 
     def say(self, phase: str) -> None:
         with self.lock:
@@ -272,9 +337,45 @@ class Runner(threading.Thread):
             waited += 15
         return None, waited
 
+    def ensure_bev(self) -> None:
+        """bev-decide up, on the configured device, with sha256-checked files.
+        Started once (if not already answering) and left up across episodes."""
+        lane = bev_lane(self.cfg)
+        url = self.cfg["multi"]["lanes"][lane]["url"]
+        model = self.test.params["models"][lane]
+        if not board.lane_health(url):              # a USB replug drops the port forward only
+            board._adb("forward", f"tcp:{board.BEV_PORT}", f"tcp:{board.BEV_PORT}")
+            time.sleep(1)
+        if not board.lane_health(url):
+            self.say(f"starting bev-decide ({model}, {self.args.bev_device}) on port {board.BEV_PORT}")
+            board.stop_bev()
+            info = board.start_bev(model, self.args.bev_device)      # refuses a sha256 mismatch
+            if board.wait_health(info["url"], timeout_s=300) is None:
+                raise RuntimeError(f"bev-decide did not come up (board log {info['board_log']})")
+            self.bev_started = True
+        else:
+            self.say("bev-decide already answering: checking its files' sha256")
+            board.check_bev(model)
+            board._adb("forward", f"tcp:{board.BEV_PORT}", f"tcp:{board.BEV_PORT}")
+        log = board.lane_log("bev")
+        keep = re.compile(r"offloaded|HTP0 model buffer|HTP0 KV buffer|HTP0 compute buffer|bev-decide:")
+        self.bev_lines = "".join(l + "\n" for l in log.splitlines() if keep.search(l))
+        m = re.search(r"bev-decide: model (\S+), device (\S+)", log)
+        if m is None or Path(m.group(1).rstrip(",")).name != model:
+            raise RuntimeError(f"bev-decide is not serving {model}: its log says "
+                               f"{m.group(0) if m else 'nothing'} (stop it: bench.board stop bev)")
+        if self.args.bev_device == "npu":
+            off = re.search(r"offloaded (\d+)/(\d+) layers", log)
+            if not (m.group(2).rstrip(",") == "HTP0" and re.search(r"HTP0 model buffer size = *[1-9]", log)
+                    and off and off.group(1) == off.group(2)):
+                raise RuntimeError("bev-decide is not fully on the NPU (device, HTP0 buffer or "
+                                   "offloaded layers): see bench.board log bev")
+        elif "HTP0 model buffer" in log:
+            raise RuntimeError("--bev-device cpu, but bev-decide loaded onto the NPU")
+
     def start_lanes(self, stem: str) -> None:
-        board.stop_lanes()
-        lanes = ("npu", "cpu") if self.args.arch == "multi" else ("npu",)
+        board.stop_lanes()                  # llama-server only: bev-decide stays up
+        lanes = ("npu",) if self.args.arch == "single" else ("npu", "cpu")
         models = self.test.params["models"]
         for lane in lanes:
             self.say(f"starting the {lane.upper()} lane ({models[lane]})")
@@ -286,6 +387,11 @@ class Runner(threading.Thread):
         text = "".join(f"== {lane} ({models[lane]})\n"
                        + "".join(l + "\n" for l in logs[lane].splitlines() if keep.search(l))
                        for lane in lanes)
+        if self.needs_bev:
+            lane = bev_lane(self.cfg)       # still up? (fully re-checked and restarted if it went away)
+            if not board.lane_health(self.cfg["multi"]["lanes"][lane]["url"]):
+                self.ensure_bev()
+            text += f"== bev ({models[bev_lane(self.cfg)]}, {self.args.bev_device})\n" + self.bev_lines
         (self.test.dir / f"{stem}.lanes.txt").write_text(text)
         npu = logs["npu"]
         off = re.search(r"offloaded (\d+)/(\d+) layers", npu)
@@ -305,7 +411,8 @@ class Runner(threading.Thread):
     # ---------------------------------------------------------------- run
     def command(self, ep: str, ticks: Path, out: Path) -> list[str]:
         a, p = self.args, self.test.params
-        cmd = [PY, "run_demo.py", "--backend", a.backend, "--arch", a.arch,
+        cmd = [PY, "run_demo.py", "--backend", a.backend,
+               "--arch", "single" if a.arch == "single" else "multi",
                "--mode", a.mode, "--episodes-dir", str(episode_dir(ep).parent.relative_to(ROOT)),
                "--episode", ep, "--live-ticks", str(ticks), "--tag", ep, "--out", str(out)]
         if p["overlay"]:
@@ -329,12 +436,33 @@ class Runner(threading.Thread):
                 board.stop_lanes()
                 self.base_c = self.temp()
                 self.note_temp("batch", "start", self.base_c)
+                if self.needs_bev:
+                    self.ensure_bev()
+            if self.args.again:
+                self.round = self.test.open_round(self.episodes)
+                runlog(self.test, "round", round=self.round["n"],
+                       done=sorted(self.round["done"]), of=len(self.episodes))
             for i, ep in enumerate(self.episodes):
                 if self.stop.is_set():
                     break
                 with self.lock:
                     self.index = i
-                if not self.episode(ep):
+                tries = 0
+                while True:
+                    res = self.episode(ep)
+                    if res != "retry" or self.stop.is_set():
+                        break
+                    tries += 1
+                    if tries > self.args.max_reconnects:
+                        self.error = (f"{ep}: the board connection dropped {tries} times; stopping. "
+                                      f"Run the same command again to continue from {ep}.")
+                        res = False
+                        break
+                    if not self.wait_for_board(ep):
+                        res = False
+                        break
+                    self.error = None
+                if res is False:
                     break
             if not self.stop.is_set() and self.error is None:
                 self.say("all episodes done")
@@ -343,6 +471,33 @@ class Runner(threading.Thread):
         finally:
             if self.board:
                 board.stop_lanes()
+                if self.bev_started:
+                    board.stop_bev()
+            runlog(self.test, "batch_end",
+                   status="stopped (Ctrl-C)" if self.stop.is_set() else
+                   ("error" if self.error else "all episodes done"), error=self.error)
+
+    def board_present(self) -> bool:
+        out = subprocess.run(["adb", "devices"], capture_output=True, text=True,
+                             env=board.clean_env()).stdout.splitlines()[1:]
+        return sum(l.strip().endswith("device") for l in out) == 1
+
+    def wait_for_board(self, ep: str) -> bool:
+        """The board dropped off USB (or its connection did): wait until it is back,
+        then the same episode starts again from its first tick. False on Ctrl-C."""
+        runlog(self.test, "board_lost", episode=ep)
+        waited = 0
+        while not self.stop.is_set():
+            if self.board_present():
+                self.say(f"board is back after {waited} s: restarting {ep} from its first tick")
+                runlog(self.test, "board_back", episode=ep, waited_s=waited)
+                time.sleep(5)                           # let adb settle
+                return True
+            self.say(f"BOARD DISCONNECTED during {ep}: plug it back in (waiting {waited} s; "
+                     f"Ctrl-C to stop, the same command resumes later)")
+            self.stop.wait(5)
+            waited += 5
+        return False
 
     def episode(self, ep: str) -> bool:
         """Runs one episode; False stops the batch."""
@@ -352,6 +507,13 @@ class Runner(threading.Thread):
             self.done_lines.append(f"{ep}: already in this test (run {have[-1]}), skipped "
                                    f"(--again runs it once more)")
             self.say(self.done_lines[-1])
+            runlog(test, "skip", episode=ep, why=f"already has run {have[-1]}")
+            return True
+        if self.round is not None and ep in self.round["done"]:
+            self.done_lines.append(f"{ep}: already repeated in round {self.round['n']} (run "
+                                   f"{self.round['done'][ep]}), skipped: resuming the round")
+            self.say(self.done_lines[-1])
+            runlog(test, "skip", episode=ep, why=f"done in round {self.round['n']}")
             return True
         n = (max(have) + 1) if have else 1
         stem = f"{ep}_{arch}" + (f"_r{n}" if n > 1 else "")
@@ -363,13 +525,20 @@ class Runner(threading.Thread):
                  "started": now_iso(), "git": git_state()}
         c0 = waited = None
         if self.board:
-            c0, waited = self.cool(ep)
-            if self.stop.is_set():
-                return False
-            self.start_lanes(stem)
+            try:
+                c0, waited = self.cool(ep)
+                if self.stop.is_set():
+                    return False
+                self.start_lanes(stem)
+            except Exception as e:
+                if not self.board_present():         # unplugged while preparing: wait, then again
+                    self.error = f"{ep}: board lost while starting ({type(e).__name__})"
+                    return "retry"
+                raise
             self.note_temp(ep, "before", c0, waited)
         entry.update(chip_c_before=c0, cool_wait_s=waited)
         test.add_run(entry)
+        runlog(test, "episode_start", episode=ep, run=n, stem=stem, chip_c=c0)
         with self.lock:
             self.current = {"ep": ep, "stem": stem, "ticks": ticks, "finished": False}
         sampler = sampler_err = None
@@ -415,16 +584,49 @@ class Runner(threading.Thread):
         if rc != 0 or not runs.exists() or not summ.exists() or self.stop.is_set():
             entry["status"] = "interrupted" if self.stop.is_set() else "failed"
             test.save()
+            # read the log's end BEFORE keep_partial moves it aside
+            lines = log.read_text().splitlines() if log.exists() else []
+            last = next((l for l in reversed(lines) if l and not l[0].isspace()
+                         and "failed with exit status" not in l), "")
+            tail = "\n".join(lines[-12:])
             self.keep_partial(stem)
             shutil.rmtree(out, ignore_errors=True)
-            if not self.stop.is_set():
-                tail = log.with_name(log.name).read_text()[-1500:] if log.exists() else ""
-                self.error = f"{ep} failed (exit {rc}). End of its log:\n{tail}"
+            if self.stop.is_set():
+                runlog(test, "episode_stopped", episode=ep, run=n, why="Ctrl-C")
+                return False
+            lost = bool(DISCONNECT.search(tail)) or not self.board_present()
+            runlog(test, "episode_failed", episode=ep, run=n, exit=rc, last=last,
+                   board_connection_lost=lost)
+            if lost and self.board:
+                entry["status"] = "interrupted (board connection lost)"
+                test.save()
+                self.error = f"{ep}: board connection lost ({last})"
+                return "retry"
+            self.error = (f"{ep} failed (exit {rc}): {last}\nEnd of its log "
+                          f"(kept as {stem}.interrupted-*.log):\n{tail}")
             return False
         self.say(f"saving {ep}")
         run = json.loads(runs.read_text())[0]
         ev = json.loads(summ.read_text())["per_episode"][0]
         stats = run_stats(run)
+        why = decider_problem(stats, decider=self.bev) if self.needs_bev else None
+        if why:
+            s = stamp()
+            with gzip.open(d / f"{stem}.rejected-{s}.run.json.gz", "wt") as f:
+                json.dump(run, f)
+            for kind in ("ticks.jsonl", "log", "lanes.txt"):
+                q = d / f"{stem}.{kind}"
+                if q.exists():
+                    q.rename(q.with_name(f"{stem}.rejected-{s}.{kind}"))
+            shutil.rmtree(out, ignore_errors=True)
+            entry["status"] = "rejected"
+            entry["why"] = why
+            test.save()
+            runlog(test, "episode_rejected", episode=ep, run=n, why=why)
+            self.error = (f"{ep} not kept: {entry['why']} (bev-decide down or too slow: "
+                          f"bench.board log bev). Saved as {stem}.rejected-{s}.*; fix it and run "
+                          f"the same command again.")
+            return False
         meta = {"test": test.name, "episode": ep, "run": n, "params": test.params,
                 "started": entry["started"], "finished": entry["finished"],
                 "wall_s": entry["wall_s"], "git": entry["git"],
@@ -433,13 +635,23 @@ class Runner(threading.Thread):
                           else "MOCK backend on the laptop: plumbing only, NOT an agent result"),
                 "energy_mwh": None,              # chip energy: not measured (supply power is in resources)
                 "resources": resources}
+        if self.bev:
+            meta["replay_reproduces_published"] = replay_check(run, test.params["merge_rule"])
         write_json(d / f"{stem}.summary.json", {"meta": meta, "evaluation": ev, "calls": stats})
         with gzip.open(d / f"{stem}.run.json.gz", "wt") as f:
             json.dump(run, f)
         ticks.unlink(missing_ok=True)                 # the run file holds every tick
         shutil.rmtree(out, ignore_errors=True)
         entry["status"] = "done"
+        if self.round is not None:
+            self.round["done"][ep] = n
         test.save()
+        runlog(test, "episode_done", episode=ep, run=n, wall_s=entry["wall_s"],
+               group_top1=(ev.get("T2_root_cause") or {}).get("group_top1"),
+               calls=stats["calls"], unusable=stats["unusable"],
+               decider=stats.get("decider"),
+               bev_ideas={k: {kk: v.get(kk, 0) for kk in ("calls", "failed", "rejected", "used")}
+                          for k, v in (stats.get("bev_ideas") or {}).items()} or None)
         write_results(test)
         with self.lock:
             self.current = dict(self.current, finished=True)
@@ -455,6 +667,62 @@ class Runner(threading.Thread):
                 p.rename(p.with_name(f"{stem}.interrupted-{s}.{kind}"))
 
 
+DISCONNECT = re.compile(r"RemoteDisconnected|ConnectionResetError|ConnectionRefusedError|Connection refused"
+                        r"|IncompleteRead|BrokenPipeError|URLError|no devices/emulators|device offline"
+                        r"|device '.*' not found")
+
+
+def runlog(test: "Test", event: str, **fields) -> None:
+    """Every run, appended (never rewritten) to RUN_LOG.jsonl and RUN_LOG.md beside the test folders."""
+    root = test.dir.parent
+    rec = {"t": now_iso(), "test": test.name, "event": event,
+           **{k: v for k, v in fields.items() if v is not None}}
+    try:
+        with (root / "RUN_LOG.jsonl").open("a") as f:
+            f.write(json.dumps(rec) + "\n")
+        md = root / "RUN_LOG.md"
+        new = not md.exists()
+        with md.open("a") as f:
+            if new:
+                f.write("# Benchmark run log\n\nOne line per event, laptop time. Written by "
+                        "`scripts/benchmark.sh`; never rewritten.\n\n| time | test | event | details |\n"
+                        "|---|---|---|---|\n")
+            det = "; ".join(f"{k}={json.dumps(v) if isinstance(v, (dict, list)) else v}"
+                            for k, v in rec.items() if k not in ("t", "test", "event"))
+            f.write(f"| {rec['t'][:19].replace('T', ' ')} | {test.name} | {event} | "
+                    f"{det.replace('|', '/')} |\n")
+    except OSError:
+        pass                                          # a log never stops a run
+
+
+def decider_problem(stats: dict, decider: bool = True) -> str | None:
+    """Why a bev run is not kept, or None. A failed bev-decide call (no answer)
+    silently leaves that tick without bev, so the episode would not measure the
+    configuration; a gate rejection is a result, kept. `decider`: the run is a
+    decider (bev3) run, whose counters must exist. bev-idea calls are checked
+    whenever the run has them (bev-ideas runs)."""
+    if decider:
+        dec = stats.get("decider")
+        if dec is None:
+            return "no decider counters in the run (was the decider on?)"
+        if dec.get("failed"):
+            return f"{dec['failed']} decider call(s) failed"
+    bad = {k: v.get("failed") for k, v in (stats.get("bev_ideas") or {}).items() if v.get("failed")}
+    if bad:
+        return f"{sum(bad.values())} bev idea call(s) failed ({', '.join(f'{k} {v}' for k, v in bad.items())})"
+    return None          # zero calls is legitimate (e.g. fewer than two cases to offer)
+
+
+def replay_check(run: dict, rule: str | None) -> bool | None:
+    """True when bench/replay_multi rebuilds every published ranking from the
+    run's saved answers (decider included); None when it cannot be run."""
+    try:
+        from bench.replay_multi import published, replay
+        return replay(run, rule or "current") == published(run)
+    except Exception:
+        return None
+
+
 # ===========================================================================
 #  RESULTS.md
 # ===========================================================================
@@ -468,14 +736,25 @@ def one_line(ep, n, ev, stats, entry) -> str:
            if t2.get("applicable") else
            f"false alarms {ev['T5_false_positives'].get('fp_per_hour')}/h"
            if ev["T5_false_positives"].get("applicable") else "rank-1 not scored")
-    return (f"{ep} run {n} saved: {acc} · {stats['calls']} model calls, {stats['unusable']} "
+    dec = stats.get("decider")
+    dec = (f" (decider {dec['calls']}, failed {dec['failed']}, rejected {dec['rejected']})"
+           if dec else "")
+    return (f"{ep} run {n} saved: {acc} · {stats['calls']} model calls{dec}, {stats['unusable']} "
             f"unusable · {stats['tokens_in']:,} tokens in · {entry['wall_s']:.0f} s")
 
 
+def _lanes3(procs: dict, key: str, nd: int) -> str:
+    """'npu / cpu / bev' values of one board-sampler field ('–' where absent)."""
+    return " / ".join(_f((procs.get(k) or {}).get(key), nd) if (procs.get(k) or {}).get(key) is not None
+                      else "–" for k in ("npu", "cpu", "bev"))
+
+
 def write_results(test: Test) -> None:
-    rows = []
-    for p in sorted(test.dir.glob("*.summary.json")):
-        s = json.loads(p.read_text())
+    rows, idea_rows = [], []
+    ideas_test = bool(test.params.get("bev"))
+    sums = [json.loads(p.read_text()) for p in sorted(test.dir.glob("*.summary.json"))]
+    res_test = any(((x["meta"].get("resources") or {}).get("processes")) for x in sums)
+    for s in sums:
         m, ev, st = s["meta"], s["evaluation"], s["calls"]
         t2, t3, t4, t6 = (ev["T2_root_cause"], ev["T3_faithfulness"], ev["T4_actions"],
                           ev["T6_lead_time"])
@@ -490,10 +769,40 @@ def write_results(test: Test) -> None:
                       if ev["T5_false_positives"].get("applicable") else "–"),
                      _f(ev.get("S1_tick_latency_ms_p95"), 0), f"{m['wall_s']:.0f}",
                      f"{_f(m.get('chip_c_before'), 1)} → {_f(m.get('chip_c_after'), 1)}"))
+        if test.params["arch"] == "bev":
+            dec = st.get("decider") or {}
+            rp = m.get("replay_reproduces_published")
+            rows[-1] = rows[-1][:5] + (f"{dec.get('calls', '–')} / {dec.get('failed', '–')} / "
+                                       f"{dec.get('rejected', '–')}",) + rows[-1][5:] \
+                + ({True: "yes", False: "NO"}.get(rp, "–"),)
+        if ideas_test:
+            ideas = st.get("bev_ideas") or {}
+            tot = {k: sum((v.get(k) or 0) for v in ideas.values())
+                   for k in ("calls", "failed", "rejected", "used", "shadow")}
+            ticks = st.get("ticks") or 0
+            rows[-1] = rows[-1][:5] + (
+                f"{tot['calls']} / {tot['failed']} / {tot['rejected']}",
+                f"{tot['used']} / {tot['shadow']}",
+                _f(st["tokens_out"] / ticks, 2) if ticks else "–") + rows[-1][5:]
+            for idea, v in sorted(ideas.items()):
+                other = {k: x for k, x in v.items() if k not in ("calls", "failed", "rejected", "used", "shadow")}
+                idea_rows.append((m["episode"], m["run"], idea, v.get("calls", 0), v.get("failed", 0),
+                                  v.get("rejected", 0), v.get("used", 0), v.get("shadow", 0),
+                                  ", ".join(f"{k} {x}" for k, x in sorted(other.items())) or "–"))
+        if res_test:
+            procs = (m.get("resources") or {}).get("processes") or {}
+            rows[-1] = rows[-1] + (_lanes3(procs, "cpu_s", 1), _lanes3(procs, "peak_rss_mb", 0))
     head = ("episode", "run", "finished", "ticks", "model calls", "unusable", "tokens in",
             "group top-1", "belief group top-1", "exact top-1", "faithfulness",
             "actions P / R", "lead time min", "false alarms /h", "tick p95 ms", "wall s", "chip C")
     p = test.params
+    if p["arch"] == "bev":
+        head = head[:5] + ("decider calls / failed / rejected",) + head[5:] + ("replay ok",)
+    if ideas_test:
+        head = head[:5] + ("bev idea calls / failed / rejected", "bev used / shadow",
+                           "decode tokens per tick") + head[5:]
+    if res_test:
+        head = head + ("server CPU s npu / cpu / bev", "peak RSS MB npu / cpu / bev")
     mock = p["backend"] == "mock"
     lines = [f"# Benchmark `{test.name}`", "",
              f"{'**MOCK backend: plumbing only, NOT an agent result.** ' if mock else ''}"
@@ -507,9 +816,29 @@ def write_results(test: Test) -> None:
              "rank-1 cause is in the true case's look-alike group; belief group top-1 is the "
              "same for the code-only ranking. A held-out true case has no exact top-1. "
              "Unusable = a model answer that was not used (wrong format, failed call, rejected "
-             "note reading). Settings and every run, stopped ones included: `test.json`.", "",
+             "note reading). Settings and every run, stopped ones included: `test.json`."
+             + (" Model calls include the decider's. Decider calls: answered by bev-decide "
+                "(failed = no answer; rejected = refused by the gate's check). Replay ok: "
+                "bench/replay_multi rebuilds every published ranking from the saved answers, "
+                "decider included." if p["arch"] == "bev" else ""), "",
              "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
     lines += ["| " + " | ".join(map(str, r)) + " |" for r in rows]
+    if ideas_test:
+        lines[4:4] = [f"bev ideas switches: `{p['bev']}`. bev-decide on {p.get('bev_device', 'npu')}. "
+                      "bev idea calls: answered by bev-decide (failed = no answer, which makes the run "
+                      "invalid and is not kept; rejected = refused by the gate's check). used = an "
+                      "answer that changed what the agent did; shadow = asked and only logged. Decode "
+                      "tokens per tick: answer tokens written by every model per tick (bev writes none).",
+                      ""]
+        lines += ["", "## bev ideas per episode", "",
+                  "| episode | run | idea | calls | failed | rejected | used | shadow | other counters |",
+                  "|---|---|---|---|---|---|---|---|---|"]
+        lines += ["| " + " | ".join(map(str, r)) + " |" for r in idea_rows]
+    if res_test:
+        lines += ["", "Board resources (on-board sampler, once a second, per episode): CPU seconds and "
+                  "peak memory of each model server. The NPU has no readable usage counter; its work "
+                  "shows as the NPU lane's call time. Supply power, if the board exposes it, is in "
+                  "each summary's `meta.resources`; energy is never estimated."]
     (test.dir / "RESULTS.md").write_text("\n".join(lines) + "\n")
 
 
@@ -564,9 +893,14 @@ def main() -> int:
                "per episode run). Same name again adds to it; --again re-runs saved episodes.")
     ap.add_argument("name", help="test name: letters, digits, . _ - (the folder name)")
     ap.add_argument("episodes", nargs="+", help="episode ids (ep_* reporting, dev_* dev set)")
-    ap.add_argument("--arch", choices=["multi", "single"], default="multi")
+    ap.add_argument("--arch", choices=["multi", "single", "bev"], default="multi",
+                    help="multi (default), single, or bev: multi-agent + the bev-decider "
+                         "System One model on bev-decide (port 8082)")
     ap.add_argument("--overlay", default=None,
-                    help="config overlay (default configs/fast.yaml for multi, none for single)")
+                    help="config overlay (default configs/fast.yaml for multi, configs/bev3.yaml "
+                         "for bev, none for single)")
+    ap.add_argument("--bev-device", choices=["npu", "cpu"], default="npu",
+                    help="bev: where bev-decide runs (npu = HTP0, the default; cpu = the fallback)")
     ap.add_argument("--mode", choices=["lockstep", "realtime"], default="lockstep",
                     help="lockstep (default): ticks back to back, each waits for its model "
                          "answers; realtime: a tick every --tick-s seconds, never waits")
@@ -584,6 +918,9 @@ def main() -> int:
     ap.add_argument("--cool-margin", type=float, default=5.0)
     ap.add_argument("--cool-max", type=int, default=900)
     ap.add_argument("--plain", action="store_true", help="print lines instead of the monitor")
+    ap.add_argument("--max-reconnects", type=int, default=20,
+                    help="per episode: how many times to wait for an unplugged board and start the "
+                         "episode again before stopping (default 20)")
     ap.add_argument("--refresh", type=float, default=0.5)
     args = ap.parse_args()
 
@@ -610,17 +947,22 @@ def main() -> int:
     root = ROOT_RESULTS or ROOT / ("results/benchmarks" if args.backend == "llamaserver"
                                    else "results/benchmarks_mock")
     test = Test(root, args.name, params)
+    runlog(test, "batch_start", command="scripts/benchmark.sh " + " ".join(sys.argv[1:]),
+           git=git_state(), episodes=len(episodes), params=params)
     runner = Runner(test, cfg, args, episodes)
     tty = sys.stdout.isatty() and not args.plain
     args.plain = not tty
     poller = None
     if args.backend == "llamaserver":
-        urls = {k: v["url"] for k, v in cfg["multi"]["lanes"].items()}
-        if args.arch == "single":
-            urls = {"npu": urls["npu"]}
-        poller = SlotPoller(urls, 1.0)
+        lanes = cfg["multi"]["lanes"]
+        urls = {k: v["url"] for k, v in lanes.items() if k in params["models"]}
+        poller = SlotPoller(urls, 1.0, health_only=[k for k in urls
+                                                    if lanes[k].get("kind") == "decider"])
         poller.start()
-    screen = Screen(cfg, args.arch, args.tick_s, poller, lockstep=args.mode == "lockstep")
+    ideas_on = any(v not in ("off", None) for k, v in (cfg["multi"].get("bev") or {}).items()
+                   if not k.endswith("_threshold") and isinstance(v, str))
+    screen_arch = "bevideas" if args.arch == "multi" and ideas_on else args.arch
+    screen = Screen(cfg, screen_arch, args.tick_s, poller, lockstep=args.mode == "lockstep")
     runner.start()
     stopped = False
     term = sys.stdout

@@ -2,7 +2,7 @@
 file. Outcome-based: assertions on the rows, cells and lane lines it produces
 from tick records shaped like the ones run_demo.py --live-ticks writes."""
 
-from bench.stage_monitor_multi import build, cell, lane_now, render
+from bench.stage_monitor_multi import build, cell, lane_now, render, UNUSED_MARK
 
 PLACE = {"diag_water": "npu", "diag_heat": "npu", "verifier": "cpu", "text_reader": "cpu"}
 
@@ -93,7 +93,7 @@ def test_render_puts_units_and_ticks_on_one_screen():
     npu = next(l for l in out if l.startswith(" NPU"))
     assert "tick 13" in npu and "heat diagnosis" in npu and "running" in npu
     assert next(l for l in out if l.startswith(" CPU")).rstrip().endswith("idle")
-    assert sum(l.lstrip().split(" ")[0].isdigit() for l in out) == len(RECORDS)
+    assert sum(l.lstrip().split(" ")[0].rstrip("•").isdigit() for l in out) == len(RECORDS)
 
 
 # ---------------------------------------------------------------- back to back
@@ -167,3 +167,62 @@ def test_back_to_back_viewer_counts_the_calls_of_a_real_lockstep_run(tmp_path, m
     meta = {"episode": "dev", "tick_s": 30.0, "host": "laptop", "placement": PLACE,
             "models": {}, "poll": False, "lockstep": True, "finished": True}
     assert "BACK TO BACK" in "\n".join(render(build(recs), meta, {}, 10.0, (200, 400), colour=False))
+
+
+def test_a_decider_cell_shows_its_time_and_whether_the_gate_accepted_it():
+    def tick(k, rec):
+        env = {"agent": "decider", "status": "ok", "backend": "bev", "latency_ms": 372.0,
+               "tokens": {"prefill": 398, "decode": 0}}
+        return {"tick": k, "timestamp": f"2026-08-21T06:{k:02d}:00", "state": "DEVIATION",
+                "triage": "WATCH", "hypotheses": [{"cause": "c", "case_ref": "RCA-01"}],
+                "envelopes": [env], "multi": {"p0_ms": 10.0, "results": [], "text": [],
+                                              "compact": [rec]}}
+    recs = [tick(5, {"agent": "decider", "evidence_tick": 5, "ranking": ["RCA-01", "RCA-16"],
+                     "choice": "RCA-01"}),
+            tick(6, {"agent": "decider", "evidence_tick": 6, "why": "an offered case has no probability"})]
+    m = build(recs)
+    assert m["arch"] == "bev"
+    c = {r["tick"]: cell(r, "decider", m["jobs"], 0.0) for r in m["rows"]}
+    assert c == {5: "0.4s 398t✓", 6: "0.4s 398t✗"}
+
+
+def test_the_deciders_pick_is_marked_only_on_scored_ticks():
+    truth = {"target": "RCA-01", "tgroup": "G1", "gmap": {"RCA-01": "G1", "RCA-16": "G1"},
+             "onset": 600, "scored": True, "gt": {}}
+
+    def tick(k, pick):
+        return {"tick": k, "timestamp": "2026-08-21T06:00:00", "state": "DEVIATION", "triage": "WATCH",
+                "hypotheses": [{"cause": "c", "case_ref": "RCA-07"}], "belief_ranking": [{"case_ref": "RCA-07"}],
+                "envelopes": [], "multi": {"p0_ms": 1.0, "results": [], "text": [], "compact": [
+                    {"agent": "decider", "evidence_tick": k, "ranking": [pick], "choice": pick}]}}
+    rows = build([tick(5, "RCA-16"), tick(30, "RCA-16"), tick(31, "RCA-09")], truth)["rows"]
+    assert [r["dec"] for r in rows] == ["", "≈", "✗"]       # tick 5 is before onset (150 s < 600 s)
+    assert [r["dec"] for r in build([tick(30, "RCA-16")], None)["rows"]] == [""]   # no truth: no mark
+
+
+
+def test_no_red_anywhere_and_unused_answers_get_only_a_subtle_marker():
+    meta = {"episode": "ep_X", "tick_s": 30.0, "host": "laptop", "placement": PLACE,
+            "models": {"npu": "Llama", "cpu": "Gemma"}, "poll": True, "last_tick": 139}
+    coloured = render(build(RECORDS), meta, {"npu": True, "cpu": False}, 123.0, (200, 60), colour=True)
+    assert not any("\033[31m" in l or "\033[91m" in l for l in coloured)       # no red, bright or not
+    plain = render(build(RECORDS), meta, {"npu": True, "cpu": False}, 123.0, (200, 60), colour=False)
+    marked = {int(l[:5]) for l in plain if l[:5].strip().isdigit() and l[5] == UNUSED_MARK}
+    assert marked == {11}          # tick 11's water answer had no gate record: not used (✗)
+
+
+def test_bev_columns_are_highlighted_in_teal():
+    from bench.stage_monitor_multi import ANSI
+    env = {"agent": "decider", "status": "ok", "backend": "bev", "latency_ms": 372.0,
+           "tokens": {"prefill": 398, "decode": 0}}
+    rec = {"tick": 5, "timestamp": "2026-08-21T06:05:00", "state": "DEVIATION", "triage": "WATCH",
+           "hypotheses": [{"cause": "c", "case_ref": "RCA-01"}], "envelopes": [env],
+           "multi": {"p0_ms": 10.0, "results": [], "text": [], "compact": [
+               {"agent": "decider", "evidence_tick": 5, "ranking": ["RCA-01"], "choice": "RCA-01"}]}}
+    meta = {"episode": "ep_X", "tick_s": 30.0, "host": "laptop", "lockstep": True,
+            "placement": dict(PLACE, decider="bev"), "models": {"npu": "L", "cpu": "G", "bev": "B"},
+            "poll": False, "lanes": ("npu", "cpu", "bev"), "health": {"bev": True}}
+    out = render(build([rec]), meta, {}, 1.0, (220, 40), colour=True)
+    row = next(l for l in out if "0.4s 398t✓" in l)
+    assert ANSI["teal"] + "    0.4s 398t✓" in row                     # the decider's cell
+    assert any(l.startswith(ANSI["teal"]) and " BEV " in l for l in out)  # the BEV unit line
