@@ -41,9 +41,33 @@ import time
 import urllib.request
 
 
+_SERIAL: str | None = None
+
+
+def board_serial() -> str | None:
+    """The one real board on adb (state 'device', not an 'emulator-*' entry), or None.
+    adb treats any local process listening on 5555-5585 as an emulator (on the QIDK
+    laptop VS Code listens on 5567, giving a flapping 'emulator-5566 offline'); with
+    two entries every un-targeted adb command fails with 'more than one device'."""
+    out = subprocess.run(["adb", "devices"], capture_output=True, text=True,
+                         env={k: v for k, v in os.environ.items() if k != "PYTHONPATH"}).stdout
+    real = [l.split()[0] for l in out.splitlines()[1:]
+            if l.strip().endswith("device") and not l.startswith("emulator-")]
+    return real[0] if len(real) == 1 else None
+
+
 def clean_env() -> dict:
-    """The host environment minus PYTHONPATH; pass as env= to every subprocess."""
-    return {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    """The host environment minus PYTHONPATH; pass as env= to every subprocess.
+    Pins ANDROID_SERIAL to the one real board (unless already set), so adb commands
+    never fail on a phantom emulator entry."""
+    global _SERIAL
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    if "ANDROID_SERIAL" not in env:
+        if _SERIAL is None:
+            _SERIAL = board_serial()
+        if _SERIAL:
+            env["ANDROID_SERIAL"] = _SERIAL
+    return env
 
 
 def drop_pythonpath() -> None:

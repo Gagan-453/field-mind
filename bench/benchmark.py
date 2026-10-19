@@ -478,9 +478,7 @@ class Runner(threading.Thread):
                    ("error" if self.error else "all episodes done"), error=self.error)
 
     def board_present(self) -> bool:
-        out = subprocess.run(["adb", "devices"], capture_output=True, text=True,
-                             env=board.clean_env()).stdout.splitlines()[1:]
-        return sum(l.strip().endswith("device") for l in out) == 1
+        return board.board_serial() is not None     # one real board; emulator entries ignored
 
     def wait_for_board(self, ep: str) -> bool:
         """The board dropped off USB (or its connection did): wait until it is back,
@@ -933,11 +931,8 @@ def main() -> int:
     episodes = list(dict.fromkeys(args.episodes))
     cfg, params = settings(args)
     if args.backend == "llamaserver":
-        devs = [l for l in subprocess.run(["adb", "devices"], capture_output=True, text=True,
-                                          env=board.clean_env()).stdout.splitlines()[1:]
-                if l.strip().endswith("device")]
-        if len(devs) != 1:
-            raise SystemExit(f"need exactly one board on adb, found {len(devs)}")
+        if board.board_serial() is None:             # emulator entries (e.g. VS Code on 5567) ignored
+            raise SystemExit("need exactly one board on adb (adb devices); none or several found")
         busy = [l for l in subprocess.run(["pgrep", "-af", "python|bash|sh"], capture_output=True,
                                           text=True).stdout.splitlines()
                 if OTHER_BOARD_RUNS.search(l) and int(l.split()[0]) != os.getpid()]
