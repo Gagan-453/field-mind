@@ -1,0 +1,154 @@
+<!doctype html><html lang='en'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><title>Benchmark Comparison</title><style>:root{--ink:#1c2230;--muted:#5b6475;--line:#d9dee7;--soft:#f4f6f9;--bar:#1f5fae;--warn:#fbf1df}@media (prefers-color-scheme:dark){:root{--ink:#e6e9ef;--muted:#a3abba;--line:#3a4150;--soft:#222733;--bar:#6aa0e6;--warn:#3d3220}body{background:#161a22}}body{font:14px/1.45 -apple-system,Helvetica,Arial,sans-serif;color:var(--ink);background:#fff;margin:0 auto;max-width:1100px;padding:16px}table{border-collapse:collapse;width:100%;font-size:12.5px;margin:8px 0 16px;display:block;overflow-x:auto}td{border-bottom:1px solid var(--line);padding:4px 8px;white-space:nowrap}tr:first-child td{font-weight:600;background:var(--soft)}.warn{background:var(--warn);padding:8px 10px;border-radius:6px}svg .l{font-size:11px;fill:var(--ink)}svg .v{font-size:11px;fill:var(--muted)}svg .b{fill:var(--bar)}h2{border-bottom:1px solid var(--line);padding-bottom:4px}</style></head><body><h1>Benchmark comparison: bevideas_A1 vs bevideas_C_combo_r1 vs bevideas_C_combo_r2 vs bevideas_C_combo_r3</h1>
+<p>Baseline bevideas_A1, second baseline run bevideas_A3. 10 episodes in common: dev_A01_fcv_seize, dev_A02_fcv_seize_fast, dev_B01_tube_leak, dev_B02_tube_leak_fast, dev_C01_wet_coal, dev_C02_feeder_trip, dev_D01_high_cv_coal, dev_D03_high_cv_severe, dev_N01_normal, dev_N02_normal. Stage times are LAPTOP times (agent code runs on the laptop until Phase 4); model call times are as the client saw them. All plant data is synthetic.</p>
+<table>
+<tr><td>test</td><td>settings</td></tr><h3>Decode tokens per tick</h3><svg viewBox="0 0 700 98" width="100%"><text x="0" y="16" class="l">bevideas_A1</text><rect x="230" y="4" width="380.0" height="14" class="b"/><text x="616.0" y="16" class="v">10.68 tok</text><text x="0" y="38" class="l">bevideas_C_combo_r1</text><rect x="230" y="26" width="73.7" height="14" class="b"/><text x="309.7" y="38" class="v">2.07 tok</text><text x="0" y="60" class="l">bevideas_C_combo_r2</text><rect x="230" y="48" width="74.0" height="14" class="b"/><text x="310.0" y="60" class="v">2.08 tok</text><text x="0" y="82" class="l">bevideas_C_combo_r3</text><rect x="230" y="70" width="73.3" height="14" class="b"/><text x="309.3" y="82" class="v">2.06 tok</text></svg><h3>Whole tick, mean ms (laptop)</h3><svg viewBox="0 0 700 98" width="100%"><text x="0" y="16" class="l">bevideas_A1</text><rect x="230" y="4" width="380.0" height="14" class="b"/><text x="616.0" y="16" class="v">977.996 ms</text><text x="0" y="38" class="l">bevideas_C_combo_r1</text><rect x="230" y="26" width="209.5" height="14" class="b"/><text x="445.5" y="38" class="v">539.071 ms</text><text x="0" y="60" class="l">bevideas_C_combo_r2</text><rect x="230" y="48" width="205.2" height="14" class="b"/><text x="441.2" y="60" class="v">528.171 ms</text><text x="0" y="82" class="l">bevideas_C_combo_r3</text><rect x="230" y="70" width="204.1" height="14" class="b"/><text x="440.1" y="82" class="v">525.347 ms</text></svg><h3>Model call time by agent@lane, s</h3><svg viewBox="0 0 700 318" width="100%"><text x="0" y="16" class="l">bevideas_A1: diagnostician@npu</text><rect x="230" y="4" width="380.0" height="14" class="b"/><text x="616.0" y="16" class="v">1211.68 s</text><text x="0" y="38" class="l">bevideas_A1: verifier@cpu</text><rect x="230" y="26" width="24.8" height="14" class="b"/><text x="260.8" y="38" class="v">79.05 s</text><text x="0" y="60" class="l">bevideas_C_combo_r1: bev_explain@bev</text><rect x="230" y="48" width="76.3" height="14" class="b"/><text x="312.3" y="60" class="v">243.15 s</text><text x="0" y="82" class="l">bevideas_C_combo_r1: bev_verifier@bev</text><rect x="230" y="70" width="8.8" height="14" class="b"/><text x="244.8" y="82" class="v">28.01 s</text><text x="0" y="104" class="l">bevideas_C_combo_r1: diagnostician@npu</text><rect x="230" y="92" width="136.7" height="14" class="b"/><text x="372.7" y="104" class="v">435.83 s</text><text x="0" y="126" class="l">bevideas_C_combo_r1: verifier@bev</text><rect x="230" y="114" width="1.0" height="14" class="b"/><text x="236.0" y="126" class="v">0 s</text><text x="0" y="148" class="l">bevideas_C_combo_r2: bev_explain@bev</text><rect x="230" y="136" width="76.6" height="14" class="b"/><text x="312.6" y="148" class="v">244.33 s</text><text x="0" y="170" class="l">bevideas_C_combo_r2: bev_verifier@bev</text><rect x="230" y="158" width="8.8" height="14" class="b"/><text x="244.8" y="170" class="v">27.95 s</text><text x="0" y="192" class="l">bevideas_C_combo_r2: diagnostician@npu</text><rect x="230" y="180" width="131.8" height="14" class="b"/><text x="367.8" y="192" class="v">420.25 s</text><text x="0" y="214" class="l">bevideas_C_combo_r2: verifier@bev</text><rect x="230" y="202" width="1.0" height="14" class="b"/><text x="236.0" y="214" class="v">0 s</text><text x="0" y="236" class="l">bevideas_C_combo_r3: bev_explain@bev</text><rect x="230" y="224" width="75.9" height="14" class="b"/><text x="311.9" y="236" class="v">242.03 s</text><text x="0" y="258" class="l">bevideas_C_combo_r3: bev_verifier@bev</text><rect x="230" y="246" width="8.8" height="14" class="b"/><text x="244.8" y="258" class="v">27.98 s</text><text x="0" y="280" class="l">bevideas_C_combo_r3: diagnostician@npu</text><rect x="230" y="268" width="131.3" height="14" class="b"/><text x="367.3" y="280" class="v">418.7 s</text><text x="0" y="302" class="l">bevideas_C_combo_r3: verifier@bev</text><rect x="230" y="290" width="1.0" height="14" class="b"/><text x="236.0" y="302" class="v">0 s</text></svg><h3>Board CPU s by process</h3><svg viewBox="0 0 700 274" width="100%"><text x="0" y="16" class="l">bevideas_A1: bev</text><rect x="230" y="4" width="1.0" height="14" class="b"/><text x="236.1" y="16" class="v">0.4 s</text><text x="0" y="38" class="l">bevideas_A1: cpu</text><rect x="230" y="26" width="86.6" height="14" class="b"/><text x="322.6" y="38" class="v">419.5 s</text><text x="0" y="60" class="l">bevideas_A1: npu</text><rect x="230" y="48" width="380.0" height="14" class="b"/><text x="616.0" y="60" class="v">1839.7 s</text><text x="0" y="82" class="l">bevideas_C_combo_r1: bev</text><rect x="230" y="70" width="26.3" height="14" class="b"/><text x="262.3" y="82" class="v">127.5 s</text><text x="0" y="104" class="l">bevideas_C_combo_r1: cpu</text><rect x="230" y="92" width="1.0" height="14" class="b"/><text x="236.2" y="104" class="v">0.9 s</text><text x="0" y="126" class="l">bevideas_C_combo_r1: npu</text><rect x="230" y="114" width="81.3" height="14" class="b"/><text x="317.3" y="126" class="v">393.5 s</text><text x="0" y="148" class="l">bevideas_C_combo_r2: bev</text><rect x="230" y="136" width="26.3" height="14" class="b"/><text x="262.3" y="148" class="v">127.2 s</text><text x="0" y="170" class="l">bevideas_C_combo_r2: cpu</text><rect x="230" y="158" width="1.0" height="14" class="b"/><text x="236.2" y="170" class="v">0.9 s</text><text x="0" y="192" class="l">bevideas_C_combo_r2: npu</text><rect x="230" y="180" width="81.5" height="14" class="b"/><text x="317.5" y="192" class="v">394.5 s</text><text x="0" y="214" class="l">bevideas_C_combo_r3: bev</text><rect x="230" y="202" width="26.3" height="14" class="b"/><text x="262.3" y="214" class="v">127.4 s</text><text x="0" y="236" class="l">bevideas_C_combo_r3: cpu</text><rect x="230" y="224" width="1.0" height="14" class="b"/><text x="236.2" y="236" class="v">0.8 s</text><text x="0" y="258" class="l">bevideas_C_combo_r3: npu</text><rect x="230" y="246" width="80.5" height="14" class="b"/><text x="316.5" y="258" class="v">389.5 s</text></svg></table>
+<p>|---|---|</p>
+<table>
+<tr><td>bevideas_A1</td><td>overlay `configs/bev_ideas.yaml`, mode lockstep, bev `off`, backend llamaserver</td></tr>
+<tr><td>bevideas_C_combo_r1</td><td>overlay `configs/bev_ideas.yaml`, mode lockstep, bev `explain=on,clear_skip=on,verifier=on`, backend llamaserver</td></tr>
+<tr><td>bevideas_C_combo_r2</td><td>overlay `configs/bev_ideas.yaml`, mode lockstep, bev `explain=on,clear_skip=on,verifier=on`, backend llamaserver</td></tr>
+<tr><td>bevideas_C_combo_r3</td><td>overlay `configs/bev_ideas.yaml`, mode lockstep, bev `explain=on,clear_skip=on,verifier=on`, backend llamaserver</td></tr>
+<tr><td>bevideas_A3</td><td>overlay `configs/bev_ideas.yaml`, mode lockstep, bev `off`, backend llamaserver</td></tr>
+</table>
+<h2>Headline</h2>
+<table>
+<tr><td>metric</td><td>bevideas_A1</td><td>bevideas_C_combo_r1</td><td>bevideas_C_combo_r2</td><td>bevideas_C_combo_r3</td><td>bevideas_A3</td><td>bevideas_C_combo_r1 − bevideas_A1</td><td>bevideas_C_combo_r2 − bevideas_A1</td><td>bevideas_C_combo_r3 − bevideas_A1</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>episodes</td><td>10</td><td>10</td><td>10</td><td>10</td><td>10</td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>ticks</td><td>1,380</td><td>1,380</td><td>1,380</td><td>1,380</td><td>1,380</td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>wall_s</td><td>1350</td><td>744.1</td><td>729.1</td><td>725.2</td><td>1372.1</td><td>-605.9</td><td>-620.9</td><td>-624.8</td></tr>
+<tr><td>decode_tokens</td><td>14,735</td><td>2,855</td><td>2,865</td><td>2,842</td><td>14,765</td><td>-11,880</td><td>-11,870</td><td>-11,893</td></tr>
+<tr><td>decode_per_tick</td><td>10.68</td><td>2.07</td><td>2.08</td><td>2.06</td><td>10.7</td><td>-8.61</td><td>-8.6</td><td>-8.62</td></tr>
+<tr><td>library group top-1</td><td>0.759</td><td>0.775</td><td>0.775</td><td>0.775</td><td>0.759</td><td>0.016</td><td>0.016</td><td>0.016</td></tr>
+<tr><td>library top-1</td><td>0.646</td><td>0.609</td><td>0.611</td><td>0.609</td><td>0.646</td><td>-0.037</td><td>-0.035</td><td>-0.037</td></tr>
+<tr><td>belief group top-1 (code only)</td><td>0.655</td><td>0.655</td><td>0.655</td><td>0.655</td><td>0.655</td><td>0</td><td>0</td><td>0</td></tr>
+<tr><td>held-out group top-1</td><td>0.451</td><td>0.549</td><td>0.549</td><td>0.549</td><td>0.471</td><td>0.098</td><td>0.098</td><td>0.098</td></tr>
+<tr><td>faithfulness</td><td>0.972</td><td>0.973</td><td>0.973</td><td>0.973</td><td>0.973</td><td>0.001</td><td>0.001</td><td>0.001</td></tr>
+<tr><td>citation relevance</td><td>0.657</td><td>0.642</td><td>0.64</td><td>0.643</td><td>0.658</td><td>-0.015</td><td>-0.017</td><td>-0.014</td></tr>
+<tr><td>actions precision</td><td>0.481</td><td>0.479</td><td>0.482</td><td>0.482</td><td>0.489</td><td>-0.002</td><td>0.001</td><td>0.001</td></tr>
+<tr><td>actions recall</td><td>0.938</td><td>0.969</td><td>0.969</td><td>0.969</td><td>0.969</td><td>0.031</td><td>0.031</td><td>0.031</td></tr>
+<tr><td>model invocation rate</td><td>0.287</td><td>0.257</td><td>0.257</td><td>0.256</td><td>0.287</td><td>-0.03</td><td>-0.03</td><td>-0.031</td></tr>
+</table>
+<p>Run-to-run spread |A1 − A2|: episodes 0, ticks 0, wall_s 22.1, decode_tokens 30, decode_per_tick 0.02, library group top-1 0, library top-1 0, belief group top-1 (code only) 0, held-out group top-1 0.02, faithfulness 0.001, citation relevance 0.001, actions precision 0.008, actions recall 0.031, model invocation rate 0</p>
+<h2>Time per stage, ms per tick it ran (LAPTOP)</h2>
+<p>Each blackboard step&#x27;s own time; a model agent&#x27;s step includes its call. Hard path = sensor, triage, retriever, gate, scheduler.</p>
+<table>
+<tr><td>stage</td><td>bevideas_A1 mean / p95 / max</td><td>bevideas_C_combo_r1 mean / p95 / max</td><td>bevideas_C_combo_r2 mean / p95 / max</td><td>bevideas_C_combo_r3 mean / p95 / max</td></tr>
+</table>
+<p>|---|---|---|---|---|</p>
+<table>
+<tr><td>gate (hard path)</td><td>0.284 / 0.622 / 1.224 (1380)</td><td>0.142 / 0.321 / 0.702 (1380)</td><td>0.139 / 0.32 / 0.65 (1380)</td><td>0.139 / 0.32 / 0.568 (1380)</td></tr>
+<tr><td>retriever (hard path)</td><td>0.391 / 0.471 / 1.159 (812)</td><td>0.215 / 0.248 / 0.578 (812)</td><td>0.212 / 0.244 / 0.551 (812)</td><td>0.213 / 0.249 / 0.486 (812)</td></tr>
+<tr><td>scheduler (hard path)</td><td>0.327 / 0.697 / 2.373 (812)</td><td>0.144 / 0.304 / 0.591 (812)</td><td>0.142 / 0.302 / 0.526 (812)</td><td>0.142 / 0.305 / 0.542 (812)</td></tr>
+<tr><td>sensor (hard path)</td><td>0.98 / 1.624 / 3.672 (1380)</td><td>0.567 / 0.901 / 1.361 (1380)</td><td>0.54 / 0.896 / 1.56 (1380)</td><td>0.539 / 0.895 / 1.63 (1380)</td></tr>
+<tr><td>triage (hard path)</td><td>0.019 / 0.03 / 0.075 (1380)</td><td>0.011 / 0.015 / 0.041 (1380)</td><td>0.01 / 0.014 / 0.026 (1380)</td><td>0.01 / 0.014 / 0.029 (1380)</td></tr>
+<tr><td>bev</td><td>–</td><td>737.006 / 1088.28 / 1821.8 (368)</td><td>738.064 / 1102.2 / 1793.11 (369)</td><td>737.905 / 1124.96 / 1861.81 (366)</td></tr>
+<tr><td>diagnostician</td><td>3007.01 / 3792.42 / 5945.49 (403)</td><td>1224.48 / 1386.76 / 2473.6 (356)</td><td>1180.7 / 1328.15 / 2307.2 (356)</td><td>1183.01 / 1337.9 / 2332.07 (354)</td></tr>
+<tr><td>verifier</td><td>1928.4 / 2184.68 / 2221.42 (41)</td><td>–</td><td>–</td><td>–</td></tr>
+<tr><td>whole tick</td><td>977.996 / 3689.6</td><td>539.071 / 2291.41</td><td>528.171 / 2220.76</td><td>525.347 / 2235.97</td></tr>
+</table>
+<h2>Model calls per agent @ lane</h2>
+<p>answers = envelopes; stand-ins = bev answering in that agent&#x27;s place (no call of its own). Read = prefill. bev decodes nothing.</p>
+<p>bevideas_A1</p>
+<table>
+<tr><td>agent@lane</td><td>answers</td><td>calls</td><td>stand-ins</td><td>read tok</td><td>decode tok</td><td>call s</td><td>server read s</td><td>server decode s</td><td>bev tokenize / transformer / head s</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>diagnostician@npu</td><td>406</td><td>406</td><td>0</td><td>293,352</td><td>13,697</td><td>1211.68</td><td>345.39</td><td>848.83</td><td>– / – / –</td></tr>
+<tr><td>verifier@cpu</td><td>41</td><td>41</td><td>0</td><td>17,053</td><td>1,038</td><td>79.05</td><td>48.89</td><td>28.52</td><td>– / – / –</td></tr>
+</table>
+<p>bevideas_C_combo_r1</p>
+<table>
+<tr><td>agent@lane</td><td>answers</td><td>calls</td><td>stand-ins</td><td>read tok</td><td>decode tok</td><td>call s</td><td>server read s</td><td>server decode s</td><td>bev tokenize / transformer / head s</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>bev_explain@bev</td><td>357</td><td>357</td><td>0</td><td>241,729</td><td>0</td><td>243.15</td><td>170.32</td><td>0</td><td>4.2 / 170.32 / 66.45</td></tr>
+<tr><td>bev_verifier@bev</td><td>59</td><td>59</td><td>0</td><td>22,900</td><td>0</td><td>28.01</td><td>18.99</td><td>0</td><td>0.32 / 18.99 / 8.3</td></tr>
+<tr><td>diagnostician@npu</td><td>359</td><td>359</td><td>0</td><td>236,965</td><td>2,855</td><td>435.83</td><td>277.7</td><td>143.56</td><td>– / – / –</td></tr>
+<tr><td>verifier@bev</td><td>37</td><td>0</td><td>37</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>– / – / –</td></tr>
+</table>
+<p>bevideas_C_combo_r2</p>
+<table>
+<tr><td>agent@lane</td><td>answers</td><td>calls</td><td>stand-ins</td><td>read tok</td><td>decode tok</td><td>call s</td><td>server read s</td><td>server decode s</td><td>bev tokenize / transformer / head s</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>bev_explain@bev</td><td>358</td><td>358</td><td>0</td><td>243,254</td><td>0</td><td>244.33</td><td>171.57</td><td>0</td><td>4.17 / 171.57 / 66.31</td></tr>
+<tr><td>bev_verifier@bev</td><td>59</td><td>59</td><td>0</td><td>22,900</td><td>0</td><td>27.95</td><td>19.01</td><td>0</td><td>0.28 / 19.01 / 8.24</td></tr>
+<tr><td>diagnostician@npu</td><td>359</td><td>359</td><td>0</td><td>236,969</td><td>2,865</td><td>420.25</td><td>262.86</td><td>142.66</td><td>– / – / –</td></tr>
+<tr><td>verifier@bev</td><td>37</td><td>0</td><td>37</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>– / – / –</td></tr>
+</table>
+<p>bevideas_C_combo_r3</p>
+<table>
+<tr><td>agent@lane</td><td>answers</td><td>calls</td><td>stand-ins</td><td>read tok</td><td>decode tok</td><td>call s</td><td>server read s</td><td>server decode s</td><td>bev tokenize / transformer / head s</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>bev_explain@bev</td><td>355</td><td>355</td><td>0</td><td>240,319</td><td>0</td><td>242.03</td><td>169.15</td><td>0</td><td>4.16 / 169.15 / 66.55</td></tr>
+<tr><td>bev_verifier@bev</td><td>59</td><td>59</td><td>0</td><td>22,900</td><td>0</td><td>27.98</td><td>19.03</td><td>0</td><td>0.29 / 19.03 / 8.24</td></tr>
+<tr><td>diagnostician@npu</td><td>357</td><td>357</td><td>0</td><td>235,691</td><td>2,842</td><td>418.7</td><td>261.35</td><td>142.34</td><td>– / – / –</td></tr>
+<tr><td>verifier@bev</td><td>37</td><td>0</td><td>37</td><td>0</td><td>0</td><td>0</td><td>0</td><td>0</td><td>– / – / –</td></tr>
+</table>
+<h2>Lane busy share (measured call time / episode wall time)</h2>
+<table>
+<tr><td>lane</td><td>bevideas_A1</td><td>bevideas_C_combo_r1</td><td>bevideas_C_combo_r2</td><td>bevideas_C_combo_r3</td></tr>
+</table>
+<p>|---|---|---|---|---|</p>
+<table>
+<tr><td>bev</td><td>0 s (0)</td><td>271.2 s (0.364)</td><td>272.3 s (0.373)</td><td>270 s (0.372)</td></tr>
+<tr><td>cpu</td><td>79.1 s (0.059)</td><td>0 s (0)</td><td>0 s (0)</td><td>0 s (0)</td></tr>
+<tr><td>npu</td><td>1211.7 s (0.898)</td><td>435.8 s (0.586)</td><td>420.2 s (0.576)</td><td>418.7 s (0.577)</td></tr>
+</table>
+<h2>Board resources (bench/board_sampler.py)</h2>
+<p>CPU s = utime + stime of the process; cores busy = CPU s / sampled time. NPU: no hardware counter is read; the NPU lane&#x27;s work is its call time above. Supply energy is the power supply&#x27;s, not the chip&#x27;s, and `–` when the board does not expose it.</p>
+<table>
+<tr><td></td><td>bevideas_A1</td><td>bevideas_C_combo_r1</td><td>bevideas_C_combo_r2</td><td>bevideas_C_combo_r3</td></tr>
+</table>
+<p>|---|---|---|---|---|</p>
+<table>
+<tr><td>bev: CPU s / cores busy / peak RSS MB</td><td>0.4 / 0 / 967.8</td><td>127.5 / 0.163 / 584.7</td><td>127.2 / 0.166 / 584.9</td><td>127.4 / 0.166 / 763.9</td></tr>
+<tr><td>cpu: CPU s / cores busy / peak RSS MB</td><td>419.5 / 0.302 / 1570.8</td><td>0.9 / 0.001 / 1475.6</td><td>0.9 / 0.001 / 1475.7</td><td>0.8 / 0.001 / 1475.1</td></tr>
+<tr><td>npu: CPU s / cores busy / peak RSS MB</td><td>1839.7 / 1.323 / 551.3</td><td>393.5 / 0.503 / 539.8</td><td>394.5 / 0.514 / 539.5</td><td>389.5 / 0.507 / 539.1</td></tr>
+<tr><td>episodes_sampled</td><td>10</td><td>10</td><td>10</td><td>10</td></tr>
+<tr><td>board_cpu_busy_pct_mean</td><td>29.8</td><td>21.2</td><td>21.4</td><td>21.3</td></tr>
+<tr><td>cpu_max_c</td><td>96.9</td><td>79.1</td><td>81.4</td><td>76.8</td></tr>
+<tr><td>npu_max_c</td><td>96.5</td><td>96.9</td><td>96.1</td><td>95.7</td></tr>
+<tr><td>supply_energy_j</td><td>–</td><td>–</td><td>–</td><td>–</td></tr>
+<tr><td>sampler_cpu_s</td><td>1026.95</td><td>617.21</td><td>607.63</td><td>607.4</td></tr>
+</table>
+<h2>bev ideas</h2>
+<p>bevideas_A1: every bev idea off.</p>
+<p>bevideas_C_combo_r1: explain=on, verifier=on, clear_skip=on</p>
+<table>
+<tr><td>idea</td><td>calls</td><td>failed</td><td>rejected</td><td>used</td><td>shadow</td><td>other</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>clear_skip</td><td>0</td><td>0</td><td>0</td><td>99</td><td>0</td><td>–</td></tr>
+<tr><td>explain</td><td>357</td><td>0</td><td>0</td><td>357</td><td>0</td><td>over_limit 0</td></tr>
+<tr><td>verifier</td><td>59</td><td>0</td><td>0</td><td>37</td><td>0</td><td>over_limit 0</td></tr>
+</table>
+<p>bevideas_C_combo_r2: explain=on, verifier=on, clear_skip=on</p>
+<table>
+<tr><td>idea</td><td>calls</td><td>failed</td><td>rejected</td><td>used</td><td>shadow</td><td>other</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>clear_skip</td><td>0</td><td>0</td><td>0</td><td>98</td><td>0</td><td>–</td></tr>
+<tr><td>explain</td><td>358</td><td>0</td><td>0</td><td>358</td><td>0</td><td>over_limit 0</td></tr>
+<tr><td>verifier</td><td>59</td><td>0</td><td>0</td><td>37</td><td>0</td><td>over_limit 0</td></tr>
+</table>
+<p>bevideas_C_combo_r3: explain=on, verifier=on, clear_skip=on</p>
+<table>
+<tr><td>idea</td><td>calls</td><td>failed</td><td>rejected</td><td>used</td><td>shadow</td><td>other</td></tr>
+</table>
+<p>|---|---|---|---|---|---|---|</p>
+<table>
+<tr><td>clear_skip</td><td>0</td><td>0</td><td>0</td><td>98</td><td>0</td><td>–</td></tr>
+<tr><td>explain</td><td>355</td><td>0</td><td>0</td><td>355</td><td>0</td><td>over_limit 0</td></tr>
+<tr><td>verifier</td><td>59</td><td>0</td><td>0</td><td>37</td><td>0</td><td>over_limit 0</td></tr>
+</table></body></html>

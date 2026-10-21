@@ -1,0 +1,52 @@
+{
+ "samples": 20,
+ "duration_s": 100.2,
+ "clk_tck": 100,
+ "processes": {
+  "bev": {
+   "process": "bev-decide",
+   "cpu_s": 16.02,
+   "cores_busy_mean": 0.16,
+   "peak_rss_mb": 584.5
+  },
+  "cpu": {
+   "process": "llama-server",
+   "cpu_s": 0.11,
+   "cores_busy_mean": 0.001,
+   "peak_rss_mb": 1475.2
+  },
+  "npu": {
+   "process": "llama-server",
+   "cpu_s": 48.81,
+   "cores_busy_mean": 0.487,
+   "peak_rss_mb": 525.5
+  }
+ },
+ "cpu_busy_pct": 20.2,
+ "freq": {
+  "policy0": {
+   "mean_mhz": 1629.1,
+   "max_mhz": 2265.6
+  },
+  "policy2": {
+   "mean_mhz": 953.3,
+   "max_mhz": 2438.4
+  },
+  "policy5": {
+   "mean_mhz": 854.4,
+   "max_mhz": 2515.2
+  },
+  "policy7": {
+   "mean_mhz": 672.0,
+   "max_mhz": 672.0
+  }
+ },
+ "temps": {
+  "cpu_max_c": 79.1,
+  "npu_max_c": 95.0,
+  "n_zones": 1500
+ },
+ "supply_power": null,
+ "sampler_cpu_s": 79.46,
+ "npu_counter": null
+}

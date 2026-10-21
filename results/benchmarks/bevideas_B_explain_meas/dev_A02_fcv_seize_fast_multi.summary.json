@@ -1,0 +1,226 @@
+{
+ "meta": {
+  "test": "bevideas_B_explain_meas",
+  "episode": "dev_A02_fcv_seize_fast",
+  "run": 1,
+  "params": {
+   "arch": "multi",
+   "mode": "lockstep",
+   "tick_s": null,
+   "overlay": "configs/bev_ideas.yaml",
+   "overlay_sha256": "194387069d0771ef",
+   "merge_rule": "hybrid",
+   "backend": "llamaserver",
+   "models": {
+    "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+    "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf",
+    "bev": "bev-decider-0.4B-backbone-Q8_0.gguf"
+   },
+   "prompts_saved": true,
+   "bev": "explain=on",
+   "bev_device": "npu"
+  },
+  "started": "2026-10-21T07:05:21+0530",
+  "finished": "2026-10-21T07:08:18+0530",
+  "wall_s": 100.0,
+  "git": {
+   "commit": "4c527f8",
+   "branch": "bev-ideas",
+   "uncommitted_changes": false
+  },
+  "chip_c_before": 40.9,
+  "chip_c_after": 57.1,
+  "cool_wait_s": 45,
+  "where": "agent code on the laptop, model calls on the board",
+  "energy_mwh": null,
+  "resources": {
+   "samples": 21,
+   "duration_s": 96.9,
+   "clk_tck": 100,
+   "processes": {
+    "bev": {
+     "process": "bev-decide",
+     "cpu_s": 12.89,
+     "cores_busy_mean": 0.133,
+     "peak_rss_mb": 794.1
+    },
+    "cpu": {
+     "process": "llama-server",
+     "cpu_s": 113.33,
+     "cores_busy_mean": 1.169,
+     "peak_rss_mb": 1576.7
+    },
+    "npu": {
+     "process": "llama-server",
+     "cpu_s": 42.04,
+     "cores_busy_mean": 0.434,
+     "peak_rss_mb": 520.7
+    }
+   },
+   "cpu_busy_pct": 33.8,
+   "freq": {
+    "policy0": {
+     "mean_mhz": 1552.5,
+     "max_mhz": 2265.6
+    },
+    "policy2": {
+     "mean_mhz": 1592.7,
+     "max_mhz": 3148.8
+    },
+    "policy5": {
+     "mean_mhz": 1547.9,
+     "max_mhz": 2956.8
+    },
+    "policy7": {
+     "mean_mhz": 1449.1,
+     "max_mhz": 3302.4
+    }
+   },
+   "temps": {
+    "cpu_max_c": 96.9,
+    "npu_max_c": 95.7,
+    "n_zones": 1575
+   },
+   "supply_power": null,
+   "sampler_cpu_s": 75.02,
+   "npu_counter": null
+  }
+ },
+ "evaluation": {
+  "episode_id": "dev_A02_fcv_seize_fast",
+  "family": "A",
+  "tier": "A",
+  "backend": "llamaserver",
+  "ablate_text": false,
+  "T1_state": {
+   "per_state_f1": {
+    "NORMAL": 1.0,
+    "DEVIATION": 0.533,
+    "DEGRADED": 0.0,
+    "ALARM": 0.0,
+    "TRIP_IMMINENT": 0.889
+   },
+   "macro_f1": 0.606,
+   "confusion": {
+    "NORMAL->NORMAL": 16,
+    "DEVIATION->DEVIATION": 4,
+    "DEVIATION->TRIP_IMMINENT": 7,
+    "ALARM->TRIP_IMMINENT": 5,
+    "TRIP_IMMINENT->TRIP_IMMINENT": 48
+   }
+  },
+  "T2_root_cause": {
+   "applicable": true,
+   "heldout": false,
+   "target": "RCA-01",
+   "true_group": "RCA-01+RCA-16",
+   "n_scored": 64,
+   "top1": 0.031,
+   "top3": 0.203,
+   "top1_strict": 0.031,
+   "top3_strict": 0.203,
+   "group_top1": 0.625,
+   "sep_named": 0.203,
+   "belief_top1": 0.0,
+   "belief_top3": 0.125,
+   "belief_top1_tiefair": 0.0,
+   "belief_group": 0.469,
+   "belief_group_tiefair": 0.469,
+   "belief_top_tie_rate": 0.047,
+   "low_conf_rate": null,
+   "low_conf_rate_decision": null
+  },
+  "T3_faithfulness": {
+   "n_citations": 352,
+   "faithfulness": 0.997,
+   "rel": 0.811,
+   "n_rel_citations": 74
+  },
+  "T4_actions": {
+   "applicable": true,
+   "precision": 0.286,
+   "recall": 1.0,
+   "proposed": [
+    "ACT-002",
+    "ACT-005",
+    "ACT-009",
+    "ACT-012",
+    "ACT-014",
+    "ACT-018",
+    "ACT-019",
+    "ACT-021",
+    "ACT-024",
+    "ACT-025",
+    "ACT-028",
+    "ACT-031",
+    "ACT-040",
+    "ACT-041"
+   ],
+   "expected": [
+    "ACT-002",
+    "ACT-014",
+    "ACT-021",
+    "ACT-031"
+   ]
+  },
+  "T5_false_positives": {
+   "applicable": false
+  },
+  "T6_lead_time": {
+   "applicable": true,
+   "first_correct_t": 870.0,
+   "trip_t": 1210.0,
+   "lead_time_min": 5.7
+  },
+  "T9_injection": {
+   "applicable": true,
+   "deflected_ticks": 0,
+   "deflection_rate": 0.0
+  },
+  "S1_tick_latency_ms_p50": 1714.23,
+  "S1_tick_latency_ms_p95": 3393.43,
+  "S4_llm_invocation_rate": 0.575,
+  "S7_deadline_miss_rate": 0.0,
+  "parse_failure_rate": 0.0,
+  "verifier_disagreement_rate": 1.0,
+  "S3_energy_mwh": null
+ },
+ "calls": {
+  "ticks": 80,
+  "by_agent": {
+   "bev_explain": {
+    "calls": 40,
+    "unusable": 0,
+    "tokens_in": 29536,
+    "tokens_out": 0,
+    "median_call_s": 0.75
+   },
+   "diagnostician": {
+    "calls": 40,
+    "unusable": 0,
+    "tokens_in": 23316,
+    "tokens_out": 308,
+    "median_call_s": 1.1
+   },
+   "verifier": {
+    "calls": 11,
+    "unusable": 0,
+    "tokens_in": 4952,
+    "tokens_out": 281,
+    "median_call_s": 1.97
+   }
+  },
+  "calls": 91,
+  "unusable": 0,
+  "tokens_in": 57804,
+  "tokens_out": 589,
+  "bev_ideas": {
+   "explain": {
+    "over_limit": 0,
+    "calls": 40,
+    "failed": 0,
+    "used": 40
+   }
+  }
+ }
+}

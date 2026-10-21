@@ -1,0 +1,203 @@
+{
+ "name": "bevideas_B_explain_bevcpu",
+ "created": "2026-10-21T00:54:46+0530",
+ "params": {
+  "arch": "multi",
+  "mode": "lockstep",
+  "tick_s": null,
+  "overlay": "configs/bev_ideas.yaml",
+  "overlay_sha256": "194387069d0771ef",
+  "merge_rule": "hybrid",
+  "backend": "llamaserver",
+  "models": {
+   "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+   "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf",
+   "bev": "bev-decider-0.4B-backbone-Q8_0.gguf"
+  },
+  "prompts_saved": true,
+  "bev": "explain=on",
+  "bev_device": "cpu"
+ },
+ "runs": [
+  {
+   "episode": "dev_A01_fcv_seize",
+   "run": 1,
+   "stem": "dev_A01_fcv_seize_multi",
+   "status": "done",
+   "started": "2026-10-21T00:54:57+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 38.2,
+   "cool_wait_s": 0,
+   "wall_s": 90.0,
+   "chip_c_after": 58.9,
+   "exit_code": 0,
+   "finished": "2026-10-21T00:56:48+0530"
+  },
+  {
+   "episode": "dev_A02_fcv_seize_fast",
+   "run": 1,
+   "stem": "dev_A02_fcv_seize_fast_multi",
+   "status": "done",
+   "started": "2026-10-21T00:56:48+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 41.1,
+   "cool_wait_s": 90,
+   "wall_s": 165.1,
+   "chip_c_after": 64.5,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:01:49+0530"
+  },
+  {
+   "episode": "dev_B01_tube_leak",
+   "run": 1,
+   "stem": "dev_B01_tube_leak_multi",
+   "status": "done",
+   "started": "2026-10-21T01:01:49+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 41.3,
+   "cool_wait_s": 195,
+   "wall_s": 171.6,
+   "chip_c_after": 64.1,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:09:12+0530"
+  },
+  {
+   "episode": "dev_B02_tube_leak_fast",
+   "run": 1,
+   "stem": "dev_B02_tube_leak_fast_multi",
+   "status": "done",
+   "started": "2026-10-21T01:09:12+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 41.1,
+   "cool_wait_s": 180,
+   "wall_s": 48.5,
+   "chip_c_after": 57.1,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:14:13+0530"
+  },
+  {
+   "episode": "dev_C01_wet_coal",
+   "run": 1,
+   "stem": "dev_C01_wet_coal_multi",
+   "status": "done",
+   "started": "2026-10-21T01:14:13+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 40.9,
+   "cool_wait_s": 90,
+   "wall_s": 94.0,
+   "chip_c_after": 61.0,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:18:03+0530"
+  },
+  {
+   "episode": "dev_C02_feeder_trip",
+   "run": 1,
+   "stem": "dev_C02_feeder_trip_multi",
+   "status": "done",
+   "started": "2026-10-21T01:18:03+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 41.1,
+   "cool_wait_s": 150,
+   "wall_s": 143.6,
+   "chip_c_after": 64.0,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:24:00+0530"
+  },
+  {
+   "episode": "dev_D01_high_cv_coal",
+   "run": 1,
+   "stem": "dev_D01_high_cv_coal_multi",
+   "status": "done",
+   "started": "2026-10-21T01:24:00+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 41.1,
+   "cool_wait_s": 195,
+   "wall_s": 601.2,
+   "chip_c_after": 70.6,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:38:33+0530"
+  },
+  {
+   "episode": "dev_D03_high_cv_severe",
+   "run": 1,
+   "stem": "dev_D03_high_cv_severe_multi",
+   "status": "done",
+   "started": "2026-10-21T01:38:33+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 40.7,
+   "cool_wait_s": 285,
+   "wall_s": 239.1,
+   "chip_c_after": 66.8,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:49:00+0530"
+  },
+  {
+   "episode": "dev_N01_normal",
+   "run": 1,
+   "stem": "dev_N01_normal_multi",
+   "status": "done",
+   "started": "2026-10-21T01:49:00+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 41.3,
+   "cool_wait_s": 240,
+   "wall_s": 6.5,
+   "chip_c_after": 43.6,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:54:36+0530"
+  },
+  {
+   "episode": "dev_N02_normal",
+   "run": 1,
+   "stem": "dev_N02_normal_multi",
+   "status": "done",
+   "started": "2026-10-21T01:54:36+0530",
+   "git": {
+    "commit": "4c527f8",
+    "branch": "bev-ideas",
+    "uncommitted_changes": false
+   },
+   "chip_c_before": 40.3,
+   "cool_wait_s": 15,
+   "wall_s": 8.5,
+   "chip_c_after": 43.2,
+   "exit_code": 0,
+   "finished": "2026-10-21T01:55:23+0530"
+  }
+ ]
+}

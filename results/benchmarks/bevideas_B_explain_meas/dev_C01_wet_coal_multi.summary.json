@@ -1,0 +1,209 @@
+{
+ "meta": {
+  "test": "bevideas_B_explain_meas",
+  "episode": "dev_C01_wet_coal",
+  "run": 1,
+  "params": {
+   "arch": "multi",
+   "mode": "lockstep",
+   "tick_s": null,
+   "overlay": "configs/bev_ideas.yaml",
+   "overlay_sha256": "194387069d0771ef",
+   "merge_rule": "hybrid",
+   "backend": "llamaserver",
+   "models": {
+    "npu": "Llama-3.2-3B-Instruct-Q4_0-pure-embq8.gguf",
+    "cpu": "gemma-3-1b-it-qat-Q4_0-pure-embq8.gguf",
+    "bev": "bev-decider-0.4B-backbone-Q8_0.gguf"
+   },
+   "prompts_saved": true,
+   "bev": "explain=on",
+   "bev_device": "npu"
+  },
+  "started": "2026-10-21T07:19:43+0530",
+  "finished": "2026-10-21T07:23:19+0530",
+  "wall_s": 60.0,
+  "git": {
+   "commit": "4c527f8",
+   "branch": "bev-ideas",
+   "uncommitted_changes": false
+  },
+  "chip_c_before": 40.9,
+  "chip_c_after": 54.0,
+  "cool_wait_s": 105,
+  "where": "agent code on the laptop, model calls on the board",
+  "energy_mwh": null,
+  "resources": {
+   "samples": 12,
+   "duration_s": 56.6,
+   "clk_tck": 100,
+   "processes": {
+    "bev": {
+     "process": "bev-decide",
+     "cpu_s": 9.65,
+     "cores_busy_mean": 0.17,
+     "peak_rss_mb": 835.6
+    },
+    "cpu": {
+     "process": "llama-server",
+     "cpu_s": 0.07,
+     "cores_busy_mean": 0.001,
+     "peak_rss_mb": 1469.8
+    },
+    "npu": {
+     "process": "llama-server",
+     "cpu_s": 30.11,
+     "cores_busy_mean": 0.532,
+     "peak_rss_mb": 517.2
+    }
+   },
+   "cpu_busy_pct": 21.0,
+   "freq": {
+    "policy0": {
+     "mean_mhz": 1113.6,
+     "max_mhz": 1804.8
+    },
+    "policy2": {
+     "mean_mhz": 833.6,
+     "max_mhz": 2246.4
+    },
+    "policy5": {
+     "mean_mhz": 849.6,
+     "max_mhz": 2131.2
+    },
+    "policy7": {
+     "mean_mhz": 672.0,
+     "max_mhz": 672.0
+    }
+   },
+   "temps": {
+    "cpu_max_c": 66.3,
+    "npu_max_c": 96.1,
+    "n_zones": 900
+   },
+   "supply_power": null,
+   "sampler_cpu_s": 44.62,
+   "npu_counter": null
+  }
+ },
+ "evaluation": {
+  "episode_id": "dev_C01_wet_coal",
+  "family": "C",
+  "tier": "C",
+  "backend": "llamaserver",
+  "ablate_text": false,
+  "T1_state": {
+   "per_state_f1": {
+    "NORMAL": 0.518,
+    "DEVIATION": 0.54,
+    "DEGRADED": 0.0,
+    "ALARM": 0.0,
+    "TRIP_IMMINENT": 0.0
+   },
+   "macro_f1": 0.529,
+   "confusion": {
+    "NORMAL->DEVIATION": 5,
+    "NORMAL->NORMAL": 43,
+    "DEVIATION->DEVIATION": 47,
+    "DEVIATION->NORMAL": 75
+   }
+  },
+  "T2_root_cause": {
+   "applicable": true,
+   "heldout": true,
+   "target": "RCA-06",
+   "true_group": "RCA-14+RCA-18",
+   "n_scored": 51,
+   "top1": 0.0,
+   "top3": 0.0,
+   "top1_strict": null,
+   "top3_strict": null,
+   "group_top1": 0.549,
+   "sep_named": null,
+   "belief_top1": null,
+   "belief_top3": null,
+   "belief_top1_tiefair": null,
+   "belief_group": 0.725,
+   "belief_group_tiefair": 0.739,
+   "belief_top_tie_rate": 0.745,
+   "low_conf_rate": 0.765,
+   "low_conf_rate_decision": 0.0
+  },
+  "T3_faithfulness": {
+   "n_citations": 214,
+   "faithfulness": 0.907,
+   "rel": 0.667,
+   "n_rel_citations": 54
+  },
+  "T4_actions": {
+   "applicable": true,
+   "precision": 0.4,
+   "recall": 1.0,
+   "proposed": [
+    "ACT-002",
+    "ACT-009",
+    "ACT-011",
+    "ACT-012",
+    "ACT-018",
+    "ACT-019",
+    "ACT-024",
+    "ACT-025",
+    "ACT-031",
+    "ACT-040"
+   ],
+   "expected": [
+    "ACT-002",
+    "ACT-011",
+    "ACT-012",
+    "ACT-040"
+   ]
+  },
+  "T5_false_positives": {
+   "applicable": false
+  },
+  "T6_lead_time": {
+   "applicable": false
+  },
+  "T9_injection": {
+   "applicable": false
+  },
+  "S1_tick_latency_ms_p50": 9.73,
+  "S1_tick_latency_ms_p95": 2101.62,
+  "S4_llm_invocation_rate": 0.159,
+  "S7_deadline_miss_rate": 0.0,
+  "parse_failure_rate": 0.0,
+  "verifier_disagreement_rate": 0.0,
+  "S3_energy_mwh": null
+ },
+ "calls": {
+  "ticks": 170,
+  "by_agent": {
+   "bev_explain": {
+    "calls": 27,
+    "unusable": 0,
+    "tokens_in": 18380,
+    "tokens_out": 0,
+    "median_call_s": 0.83
+   },
+   "diagnostician": {
+    "calls": 27,
+    "unusable": 0,
+    "tokens_in": 18744,
+    "tokens_out": 216,
+    "median_call_s": 1.17
+   }
+  },
+  "calls": 54,
+  "unusable": 0,
+  "tokens_in": 37124,
+  "tokens_out": 216,
+  "bev_ideas": {
+   "explain": {
+    "over_limit": 0,
+    "calls": 27,
+    "failed": 0,
+    "used": 27
+   }
+  }
+ }
+}
