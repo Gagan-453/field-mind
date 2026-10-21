@@ -1,0 +1,416 @@
+{
+ "n_questions": 24,
+ "tokens_identical": 24,
+ "max_abs_dp": 0.7447080344643318,
+ "median_abs_dp": 0.12551910016230747,
+ "rank1_agree": 8,
+ "rank1_disagreements": [
+  {
+   "id": "dev_A01_fcv_seize@t54",
+   "question": "root_cause",
+   "board": "RCA-16",
+   "reference": "RCA-10",
+   "reference_margin": 0.272577
+  },
+  {
+   "id": "dev_A01_fcv_seize@t79",
+   "question": "root_cause",
+   "board": "RCA-01",
+   "reference": "RCA-13",
+   "reference_margin": 0.808994
+  },
+  {
+   "id": "dev_A02_fcv_seize_fast@t44",
+   "question": "root_cause",
+   "board": "RCA-16",
+   "reference": "RCA-03",
+   "reference_margin": 0.733518
+  },
+  {
+   "id": "dev_A02_fcv_seize_fast@t64",
+   "question": "root_cause",
+   "board": "RCA-16",
+   "reference": "RCA-13",
+   "reference_margin": 0.518809
+  },
+  {
+   "id": "dev_B01_tube_leak@t93",
+   "question": "root_cause",
+   "board": "RCA-11",
+   "reference": "RCA-13",
+   "reference_margin": 0.880914
+  },
+  {
+   "id": "dev_B01_tube_leak@t144",
+   "question": "root_cause",
+   "board": "RCA-10",
+   "reference": "RCA-13",
+   "reference_margin": 0.084078
+  },
+  {
+   "id": "dev_B02_tube_leak_fast@t38",
+   "question": "root_cause",
+   "board": "RCA-04",
+   "reference": "RCA-03",
+   "reference_margin": 0.040926
+  },
+  {
+   "id": "dev_B02_tube_leak_fast@t56",
+   "question": "root_cause",
+   "board": "RCA-04",
+   "reference": "RCA-03",
+   "reference_margin": 0.193537
+  },
+  {
+   "id": "dev_B02_tube_leak_fast@t70",
+   "question": "root_cause",
+   "board": "RCA-04",
+   "reference": "RCA-03",
+   "reference_margin": 0.03555
+  },
+  {
+   "id": "dev_C01_wet_coal@t9",
+   "question": "root_cause",
+   "board": "RCA-07",
+   "reference": "RCA-10",
+   "reference_margin": 0.294722
+  },
+  {
+   "id": "dev_C02_feeder_trip@t72",
+   "question": "root_cause",
+   "board": "RCA-18",
+   "reference": "RCA-13",
+   "reference_margin": 0.572608
+  },
+  {
+   "id": "dev_D01_high_cv_coal@t143",
+   "question": "root_cause",
+   "board": "RCA-03",
+   "reference": "RCA-13",
+   "reference_margin": 0.135844
+  },
+  {
+   "id": "dev_D01_high_cv_coal@t234",
+   "question": "root_cause",
+   "board": "RCA-03",
+   "reference": "RCA-13",
+   "reference_margin": 0.05811
+  },
+  {
+   "id": "dev_D03_high_cv_severe@t9",
+   "question": "root_cause",
+   "board": "RCA-07",
+   "reference": "RCA-10",
+   "reference_margin": 0.300841
+  },
+  {
+   "id": "dev_D03_high_cv_severe@t77",
+   "question": "root_cause",
+   "board": "RCA-07",
+   "reference": "RCA-13",
+   "reference_margin": 0.854293
+  },
+  {
+   "id": "dev_D03_high_cv_severe@t126",
+   "question": "root_cause",
+   "board": "RCA-07",
+   "reference": "RCA-13",
+   "reference_margin": 0.766262
+  }
+ ],
+ "shuffle_max_abs_dp": 0.007190550944285834,
+ "latency_ms_median": 11310.75,
+ "pass_tokens": true,
+ "rows": [
+  {
+   "id": "dev_A01_fcv_seize@t37",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 338,
+   "max_abs_dp": 0.020333168304116245,
+   "top_board": "RCA-10",
+   "top_ref": "RCA-10",
+   "ref_margin": 0.36404550075531006,
+   "latency_ms": 8553.7,
+   "prompt_tokens": 338
+  },
+  {
+   "id": "dev_A01_fcv_seize@t54",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 496,
+   "max_abs_dp": 0.2699968243195333,
+   "top_board": "RCA-16",
+   "top_ref": "RCA-10",
+   "ref_margin": 0.2725770026445389,
+   "latency_ms": 13360.6,
+   "prompt_tokens": 496
+  },
+  {
+   "id": "dev_A01_fcv_seize@t79",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 324,
+   "max_abs_dp": 0.6468667769042926,
+   "top_board": "RCA-01",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.8089939244091511,
+   "latency_ms": 8977.5,
+   "prompt_tokens": 324
+  },
+  {
+   "id": "dev_A02_fcv_seize_fast@t25",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 344,
+   "max_abs_dp": 0.09618268444855793,
+   "top_board": "RCA-10",
+   "top_ref": "RCA-10",
+   "ref_margin": 0.5484183579683304,
+   "latency_ms": 9707.1,
+   "prompt_tokens": 344
+  },
+  {
+   "id": "dev_A02_fcv_seize_fast@t44",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 404,
+   "max_abs_dp": 0.6230755893274476,
+   "top_board": "RCA-16",
+   "top_ref": "RCA-03",
+   "ref_margin": 0.7335181012749672,
+   "latency_ms": 11616.9,
+   "prompt_tokens": 404
+  },
+  {
+   "id": "dev_A02_fcv_seize_fast@t64",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 482,
+   "max_abs_dp": 0.4658141728515203,
+   "top_board": "RCA-16",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.5188088417053223,
+   "latency_ms": 14020.8,
+   "prompt_tokens": 482
+  },
+  {
+   "id": "dev_B01_tube_leak@t51",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 381,
+   "max_abs_dp": 0.12551910016230747,
+   "top_board": "RCA-04",
+   "top_ref": "RCA-04",
+   "ref_margin": 0.39271171391010284,
+   "latency_ms": 11220.7,
+   "prompt_tokens": 381
+  },
+  {
+   "id": "dev_B01_tube_leak@t93",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 326,
+   "max_abs_dp": 0.6378566968773636,
+   "top_board": "RCA-11",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.880913931876421,
+   "latency_ms": 9683.9,
+   "prompt_tokens": 326
+  },
+  {
+   "id": "dev_B01_tube_leak@t144",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 519,
+   "max_abs_dp": 0.2972371687510825,
+   "top_board": "RCA-10",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.08407795429229736,
+   "latency_ms": 15455.8,
+   "prompt_tokens": 519
+  },
+  {
+   "id": "dev_B02_tube_leak_fast@t38",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 381,
+   "max_abs_dp": 0.38751273915228873,
+   "top_board": "RCA-04",
+   "top_ref": "RCA-03",
+   "ref_margin": 0.04092639684677124,
+   "latency_ms": 11400.8,
+   "prompt_tokens": 381
+  },
+  {
+   "id": "dev_B02_tube_leak_fast@t56",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 326,
+   "max_abs_dp": 0.3692512525343252,
+   "top_board": "RCA-04",
+   "top_ref": "RCA-03",
+   "ref_margin": 0.1935366988182068,
+   "latency_ms": 9845.4,
+   "prompt_tokens": 326
+  },
+  {
+   "id": "dev_B02_tube_leak_fast@t70",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 381,
+   "max_abs_dp": 0.3932593441002523,
+   "top_board": "RCA-04",
+   "top_ref": "RCA-03",
+   "ref_margin": 0.03554984927177429,
+   "latency_ms": 11489.7,
+   "prompt_tokens": 381
+  },
+  {
+   "id": "dev_C01_wet_coal@t9",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 329,
+   "max_abs_dp": 0.22685559985887327,
+   "top_board": "RCA-07",
+   "top_ref": "RCA-10",
+   "ref_margin": 0.29472193121910095,
+   "latency_ms": 9908.2,
+   "prompt_tokens": 329
+  },
+  {
+   "id": "dev_C01_wet_coal@t72",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 283,
+   "max_abs_dp": 0.13588615847613006,
+   "top_board": "RCA-18",
+   "top_ref": "RCA-18",
+   "ref_margin": 0.5302042067050934,
+   "latency_ms": 8649.5,
+   "prompt_tokens": 283
+  },
+  {
+   "id": "dev_C01_wet_coal@t125",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 384,
+   "max_abs_dp": 0.1634586016822852,
+   "top_board": "RCA-18",
+   "top_ref": "RCA-18",
+   "ref_margin": 0.2769908756017685,
+   "latency_ms": 11651.1,
+   "prompt_tokens": 384
+  },
+  {
+   "id": "dev_C02_feeder_trip@t32",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 352,
+   "max_abs_dp": 0.16647453476163443,
+   "top_board": "RCA-18",
+   "top_ref": "RCA-18",
+   "ref_margin": 0.3132981210947037,
+   "latency_ms": 10704.1,
+   "prompt_tokens": 352
+  },
+  {
+   "id": "dev_C02_feeder_trip@t54",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 314,
+   "max_abs_dp": 0.17863218825720512,
+   "top_board": "RCA-18",
+   "top_ref": "RCA-18",
+   "ref_margin": 0.5932610929012299,
+   "latency_ms": 9648.8,
+   "prompt_tokens": 314
+  },
+  {
+   "id": "dev_C02_feeder_trip@t72",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 376,
+   "max_abs_dp": 0.5079761824603878,
+   "top_board": "RCA-18",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.5726078599691391,
+   "latency_ms": 11475.6,
+   "prompt_tokens": 376
+  },
+  {
+   "id": "dev_D01_high_cv_coal@t69",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 323,
+   "max_abs_dp": 0.480586977564095,
+   "top_board": "RCA-13",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.8502560369670391,
+   "latency_ms": 9885.4,
+   "prompt_tokens": 323
+  },
+  {
+   "id": "dev_D01_high_cv_coal@t143",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 475,
+   "max_abs_dp": 0.4429125539826215,
+   "top_board": "RCA-03",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.13584443926811218,
+   "latency_ms": 14511.5,
+   "prompt_tokens": 475
+  },
+  {
+   "id": "dev_D01_high_cv_coal@t234",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 419,
+   "max_abs_dp": 0.3168258778624995,
+   "top_board": "RCA-03",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.0581095814704895,
+   "latency_ms": 12856.1,
+   "prompt_tokens": 419
+  },
+  {
+   "id": "dev_D03_high_cv_severe@t9",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 329,
+   "max_abs_dp": 0.23213689268907411,
+   "top_board": "RCA-07",
+   "top_ref": "RCA-10",
+   "ref_margin": 0.3008410483598709,
+   "latency_ms": 10133.1,
+   "prompt_tokens": 329
+  },
+  {
+   "id": "dev_D03_high_cv_severe@t77",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 476,
+   "max_abs_dp": 0.7447080344643318,
+   "top_board": "RCA-07",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.8542926833033562,
+   "latency_ms": 14578.1,
+   "prompt_tokens": 476
+  },
+  {
+   "id": "dev_D03_high_cv_severe@t126",
+   "question": "root_cause",
+   "tokens_identical": true,
+   "n_tokens": 482,
+   "max_abs_dp": 0.636162933988331,
+   "top_board": "RCA-07",
+   "top_ref": "RCA-13",
+   "ref_margin": 0.7662619948387146,
+   "latency_ms": 14865.2,
+   "prompt_tokens": 482
+  }
+ ],
+ "label": "cpu-16bit",
+ "url": "http://localhost:8082"
+}
